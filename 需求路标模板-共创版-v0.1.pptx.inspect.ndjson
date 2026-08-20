@@ -1,0 +1,224 @@
+{"kind":"deck","id":"pr/uycfog","name":"Deck"}
+{"kind":"layout","layoutId":"ba99ea28-2675-4d21-a242-c9c124635e23","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"962c8bb9-cc29-4324-a49b-bdc595874266","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/cx6n2o","slide":1,"title":"需求路标工作台","textShapes":16}
+{"kind":"textbox","id":"sh/2lojyh4f","slide":1,"name":"brand-1","text":"需求路标工作台","textPreview":"需求路标工作台","textChars":7,"textLines":1,"bbox":[54,31,270,25]}
+{"kind":"textbox","id":"sh/pozi9w36","slide":1,"name":"section-1","text":"模板共创版 v0.1","textPreview":"模板共创版 v0.1","textChars":10,"textLines":1,"bbox":[895,31,270,25]}
+{"kind":"textbox","id":"sh/on610rml","slide":1,"name":"page-1","text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[1172,31,55,25]}
+{"kind":"shape","id":"sh/fix03ml4","slide":1,"bbox":[64,94,90,7]}
+{"kind":"textbox","id":"sh/ehojuh4j","slide":1,"name":"cover-title","text":"运动健康\n需求路标","textPreview":"运动健康 | 需求路标","textChars":9,"textLines":2,"bbox":[64,146,720,182]}
+{"kind":"textbox","id":"sh/1kfi5c3u","slide":1,"name":"cover-subtitle","text":"从本地需求池，自动生成可汇报、可编辑、可复用的 PowerPoint","textPreview":"从本地需求池，自动生成可汇报、可编辑、可复用的 PowerPoint","textChars":34,"textLines":1,"bbox":[67,344,720,52]}
+{"kind":"textbox","id":"sh/gj61w7mp","slide":1,"text":"离线处理","textPreview":"离线处理","textChars":4,"textLines":1,"bbox":[67,426,114,32]}
+{"kind":"textbox","id":"sh/red0z2ls","slide":1,"text":"结构化汇总","textPreview":"结构化汇总","textChars":5,"textLines":1,"bbox":[193,426,132,32]}
+{"kind":"textbox","id":"sh/6d4zqx47","slide":1,"text":"模板确认后固定输出","textPreview":"模板确认后固定输出","textChars":9,"textLines":1,"bbox":[337,426,196,32]}
+{"kind":"shape","id":"sh/0fe14fid","slide":1,"name":"cover-roadmap-preview","bbox":[846,135,340,428]}
+{"kind":"textbox","id":"sh/lgnid0zy","slide":1,"text":"2027 H1","textPreview":"2027 H1","textChars":7,"textLines":1,"bbox":[879,170,150,33]}
+{"kind":"textbox","id":"sh/edwz250n","slide":1,"text":"健康路标","textPreview":"健康路标","textChars":4,"textLines":1,"bbox":[879,206,220,47]}
+{"kind":"shape","id":"sh/ze50bah8","slide":1,"bbox":[882,288,9,9]}
+{"kind":"textbox","id":"sh/creh0vih","slide":1,"text":"基础","textPreview":"基础","textChars":2,"textLines":1,"bbox":[901,277,54,30]}
+{"kind":"shape","id":"sh/dcni90z2","slide":1,"bbox":[968,291,179,2]}
+{"kind":"shape","id":"sh/qpczyl0b","slide":1,"bbox":[882,363,9,9]}
+{"kind":"textbox","id":"sh/rql07qhw","slide":1,"text":"进阶","textPreview":"进阶","textChars":2,"textLines":1,"bbox":[901,352,54,30]}
+{"kind":"shape","id":"sh/wny1czil","slide":1,"bbox":[968,366,179,2]}
+{"kind":"shape","id":"sh/x87ilkz6","slide":1,"bbox":[882,438,9,9]}
+{"kind":"textbox","id":"sh/543ipkra","slide":1,"text":"高阶","textPreview":"高阶","textChars":2,"textLines":1,"bbox":[901,427,54,30]}
+{"kind":"shape","id":"sh/43uhwfap","slide":1,"bbox":[968,441,179,2]}
+{"kind":"shape","id":"sh/j2l0na9k","slide":1,"bbox":[1001,267,116,55]}
+{"kind":"textbox","id":"sh/i1czupsz","slide":1,"text":"睡眠","textPreview":"睡眠","textChars":2,"textLines":1,"bbox":[1016,277,85,24]}
+{"kind":"textbox","id":"sh/h03ilkre","slide":1,"text":"2 人月","textPreview":"2 人月","textChars":4,"textLines":1,"bbox":[1016,300,85,18]}
+{"kind":"textbox","id":"sh/wzuhsfat","slide":1,"text":"共创日期 · 2026.08.19","textPreview":"共创日期 · 2026.08.19","textChars":17,"textLines":1,"bbox":[67,641,260,24]}
+{"kind":"notes","id":"nt/cx6n2o","slide":1,"text":""}
+{"kind":"slide","id":"sl/gqg7kw","slide":2,"title":"需求路标工作台","textShapes":23}
+{"kind":"textbox","id":"sh/yhcr6ds7","slide":2,"name":"brand-2","text":"需求路标工作台","textPreview":"需求路标工作台","textChars":7,"textLines":1,"bbox":[54,31,270,25]}
+{"kind":"textbox","id":"sh/lk3qhsbi","slide":2,"name":"section-2","text":"汇总分析","textPreview":"汇总分析","textChars":4,"textLines":1,"bbox":[895,31,270,25]}
+{"kind":"textbox","id":"sh/kju98nad","slide":2,"name":"page-2","text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[1172,31,55,25]}
+{"kind":"textbox","id":"sh/be18bitg","slide":2,"name":"eyebrow-一页看清投入、结构和节奏","text":"SUMMARY","textPreview":"SUMMARY","textChars":7,"textLines":1,"bbox":[64,82,520,28]}
+{"kind":"textbox","id":"sh/ads72dsv","slide":2,"name":"title-一页看清投入、结构和节奏","text":"一页看清投入、结构和节奏","textPreview":"一页看清投入、结构和节奏","textChars":12,"textLines":1,"bbox":[64,112,1136,70]}
+{"kind":"textbox","id":"sh/xg3qd8bm","slide":2,"name":"subtitle-一页看清投入、结构和节奏","text":"示例采用当前有效需求：社交时差、体动；测试数据不计入模板样例。","textPreview":"示例采用当前有效需求：社交时差、体动；测试数据不计入模板样例。","textChars":31,"textLines":1,"bbox":[64,181,1040,38]}
+{"kind":"textbox","id":"sh/wfap43a1","slide":2,"text":"需求数量","textPreview":"需求数量","textChars":4,"textLines":1,"bbox":[64,267,238,28]}
+{"kind":"textbox","id":"sh/va58n290","slide":2,"text":"2 条","textPreview":"2 条","textChars":3,"textLines":1,"bbox":[64,298,238,70]}
+{"kind":"shape","id":"sh/u9wrexsf","slide":2,"bbox":[64,383,238,6]}
+{"kind":"textbox","id":"sh/gfy14fi9","slide":2,"text":"工作量","textPreview":"工作量","textChars":3,"textLines":1,"bbox":[337,267,238,28]}
+{"kind":"textbox","id":"sh/1grixkju","slide":2,"text":"2 人月","textPreview":"2 人月","textChars":4,"textLines":1,"bbox":[337,298,238,70]}
+{"kind":"shape","id":"sh/edgj250j","slide":2,"bbox":[337,383,238,6]}
+{"kind":"textbox","id":"sh/fep0va1o","slide":2,"text":"健康来源占比","textPreview":"健康来源占比","textChars":6,"textLines":1,"bbox":[610,267,238,28]}
+{"kind":"textbox","id":"sh/sby10fid","slide":2,"text":"100%","textPreview":"100%","textChars":4,"textLines":1,"bbox":[610,298,238,70]}
+{"kind":"shape","id":"sh/tc7i9kjy","slide":2,"bbox":[610,383,238,6]}
+{"kind":"textbox","id":"sh/69gjy507","slide":2,"text":"体验优化占比","textPreview":"体验优化占比","textChars":6,"textLines":1,"bbox":[883,267,238,28]}
+{"kind":"textbox","id":"sh/rap07a1s","slide":2,"text":"100%","textPreview":"100%","textChars":4,"textLines":1,"bbox":[883,298,238,70]}
+{"kind":"shape","id":"sh/4nehwvi1","slide":2,"bbox":[883,383,238,6]}
+{"kind":"textbox","id":"sh/5o7i50jm","slide":2,"text":"上线节奏","textPreview":"上线节奏","textChars":4,"textLines":1,"bbox":[64,443,200,30]}
+{"kind":"shape","id":"sh/l4zytwbq","slide":2,"bbox":[96,530,1035,5]}
+{"kind":"shape","id":"sh/k36h0ru5","slide":2,"bbox":[88,524,17,17]}
+{"kind":"shape","id":"sh/z2xgrmtk","slide":2,"bbox":[88,524,17,17]}
+{"kind":"textbox","id":"sh/yhofyhcz","slide":2,"text":"1月","textPreview":"1月","textChars":2,"textLines":1,"bbox":[62,550,70,24]}
+{"kind":"shape","id":"sh/xgfypcbe","slide":2,"bbox":[295,524,17,17]}
+{"kind":"shape","id":"sh/cf6xw7ut","slide":2,"bbox":[295,524,17,17]}
+{"kind":"textbox","id":"sh/bexgnmt8","slide":2,"text":"2月","textPreview":"2月","textChars":2,"textLines":1,"bbox":[269,550,70,24]}
+{"kind":"shape","id":"sh/adofuhc3","slide":2,"bbox":[502,524,17,17]}
+{"kind":"textbox","id":"sh/hcjy1gbi","slide":2,"text":"3月","textPreview":"3月","textChars":2,"textLines":1,"bbox":[476,550,70,24]}
+{"kind":"shape","id":"sh/gbqh8bud","slide":2,"bbox":[709,524,17,17]}
+{"kind":"shape","id":"sh/ehkv2dsv","slide":2,"bbox":[709,524,17,17]}
+{"kind":"textbox","id":"sh/fitwvi90","slide":2,"text":"4月","textPreview":"4月","textChars":2,"textLines":1,"bbox":[683,550,70,24]}
+{"kind":"shape","id":"sh/0j2d4nal","slide":2,"bbox":[916,524,17,17]}
+{"kind":"shape","id":"sh/1kbex8r6","slide":2,"bbox":[916,524,17,17]}
+{"kind":"textbox","id":"sh/qdkvytsj","slide":2,"text":"5月","textPreview":"5月","textChars":2,"textLines":1,"bbox":[890,550,70,24]}
+{"kind":"shape","id":"sh/retcry94","slide":2,"bbox":[1123,524,17,17]}
+{"kind":"shape","id":"sh/sf2d03ap","slide":2,"bbox":[1123,524,17,17]}
+{"kind":"textbox","id":"sh/dgbet8ra","slide":2,"text":"6月","textPreview":"6月","textChars":2,"textLines":1,"bbox":[1097,550,70,24]}
+{"kind":"textbox","id":"sh/a94vaxsn","slide":2,"text":"2 条需求 · 2 人月","textPreview":"2 条需求 · 2 人月","textChars":12,"textLines":1,"bbox":[421,477,210,35]}
+{"kind":"textbox","id":"sh/badw3298","slide":2,"text":"汇总页建议固定保留：数量、工作量、来源、分类、月份节奏","textPreview":"汇总页建议固定保留：数量、工作量、来源、分类、月份节奏","textChars":27,"textLines":1,"bbox":[64,624,720,30]}
+{"kind":"notes","id":"nt/gqg7kw","slide":2,"text":""}
+{"kind":"slide","id":"sl/jvuuo5","slide":3,"title":"需求路标工作台","textShapes":21}
+{"kind":"textbox","id":"sh/ozat4jax","slide":3,"name":"brand-3","text":"需求路标工作台","textPreview":"需求路标工作台","textChars":7,"textLines":1,"bbox":[54,31,270,25]}
+{"kind":"textbox","id":"sh/ny1cvetc","slide":3,"name":"section-3","text":"健康路标","textPreview":"健康路标","textChars":4,"textLines":1,"bbox":[895,31,270,25]}
+{"kind":"textbox","id":"sh/mxsb29sr","slide":3,"name":"page-3","text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[1172,31,55,25]}
+{"kind":"textbox","id":"sh/1wjut4b6","slide":3,"name":"eyebrow-健康需求集中在 2027 年 3 月的基础泳道","text":"HEALTH ROADMAP","textPreview":"HEALTH ROADMAP","textChars":14,"textLines":1,"bbox":[64,82,520,28]}
+{"kind":"textbox","id":"sh/0vqt0zal","slide":3,"name":"title-健康需求集中在 2027 年 3 月的基础泳道","text":"健康需求集中在 2027 年 3 月的基础泳道","textPreview":"健康需求集中在 2027 年 3 月的基础泳道","textChars":23,"textLines":1,"bbox":[64,112,1136,70]}
+{"kind":"textbox","id":"sh/zuhcrut0","slide":3,"name":"subtitle-健康需求集中在 2027 年 3 月的基础泳道","text":"同领域、同来源、同上线年月自动合并为一张路标卡片。","textPreview":"同领域、同来源、同上线年月自动合并为一张路标卡片。","textChars":25,"textLines":1,"bbox":[64,181,1040,38]}
+{"kind":"textbox","id":"sh/et8bypsv","slide":3,"text":"2 条需求","textPreview":"2 条需求","textChars":5,"textLines":1,"bbox":[907,181,108,32]}
+{"kind":"textbox","id":"sh/dszup4ba","slide":3,"text":"2 人月","textPreview":"2 人月","textChars":4,"textLines":1,"bbox":[1027,181,102,32]}
+{"kind":"textbox","id":"sh/crqtwzup","slide":3,"text":"2027","textPreview":"2027","textChars":4,"textLines":1,"bbox":[64,227,88,32]}
+{"kind":"shape","id":"sh/6hcnid8z","slide":3,"bbox":[76,298,10,10]}
+{"kind":"textbox","id":"sh/7ilobipk","slide":3,"text":"基础","textPreview":"基础","textChars":2,"textLines":1,"bbox":[94,286,60,32]}
+{"kind":"shape","id":"sh/sjup43qp","slide":3,"name":"cell-0-0","bbox":[166,255,156,98]}
+{"kind":"textbox","id":"sh/tk36d87a","slide":3,"text":"1月","textPreview":"1月","textChars":2,"textLines":1,"bbox":[178,221,96,28]}
+{"kind":"shape","id":"sh/itsnet8n","slide":3,"name":"cell-0-1","bbox":[330,255,156,98]}
+{"kind":"textbox","id":"sh/ju1o7yp8","slide":3,"text":"2月","textPreview":"2月","textChars":2,"textLines":1,"bbox":[342,221,96,28]}
+{"kind":"shape","id":"sh/kfu5g3qt","slide":3,"name":"cell-0-2","bbox":[494,255,156,98]}
+{"kind":"textbox","id":"sh/5g36987e","slide":3,"text":"3月","textPreview":"3月","textChars":2,"textLines":1,"bbox":[506,221,96,28]}
+{"kind":"shape","id":"sh/apsnat8r","slide":3,"name":"cell-0-3","bbox":[658,255,156,98]}
+{"kind":"textbox","id":"sh/vq1o3ypc","slide":3,"text":"4月","textPreview":"4月","textChars":2,"textLines":1,"bbox":[670,221,96,28]}
+{"kind":"shape","id":"sh/zuxkbu54","slide":3,"name":"cell-0-4","bbox":[822,255,156,98]}
+{"kind":"textbox","id":"sh/yto32poj","slide":3,"text":"5月","textPreview":"5月","textChars":2,"textLines":1,"bbox":[834,221,96,28]}
+{"kind":"shape","id":"sh/lwzmdknu","slide":3,"name":"cell-0-5","bbox":[986,255,156,98]}
+{"kind":"textbox","id":"sh/0v6l4z69","slide":3,"text":"6月","textPreview":"6月","textChars":2,"textLines":1,"bbox":[998,221,96,28]}
+{"kind":"shape","id":"sh/nyh4fu50","slide":3,"bbox":[76,404,10,10]}
+{"kind":"textbox","id":"sh/mx836pof","slide":3,"text":"进阶","textPreview":"进阶","textChars":2,"textLines":1,"bbox":[94,392,60,32]}
+{"kind":"shape","id":"sh/90zmh4n6","slide":3,"name":"cell-1-0","bbox":[166,361,156,98]}
+{"kind":"shape","id":"sh/8zql8z6l","slide":3,"name":"cell-1-1","bbox":[330,361,156,98]}
+{"kind":"shape","id":"sh/32dk3apw","slide":3,"name":"cell-1-2","bbox":[494,361,156,98]}
+{"kind":"shape","id":"sh/2143u5ob","slide":3,"name":"cell-1-3","bbox":[658,361,156,98]}
+{"kind":"shape","id":"sh/svi9o7ix","slide":3,"name":"cell-1-4","bbox":[822,361,156,98]}
+{"kind":"shape","id":"sh/twrqhczi","slide":3,"name":"cell-1-5","bbox":[986,361,156,98]}
+{"kind":"shape","id":"sh/6t0rmx0r","slide":3,"bbox":[76,510,10,10]}
+{"kind":"textbox","id":"sh/7u98f2hc","slide":3,"text":"高阶","textPreview":"高阶","textChars":2,"textLines":1,"bbox":[94,498,60,32]}
+{"kind":"shape","id":"sh/kry9k7il","slide":3,"name":"cell-2-0","bbox":[166,467,156,98]}
+{"kind":"shape","id":"sh/5srqdsj6","slide":3,"name":"cell-2-1","bbox":[330,467,156,98]}
+{"kind":"shape","id":"sh/ypgrix0v","slide":3,"name":"cell-2-2","bbox":[494,467,156,98]}
+{"kind":"shape","id":"sh/jqp8b21g","slide":3,"name":"cell-2-3","bbox":[658,467,156,98]}
+{"kind":"shape","id":"sh/4n29wri5","slide":3,"name":"cell-2-4","bbox":[822,467,156,98]}
+{"kind":"shape","id":"sh/pobapwzq","slide":3,"name":"cell-2-5","bbox":[986,467,156,98]}
+{"kind":"shape","id":"sh/18n6hoz2","slide":3,"name":"sleep-card","bbox":[501,263,142,82]}
+{"kind":"shape","id":"sh/07u5ojyh","slide":3,"bbox":[514,276,10,10]}
+{"kind":"textbox","id":"sh/z6lofehw","slide":3,"text":"睡眠","textPreview":"睡眠","textChars":2,"textLines":1,"bbox":[530,270,87,27]}
+{"kind":"textbox","id":"sh/e5cnm9gb","slide":3,"text":"2 条需求 · 2 人月","textPreview":"2 条需求 · 2 人月","textChars":12,"textLines":1,"bbox":[514,300,121,25]}
+{"kind":"textbox","id":"sh/9wn6lofy","slide":3,"text":"卡片标题、摘要可在工作台中单独编辑；详情页继续保留每条原始需求。","textPreview":"卡片标题、摘要可在工作台中单独编辑；详情页继续保留每条原始需求。","textChars":32,"textLines":1,"bbox":[64,626,870,30]}
+{"kind":"notes","id":"nt/jvuuo5","slide":3,"text":""}
+{"kind":"slide","id":"sl/chvm2s","slide":4,"title":"需求路标工作台","textShapes":19}
+{"kind":"textbox","id":"sh/pgfapcf6","slide":4,"name":"brand-4","text":"需求路标工作台","textPreview":"需求路标工作台","textChars":7,"textLines":1,"bbox":[54,31,270,25]}
+{"kind":"textbox","id":"sh/2dorexgf","slide":4,"name":"section-4","text":"运动路标","textPreview":"运动路标","textChars":4,"textLines":1,"bbox":[895,31,270,25]}
+{"kind":"textbox","id":"sh/3exsn2x0","slide":4,"name":"page-4","text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[1172,31,55,25]}
+{"kind":"textbox","id":"sh/cj69kryh","slide":4,"name":"eyebrow-当前区间暂无运动需求，版式仍保持完整","text":"SPORT ROADMAP","textPreview":"SPORT ROADMAP","textChars":13,"textLines":1,"bbox":[64,82,520,28]}
+{"kind":"textbox","id":"sh/dkfatwf2","slide":4,"name":"title-当前区间暂无运动需求，版式仍保持完整","text":"当前区间暂无运动需求，版式仍保持完整","textPreview":"当前区间暂无运动需求，版式仍保持完整","textChars":18,"textLines":1,"bbox":[64,112,1136,70]}
+{"kind":"textbox","id":"sh/qhorihgb","slide":4,"name":"subtitle-当前区间暂无运动需求，版式仍保持完整","text":"空泳道不删除，确保后续半年与跨版本输出的位置稳定。","textPreview":"空泳道不删除，确保后续半年与跨版本输出的位置稳定。","textChars":25,"textLines":1,"bbox":[64,181,1040,38]}
+{"kind":"textbox","id":"sh/bixsrmxw","slide":4,"text":"2027","textPreview":"2027","textChars":4,"textLines":1,"bbox":[64,227,88,32]}
+{"kind":"shape","id":"sh/snm98nyd","slide":4,"bbox":[76,298,10,10]}
+{"kind":"textbox","id":"sh/tovqhsfy","slide":4,"text":"基础","textPreview":"基础","textChars":2,"textLines":1,"bbox":[94,286,60,32]}
+{"kind":"shape","id":"sh/14vmhkv2","slide":4,"name":"cell-0-0","bbox":[166,255,156,98]}
+{"kind":"textbox","id":"sh/0jm5ofeh","slide":4,"text":"1月","textPreview":"1月","textChars":2,"textLines":1,"bbox":[178,221,96,28]}
+{"kind":"shape","id":"sh/fid4fadw","slide":4,"name":"cell-0-1","bbox":[330,255,156,98]}
+{"kind":"textbox","id":"sh/eh4nmpwb","slide":4,"text":"2月","textPreview":"2月","textChars":2,"textLines":1,"bbox":[342,221,96,28]}
+{"kind":"shape","id":"sh/98fml4ve","slide":4,"name":"cell-0-2","bbox":[494,255,156,98]}
+{"kind":"textbox","id":"sh/o7m5czut","slide":4,"text":"3月","textPreview":"3月","textChars":2,"textLines":1,"bbox":[506,221,96,28]}
+{"kind":"shape","id":"sh/n6d4jud8","slide":4,"name":"cell-0-3","bbox":[658,255,156,98]}
+{"kind":"textbox","id":"sh/m54napwn","slide":4,"text":"4月","textPreview":"4月","textChars":2,"textLines":1,"bbox":[670,221,96,28]}
+{"kind":"shape","id":"sh/xcf6p4va","slide":4,"name":"cell-0-4","bbox":[822,255,156,98]}
+{"kind":"textbox","id":"sh/wb65gzup","slide":4,"text":"5月","textPreview":"5月","textChars":2,"textLines":1,"bbox":[834,221,96,28]}
+{"kind":"shape","id":"sh/gryx876d","slide":4,"name":"cell-0-5","bbox":[986,255,156,98]}
+{"kind":"textbox","id":"sh/hs7y1c7i","slide":4,"text":"6月","textPreview":"6月","textChars":2,"textLines":1,"bbox":[998,221,96,28]}
+{"kind":"shape","id":"sh/upgf6xo7","slide":4,"bbox":[76,404,10,10]}
+{"kind":"textbox","id":"sh/vqpgz2ps","slide":4,"text":"进阶","textPreview":"进阶","textChars":2,"textLines":1,"bbox":[94,392,60,32]}
+{"kind":"shape","id":"sh/4vyhcr69","slide":4,"name":"cell-1-0","bbox":[166,361,156,98]}
+{"kind":"shape","id":"sh/5w7y5c7u","slide":4,"name":"cell-1-1","bbox":[330,361,156,98]}
+{"kind":"shape","id":"sh/itgfaho3","slide":4,"name":"cell-1-2","bbox":[494,361,156,98]}
+{"kind":"shape","id":"sh/3upg3mpo","slide":4,"name":"cell-1-3","bbox":[658,361,156,98]}
+{"kind":"shape","id":"sh/kzex0n65","slide":4,"name":"cell-1-4","bbox":[822,361,156,98]}
+{"kind":"shape","id":"sh/l0nyts7q","slide":4,"name":"cell-1-5","bbox":[986,361,156,98]}
+{"kind":"shape","id":"sh/net0fq98","slide":4,"bbox":[76,510,10,10]}
+{"kind":"textbox","id":"sh/2dkj6l8n","slide":4,"text":"高阶","textPreview":"高阶","textChars":2,"textLines":1,"bbox":[94,498,60,32]}
+{"kind":"shape","id":"sh/9gvih0ry","slide":4,"name":"cell-2-0","bbox":[166,467,156,98]}
+{"kind":"shape","id":"sh/of218vqd","slide":4,"name":"cell-2-1","bbox":[330,467,156,98]}
+{"kind":"shape","id":"sh/fqt0bq9w","slide":4,"name":"cell-2-2","bbox":[494,467,156,98]}
+{"kind":"shape","id":"sh/epkj2l8b","slide":4,"name":"cell-2-3","bbox":[658,467,156,98]}
+{"kind":"shape","id":"sh/1cbidgr2","slide":4,"name":"cell-2-4","bbox":[822,467,156,98]}
+{"kind":"shape","id":"sh/0r214vqh","slide":4,"name":"cell-2-5","bbox":[986,467,156,98]}
+{"kind":"textbox","id":"sh/rm907690","slide":4,"text":"暂无运动需求","textPreview":"暂无运动需求","textChars":6,"textLines":1,"bbox":[469,386,500,48]}
+{"kind":"textbox","id":"sh/ql0jy18f","slide":4,"text":"录入运动基础 / 进阶 / 高阶来源后，将自动落入对应月份泳道","textPreview":"录入运动基础 / 进阶 / 高阶来源后，将自动落入对应月份泳道","textChars":31,"textLines":1,"bbox":[360,438,718,40]}
+{"kind":"textbox","id":"sh/6tkn294z","slide":4,"text":"空状态也是模板的一部分：能明确表达“暂无”，而不是漏数或未生成。","textPreview":"空状态也是模板的一部分：能明确表达“暂无”，而不是漏数或未生成。","textChars":32,"textLines":1,"bbox":[64,626,820,30]}
+{"kind":"notes","id":"nt/chvm2s","slide":4,"text":""}
+{"kind":"slide","id":"sl/8p2uqi","slide":5,"title":"需求路标工作台","textShapes":23}
+{"kind":"textbox","id":"sh/7ylsvqt0","slide":5,"name":"brand-5","text":"需求路标工作台","textPreview":"需求路标工作台","textChars":7,"textLines":1,"bbox":[54,31,270,25]}
+{"kind":"textbox","id":"sh/8zutovul","slide":5,"name":"section-5","text":"领域详情","textPreview":"领域详情","textChars":4,"textLines":1,"bbox":[895,31,270,25]}
+{"kind":"textbox","id":"sh/903ax0bq","slide":5,"name":"page-5","text":"05","textPreview":"05","textChars":2,"textLines":1,"bbox":[1172,31,55,25]}
+{"kind":"textbox","id":"sh/y9sbylc3","slide":5,"name":"eyebrow-睡眠领域包含 2 条可展开需求","text":"DOMAIN DETAIL","textPreview":"DOMAIN DETAIL","textChars":13,"textLines":1,"bbox":[64,82,520,28]}
+{"kind":"textbox","id":"sh/za1srqto","slide":5,"name":"title-睡眠领域包含 2 条可展开需求","text":"睡眠领域包含 2 条可展开需求","textPreview":"睡眠领域包含 2 条可展开需求","textChars":15,"textLines":1,"bbox":[64,112,1136,70]}
+{"kind":"textbox","id":"sh/kbut0vu9","slide":5,"name":"subtitle-睡眠领域包含 2 条可展开需求","text":"健康基础 · 2027年3月 · 工作量合计 2 人月","textPreview":"健康基础 · 2027年3月 · 工作量合计 2 人月","textChars":27,"textLines":1,"bbox":[64,181,1040,38]}
+{"kind":"shape","id":"sh/lw3atgbu","slide":5,"name":"detail-card-1","bbox":[64,245,742,354]}
+{"kind":"shape","id":"sh/a5sru1c7","slide":5,"bbox":[92,276,13,13]}
+{"kind":"textbox","id":"sh/b61sn6ts","slide":5,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[118,266,46,30]}
+{"kind":"textbox","id":"sh/3ypc3m1g","slide":5,"text":"社交时差","textPreview":"社交时差","textChars":4,"textLines":1,"bbox":[169,260,350,44]}
+{"kind":"textbox","id":"sh/2xgvuh0v","slide":5,"text":"体验优化","textPreview":"体验优化","textChars":4,"textLines":1,"bbox":[624,261,116,32]}
+{"kind":"textbox","id":"sh/p07u5wj6","slide":5,"text":"需求描述","textPreview":"需求描述","textChars":4,"textLines":1,"bbox":[92,329,120,30]}
+{"kind":"textbox","id":"sh/4zydwri1","slide":5,"text":"评估周末和周内的睡眠规律性，帮助用户理解作息节奏差异。","textPreview":"评估周末和周内的睡眠规律性，帮助用户理解作息节奏差异。","textChars":27,"textLines":1,"bbox":[92,367,638,65]}
+{"kind":"shape","id":"sh/r29c7m1c","slide":5,"bbox":[92,458,626,1]}
+{"kind":"textbox","id":"sh/q1gvy10r","slide":5,"text":"工作量","textPreview":"工作量","textChars":3,"textLines":1,"bbox":[92,481,92,26]}
+{"kind":"textbox","id":"sh/doru9wji","slide":5,"text":"1 人月","textPreview":"1 人月","textChars":4,"textLines":1,"bbox":[92,511,100,31]}
+{"kind":"textbox","id":"sh/c3id0rix","slide":5,"text":"上线","textPreview":"上线","textChars":2,"textLines":1,"bbox":[246,481,70,26]}
+{"kind":"textbox","id":"sh/765cv218","slide":5,"text":"2027.03","textPreview":"2027.03","textChars":7,"textLines":1,"bbox":[246,511,100,31]}
+{"kind":"shape","id":"sh/65wbmx0n","slide":5,"name":"image-slot","bbox":[838,245,378,231]}
+{"kind":"shape","id":"sh/ax47q9on","slide":5,"bbox":[998,303,58,58]}
+{"kind":"textbox","id":"sh/vyxojups","slide":5,"text":"+","textPreview":"+","textChars":1,"textLines":1,"bbox":[1005,307,44,44]}
+{"kind":"textbox","id":"sh/wz6psz6d","slide":5,"text":"本地图片自动填充","textPreview":"本地图片自动填充","textChars":8,"textLines":1,"bbox":[899,382,256,34]}
+{"kind":"textbox","id":"sh/x0f6l47y","slide":5,"text":"最多 5 张 · 保持比例裁切","textPreview":"最多 5 张 · 保持比例裁切","textChars":15,"textLines":1,"bbox":[899,418,256,26]}
+{"kind":"shape","id":"sh/m94nmpob","slide":5,"name":"detail-card-2","bbox":[838,496,378,103]}
+{"kind":"textbox","id":"sh/nudofupw","slide":5,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[864,516,42,24]}
+{"kind":"textbox","id":"sh/8vm5oz6h","slide":5,"text":"体动","textPreview":"体动","textChars":2,"textLines":1,"bbox":[912,508,150,32]}
+{"kind":"textbox","id":"sh/9wv6h472","slide":5,"text":"描述待补充","textPreview":"描述待补充","textChars":5,"textLines":1,"bbox":[912,547,150,25]}
+{"kind":"textbox","id":"sh/y5kni5of","slide":5,"text":"1 人月","textPreview":"1 人月","textChars":4,"textLines":1,"bbox":[1102,523,82,30]}
+{"kind":"textbox","id":"sh/z6tobapk","slide":5,"text":"详情页规则：描述为空时保留“待补充”；有图时优先使用右侧视觉区。","textPreview":"详情页规则：描述为空时保留“待补充”；有图时优先使用右侧视觉区。","textChars":32,"textLines":1,"bbox":[64,630,920,28]}
+{"kind":"notes","id":"nt/8p2uqi","slide":5,"text":""}
+{"kind":"slide","id":"sl/xrc753","slide":6,"title":"需求路标工作台","textShapes":24}
+{"kind":"textbox","id":"sh/ip8jq5g7","slide":6,"name":"brand-6","text":"需求路标工作台","textPreview":"需求路标工作台","textChars":7,"textLines":1,"bbox":[54,31,270,25]}
+{"kind":"textbox","id":"sh/5sji1kfi","slide":6,"name":"section-6","text":"模板确认","textPreview":"模板确认","textChars":4,"textLines":1,"bbox":[895,31,270,25]}
+{"kind":"textbox","id":"sh/4rq1sfyx","slide":6,"name":"page-6","text":"06","textPreview":"06","textChars":2,"textLines":1,"bbox":[1172,31,55,25]}
+{"kind":"textbox","id":"sh/v2h0vqhg","slide":6,"name":"eyebrow-确认这 4 类页面后，工作台将按同一规范持续输出","text":"TEMPLATE REVIEW","textPreview":"TEMPLATE REVIEW","textChars":15,"textLines":1,"bbox":[64,82,520,28]}
+{"kind":"textbox","id":"sh/u18jm5gv","slide":6,"name":"title-确认这 4 类页面后，工作台将按同一规范持续输出","text":"确认这 4 类页面后，工作台将按同一规范持续输出","textPreview":"确认这 4 类页面后，工作台将按同一规范持续输出","textChars":24,"textLines":1,"bbox":[64,112,1136,70]}
+{"kind":"textbox","id":"sh/hozix0zm","slide":6,"name":"subtitle-确认这 4 类页面后，工作台将按同一规范持续输出","text":"v0.1 用于共同修改；确认后设为内置模板，不再要求导入 PPTX。","textPreview":"v0.1 用于共同修改；确认后设为内置模板，不再要求导入 PPTX。","textChars":34,"textLines":1,"bbox":[64,181,1040,38]}
+{"kind":"shape","id":"sh/w3q1ovy1","slide":6,"bbox":[64,271,263,147]}
+{"kind":"textbox","id":"sh/fy1k7uxk","slide":6,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[86,293,44,24]}
+{"kind":"textbox","id":"sh/exsjypgz","slide":6,"text":"汇总分析","textPreview":"汇总分析","textChars":4,"textLines":1,"bbox":[86,326,210,34]}
+{"kind":"textbox","id":"sh/0v2543ql","slide":6,"text":"指标与月份节奏","textPreview":"指标与月份节奏","textChars":7,"textLines":1,"bbox":[86,371,210,26]}
+{"kind":"shape","id":"sh/1wb6x876","slide":6,"bbox":[351,271,263,147]}
+{"kind":"textbox","id":"sh/e9kn2t8f","slide":6,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[373,293,44,24]}
+{"kind":"textbox","id":"sh/fatovyp0","slide":6,"text":"运动路标","textPreview":"运动路标","textChars":4,"textLines":1,"bbox":[373,326,210,34]}
+{"kind":"textbox","id":"sh/s7i503q9","slide":6,"text":"三级泳道与空状态","textPreview":"三级泳道与空状态","textChars":8,"textLines":1,"bbox":[373,371,210,26]}
+{"kind":"shape","id":"sh/d8r6t87u","slide":6,"bbox":[638,271,263,147]}
+{"kind":"textbox","id":"sh/q50nyt8j","slide":6,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[660,293,44,24]}
+{"kind":"textbox","id":"sh/r69orypo","slide":6,"text":"健康路标","textPreview":"健康路标","textChars":4,"textLines":1,"bbox":[660,326,210,34]}
+{"kind":"textbox","id":"sh/43i5wjqd","slide":6,"text":"自动合并与卡片摘要","textPreview":"自动合并与卡片摘要","textChars":9,"textLines":1,"bbox":[660,371,210,26]}
+{"kind":"shape","id":"sh/54r6po7y","slide":6,"bbox":[925,271,263,147]}
+{"kind":"textbox","id":"sh/l0jmtkzm","slide":6,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[947,293,44,24]}
+{"kind":"textbox","id":"sh/kzalkfi1","slide":6,"text":"领域详情","textPreview":"领域详情","textChars":4,"textLines":1,"bbox":[947,326,210,34]}
+{"kind":"textbox","id":"sh/jy14rahg","slide":6,"text":"需求描述与本地图片","textPreview":"需求描述与本地图片","textChars":9,"textLines":1,"bbox":[947,371,210,26]}
+{"kind":"textbox","id":"sh/yxs3i50b","slide":6,"text":"需要一起确认","textPreview":"需要一起确认","textChars":6,"textLines":1,"bbox":[64,480,220,34]}
+{"kind":"shape","id":"sh/xwzmp0zq","slide":6,"bbox":[64,540,20,20]}
+{"kind":"textbox","id":"sh/wvqlgvi5","slide":6,"text":"字体与颜色","textPreview":"字体与颜色","textChars":5,"textLines":1,"bbox":[98,532,210,35]}
+{"kind":"shape","id":"sh/buh4nahk","slide":6,"bbox":[351,540,20,20]}
+{"kind":"textbox","id":"sh/at83e50z","slide":6,"text":"信息密度","textPreview":"信息密度","textChars":4,"textLines":1,"bbox":[385,532,210,35]}
+{"kind":"shape","id":"sh/hs3m14zu","slide":6,"bbox":[638,540,20,20]}
+{"kind":"textbox","id":"sh/grulszi9","slide":6,"text":"图片呈现","textPreview":"图片呈现","textChars":4,"textLines":1,"bbox":[672,532,210,35]}
+{"kind":"shape","id":"sh/e14r6xcf","slide":6,"bbox":[925,540,20,20]}
+{"kind":"textbox","id":"sh/f2dsz2t0","slide":6,"text":"详情页拆分规则","textPreview":"详情页拆分规则","textChars":7,"textLines":1,"bbox":[959,532,210,35]}
+{"kind":"textbox","id":"sh/0nm987ul","slide":6,"text":"下一版只改模板，不改历史需求数据。","textPreview":"下一版只改模板，不改历史需求数据。","textChars":17,"textLines":1,"bbox":[64,637,540,26]}
+{"kind":"notes","id":"nt/xrc753","slide":6,"text":""}

@@ -1,0 +1,29 @@
+appId: com.local.healthroadmap
+productName: 需求路标工作台
+directories:
+  output: release
+files:
+  - dist-electron/**/*
+  - dist-renderer/**/*
+  - package.json
+extraResources:
+  - from: node_modules/sql.js/dist/sql-wasm.wasm
+    to: sql-wasm.wasm
+  - from: 需求路标模板-共创版-v0.1.pptx
+    to: templates/需求路标模板-共创版-v0.1.pptx
+mac:
+  category: public.app-category.business
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: "${productName}-Setup-${version}-${arch}.${ext}"
+portable:
+  artifactName: "${productName}-Portable-${version}-${arch}.${ext}"
+artifactName: "${productName}-${version}-${os}-${arch}.${ext}"

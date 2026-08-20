@@ -1,0 +1,16 @@
+node_modules/
+dist-electron/
+dist-renderer/
+release/*
+!release/*-Setup-*-x64.exe
+!release/*-Portable-*-x64.exe
+!release/SHA256SUMS.txt
+.vite/
+*.log
+*.db
+*.db.tmp
+.DS_Store
+.codex_work/
+outputs/
+.ppt-template-v01/output/
+.ppt-template-v01/node_modules
