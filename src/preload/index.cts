@@ -20,6 +20,7 @@ const api: ElectronApi = {
   inspectWorkspacePackage: () => ipcRenderer.invoke("workspace:inspect"),
   applyWorkspacePackage: (input: { token: string; mode: WorkspaceImportMode }) => ipcRenderer.invoke("workspace:apply", input),
   exportTemplateDraft: () => ipcRenderer.invoke("template:draft-export"),
+  exportRoadmapPresentation: (input) => ipcRenderer.invoke("presentation:export", input),
 };
 
 contextBridge.exposeInMainWorld("roadmapApi", api);

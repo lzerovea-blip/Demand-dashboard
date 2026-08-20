@@ -156,7 +156,7 @@ export default function App() {
             <p>{pageSubtitle(page)}</p>
           </div>
           <div className="top-actions">
-            {(page === "summary" || page === "roadmap") && (
+            {(page === "summary" || page === "roadmap" || page === "template") && (
               <PeriodSelector start={startHalf} end={endHalf} onStart={setStartHalf} onEnd={setEndHalf} />
             )}
             <button className="button primary" onClick={() => setEditor("new")}>＋ 新建需求</button>
@@ -191,9 +191,23 @@ export default function App() {
           {page === "template" && (
             <TemplatePage
               snapshot={snapshot}
+              start={startHalf}
+              end={endHalf}
+              onExportPpt={async () => {
+                try {
+                  const result = await window.roadmapApi.exportRoadmapPresentation({ start: startHalf, end: endHalf });
+                  if (!result.canceled) setNotice(`PPT 已导出（${result.slideCount} 页）：${result.path}`);
+                } catch (reason) {
+                  setError(messageOf(reason));
+                }
+              }}
               onExportDraft={async () => {
-                const result = await window.roadmapApi.exportTemplateDraft();
-                if (!result.canceled) setNotice(`共创版已导出：${result.path}`);
+                try {
+                  const result = await window.roadmapApi.exportTemplateDraft();
+                  if (!result.canceled) setNotice(`共创版已导出：${result.path}`);
+                } catch (reason) {
+                  setError(messageOf(reason));
+                }
               }}
               onExportWorkspace={async () => {
                 try {
@@ -782,8 +796,11 @@ function DictionaryPanel({ title, subtitle, items, onSave, onDelete }: { title: 
   );
 }
 
-function TemplatePage({ snapshot, onExportDraft, onExportWorkspace, onInspectWorkspace, onApplyWorkspace }: {
+function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExportWorkspace, onInspectWorkspace, onApplyWorkspace }: {
   snapshot: AppSnapshot;
+  start: string;
+  end: string;
+  onExportPpt: () => Promise<void>;
   onExportDraft: () => Promise<void>;
   onExportWorkspace: () => Promise<void>;
   onInspectWorkspace: () => Promise<WorkspaceImportPreview | undefined>;
@@ -792,6 +809,7 @@ function TemplatePage({ snapshot, onExportDraft, onExportWorkspace, onInspectWor
   const [preview, setPreview] = useState<WorkspaceImportPreview | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [applying, setApplying] = useState<WorkspaceImportMode | null>(null);
+  const [exporting, setExporting] = useState(false);
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
 
   async function inspectPackage() {
@@ -814,16 +832,25 @@ function TemplatePage({ snapshot, onExportDraft, onExportWorkspace, onInspectWor
     }
   }
 
+  async function exportPpt() {
+    setExporting(true);
+    try {
+      await onExportPpt();
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <>
       <div className="template-layout">
         <div className="panel template-main">
           <div className="template-icon">P</div>
-          <span className="eyebrow">BUILT-IN POWERPOINT</span>
-          <h2>需求路标模板 · 共创版 v0.1</h2>
-          <p>已由工作台生成首版，不再要求导入外部模板。我们共同修改并确认后，它将成为后续需求数据匹配输出的固定规范。</p>
-          <div className="template-meta"><span>页数</span><b>6 页可编辑 PPT</b><span>状态</span><b className="co-creating">共创中</b><span>处理方式</span><b>全程本地</b></div>
-          <div className="template-actions"><button className="button primary" onClick={onExportDraft}>导出共创版 v0.1</button><button className="button dark" disabled>确认后启用一键生成</button></div>
+          <span className="eyebrow">OFFLINE POWERPOINT</span>
+          <h2>需求路标模板 · 生产预览版 v0.2</h2>
+          <p>按当前选择的半年区间，将汇总、双路标、需求描述和本地图片自动生成可编辑 PowerPoint；共创版继续用于一起确认版式。</p>
+          <div className="template-meta"><span>导出区间</span><b>{shortHalf(start)} – {shortHalf(end)}</b><span>状态</span><b className="ready">可导出 / 待确认</b><span>处理方式</span><b>全程本地</b></div>
+          <div className="template-actions"><button className="button primary" onClick={exportPpt} disabled={exporting}>{exporting ? "正在生成…" : "生成需求路标 PPT"}</button><button className="button dark" onClick={onExportDraft}>导出 6 页共创版</button></div>
           <div className="template-contract"><h3>固定输出页面</h3><div>{["汇总分析页", "运动三泳道路标页", "健康三泳道路标页", "领域全量详情页"].map((item, index) => <span key={item}><b>0{index + 1}</b>{item}</span>)}</div></div>
         </div>
         <div className="panel export-side transfer-side">

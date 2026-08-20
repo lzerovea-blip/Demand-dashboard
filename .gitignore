@@ -14,3 +14,4 @@ release/*
 outputs/
 .ppt-template-v01/output/
 .ppt-template-v01/node_modules
+需求路标导出预览-*.pptx

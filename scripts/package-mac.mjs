@@ -8,9 +8,10 @@ const electronExecutable = require("electron");
 const electronApp = resolve(dirname(electronExecutable), "../..");
 const releaseDir = resolve("release");
 const productName = "需求路标工作台";
+const sourcePackage = JSON.parse(await readFile("package.json", "utf8"));
 const targetApp = join(releaseDir, `${productName}.app`);
-const zipPath = join(releaseDir, `${productName}-0.1.0-mac-arm64.zip`);
-const dmgPath = join(releaseDir, `${productName}-0.1.0-mac-arm64.dmg`);
+const zipPath = join(releaseDir, `${productName}-${sourcePackage.version}-mac-arm64.zip`);
+const dmgPath = join(releaseDir, `${productName}-${sourcePackage.version}-mac-arm64.dmg`);
 const resourcesDir = join(targetApp, "Contents", "Resources");
 const appDir = join(resourcesDir, "app");
 const templatesDir = join(resourcesDir, "templates");
@@ -27,7 +28,6 @@ await cp("node_modules/sql.js/dist/sql-wasm.wasm", join(resourcesDir, "sql-wasm.
 await mkdir(templatesDir, { recursive: true });
 await cp("需求路标模板-共创版-v0.1.pptx", join(templatesDir, "需求路标模板-共创版-v0.1.pptx"));
 
-const sourcePackage = JSON.parse(await readFile("package.json", "utf8"));
 const packagedManifest = {
   name: sourcePackage.name,
   productName,

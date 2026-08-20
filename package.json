@@ -1,6 +1,6 @@
 {
   "name": "health-roadmap-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "离线运动健康需求汇总与路标 PPT 模板写入工具",
   "main": "dist-electron/main/index.cjs",
@@ -16,7 +16,9 @@
   },
   "dependencies": {
     "fast-xml-parser": "^5.2.5",
+    "image-size": "^1.2.1",
     "jszip": "^3.10.1",
+    "pptxgenjs": "^4.0.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "sql.js": "^1.13.0",

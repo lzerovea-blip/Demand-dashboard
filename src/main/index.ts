@@ -7,8 +7,11 @@ import type {
   SaveDictionaryInput,
   SaveGroupOverrideInput,
   SaveRequirementInput,
+  HalfYearRange,
   WorkspaceImportMode,
 } from "../shared/types.js";
+import { buildPptExportPlan } from "../shared/pptExport.js";
+import { createRoadmapPresentation } from "./pptxExport.js";
 
 const database = new LocalDatabase();
 let mainWindow: BrowserWindow | null = null;
@@ -99,6 +102,20 @@ function registerIpc(): void {
       : join(app.getAppPath(), BUILTIN_TEMPLATE_FILE);
     await copyFile(sourcePath, result.filePath);
     return { canceled: false, path: result.filePath };
+  });
+
+  ipcMain.handle("presentation:export", async (_event, input: HalfYearRange) => {
+    const snapshot = database.getSnapshot();
+    const plan = buildPptExportPlan(snapshot, input.start, input.end);
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: "导出需求路标PPT",
+      defaultPath: `需求路标-${input.start}-${input.end}-${new Date().toISOString().slice(0, 10)}.pptx`,
+      filters: [{ name: "PowerPoint演示文稿", extensions: ["pptx"] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    const outputPath = result.filePath.toLowerCase().endsWith(".pptx") ? result.filePath : `${result.filePath}.pptx`;
+    await writeFile(outputPath, await createRoadmapPresentation(snapshot, input.start, input.end));
+    return { canceled: false, path: outputPath, slideCount: plan.slideCount };
   });
 }
 

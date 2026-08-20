@@ -179,6 +179,7 @@ export interface ElectronApi {
   inspectWorkspacePackage(): Promise<{ canceled: boolean; preview?: WorkspaceImportPreview }>;
   applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
+  exportRoadmapPresentation(input: HalfYearRange): Promise<{ canceled: boolean; path?: string; slideCount?: number }>;
 }
 
 declare global {
