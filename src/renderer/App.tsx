@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
+  groupMatchesRoadmapLane,
   halfYearSequence,
   monthsForHalfYear,
   roadmapCardLabel,
+  roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
   roadmapTrackOrder,
   type HalfYearSummary,
+  type RoadmapLane,
   type RoadmapGroup,
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
@@ -16,6 +19,7 @@ import {
   CATEGORIES,
   MAX_REQUIREMENT_IMAGE_BYTES,
   MAX_REQUIREMENT_IMAGES,
+  OVERSEAS_REGIONS,
   REQUIREMENT_IMAGE_MIME_TYPES,
   SOURCES,
   type AppSnapshot,
@@ -28,6 +32,8 @@ import {
   type Track,
   type WorkspaceImportMode,
   type WorkspaceImportPreview,
+  type WorkspaceWorkbookConflictMode,
+  type WorkspaceWorkbookImportPreview,
 } from "../shared/types";
 import {
   normalizeWorkloadEdit,
@@ -60,6 +66,7 @@ const SOURCE_COLORS: Record<RequirementSource, string> = {
   健康基础: "#ef6b54",
   健康进阶: "#f1a33c",
   健康高阶: "#d64d85",
+  海外研究: "#14927f",
 };
 
 const WORKLOAD_SIDE_META: Record<WorkloadSide, { label: string; color: string }> = {
@@ -159,7 +166,9 @@ export default function App() {
             {(page === "summary" || page === "roadmap" || page === "template") && (
               <PeriodSelector start={startHalf} end={endHalf} onStart={setStartHalf} onEnd={setEndHalf} />
             )}
-            <button className="button primary" onClick={() => setEditor("new")}>＋ 新建需求</button>
+            {page === "requirements" && (
+              <button className="button primary" onClick={() => setEditor("new")}>＋ 新建需求</button>
+            )}
           </div>
         </header>
 
@@ -237,6 +246,34 @@ export default function App() {
                   return false;
                 }
               }}
+              onExportWorkbook={async () => {
+                try {
+                  const result = await window.roadmapApi.exportWorkspaceWorkbook();
+                  if (!result.canceled) setNotice(`协作 Excel 已导出：${result.path}`);
+                } catch (reason) {
+                  setError(messageOf(reason));
+                }
+              }}
+              onInspectWorkbook={async () => {
+                try {
+                  const result = await window.roadmapApi.inspectWorkspaceWorkbook();
+                  return result.preview;
+                } catch (reason) {
+                  setError(messageOf(reason));
+                  return undefined;
+                }
+              }}
+              onApplyWorkbook={async (token, conflictMode) => {
+                try {
+                  const result = await window.roadmapApi.applyWorkspaceWorkbook({ token, conflictMode });
+                  setSnapshot(result.snapshot);
+                  setNotice(conflictMode === "local-wins" ? "协作 Excel 已合并，冲突保留本机版本" : "协作 Excel 已合并，冲突采用 Excel 版本");
+                  return true;
+                } catch (reason) {
+                  setError(messageOf(reason));
+                  return false;
+                }
+              }}
             />
           )}
         </section>
@@ -296,18 +333,9 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
     if (targetMonth && !targetMonths.includes(targetMonth)) setTargetMonth("");
   }, [targetMonth, targetMonths.join("|")]);
   const rows = filterRequirements(snapshot.requirements, domains, { query, source, category, targetMonth });
-  const workload = sumWorkloadBreakdown(rows);
 
   return (
     <>
-      <div className="metric-row compact workload-metrics">
-        <Metric label="当前需求" value={rows.length} suffix="条" />
-        <Metric label="总工作量" value={formatNumber(workload.total)} suffix="人月" />
-        <Metric label="设备工作量" value={formatNumber(workload.device)} suffix="人月" accent="cyan" />
-        <Metric label="App 工作量" value={formatNumber(workload.app)} suffix="人月" accent="blue" />
-        <Metric label="云侧工作量" value={formatNumber(workload.cloud)} suffix="人月" accent="violet" />
-      </div>
-      {workload.unallocated > 0 && <div className="workload-warning">有 {formatNumber(workload.unallocated)} 人月历史工作量待拆分；编辑对应需求后可分配到设备、App 和云侧。</div>}
       <div className="panel table-panel">
         <div className="toolbar">
           <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题或领域" /></label>
@@ -319,13 +347,14 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
         {rows.length ? (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>需求标题</th><th>领域</th><th>来源</th><th>分类</th><th>上线月份</th><th>匹配产品</th><th className="numeric">工作量</th><th /></tr></thead>
+              <thead><tr><th>需求标题</th><th>领域</th><th>来源</th><th>海外区域</th><th>分类</th><th>上线月份</th><th>匹配产品</th><th className="numeric">工作量</th><th /></tr></thead>
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
                     <td><strong>{item.title}</strong></td>
                     <td>{domains.get(item.domainId) ?? "未命名"}</td>
                     <td><SourceBadge source={item.source} /></td>
+                    <td>{item.overseasRegions.join("、") || "—"}</td>
                     <td><span className={`category ${item.category === "产品专属" ? "exclusive" : "experience"}`}>{item.category}</span></td>
                     <td>{formatMonth(item.targetMonth)}</td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
@@ -350,6 +379,7 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
   const total = device + app + cloud;
   const sports = summaries.reduce((sum, item) => sum + item.sportsWorkload, 0);
   const health = summaries.reduce((sum, item) => sum + item.healthWorkload, 0);
+  const overseas = summaries.reduce((sum, item) => sum + item.overseasWorkload, 0);
   const experience = summaries.reduce((sum, item) => sum + item.experienceWorkload, 0);
   const exclusive = summaries.reduce((sum, item) => sum + item.exclusiveWorkload, 0);
   const unallocated = summaries.reduce((sum, item) => sum + item.unallocatedWorkload, 0);
@@ -368,9 +398,10 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
           { label: "App 侧", value: app, color: WORKLOAD_SIDE_META.app.color },
           { label: "云侧", value: cloud, color: WORKLOAD_SIDE_META.cloud.color },
         ]} />
-        <DonutChart title="运动 / 健康占比" subtitle="按需求来源归属" items={[
+        <DonutChart title="运动 / 健康 / 海外研究占比" subtitle="按需求来源归属" items={[
           { label: "运动", value: sports, color: "#287ef0" },
           { label: "健康", value: health, color: "#ef6b54" },
+          { label: "海外研究", value: overseas, color: "#14927f" },
         ]} />
         <DonutChart title="体验优化 / 产品专属" subtitle="按需求分类归属" items={[
           { label: "体验优化", value: experience, color: "#7357d9" },
@@ -499,12 +530,14 @@ function RoadmapBoard({ title, track, groups, start, end, onOpenGroup }: { title
   const months = halves.flatMap(monthsForHalfYear);
   const scoped = groups.filter((item) => item.track === track);
   const firstGroup = scoped[0];
+  const lanes = roadmapLanesForTrack(track);
+  const firstLane = firstGroup ? (firstGroup.track === "海外研究" ? firstGroup.overseasRegions[0] : firstGroup.level) : undefined;
   const monthColumnTemplate = roadmapMonthColumnTemplate(months, groups);
 
   function locateFirstGroup(behavior: ScrollBehavior = "auto") {
-    if (!firstGroup || !scrollRef.current) return;
+    if (!firstGroup || !firstLane || !scrollRef.current) return;
     const target = scrollRef.current.querySelector<HTMLElement>(
-      `[data-roadmap-month="${firstGroup.targetMonth}"][data-roadmap-level="${firstGroup.level}"]`,
+      `[data-roadmap-month="${firstGroup.targetMonth}"][data-roadmap-lane="${firstLane}"]`,
     );
     if (!target) return;
     const centeredOffset = Math.max(116, (scrollRef.current.clientWidth - target.clientWidth) / 2);
@@ -514,10 +547,10 @@ function RoadmapBoard({ title, track, groups, start, end, onOpenGroup }: { title
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => locateFirstGroup());
     return () => window.cancelAnimationFrame(frame);
-  }, [firstGroup?.key, start, end]);
+  }, [firstGroup?.key, firstLane, start, end]);
 
   return (
-    <div className={`panel roadmap-board ${track === "运动" ? "sports" : "health"}`}>
+    <div className={`panel roadmap-board ${track === "运动" ? "sports" : track === "健康" ? "health" : "overseas"}`}>
       <PanelTitle
         title={title}
         subtitle={`${shortHalf(start)} – ${shortHalf(end)} · ${scoped.length} 张卡片 · 点击卡片查看领域全量需求`}
@@ -531,8 +564,8 @@ function RoadmapBoard({ title, track, groups, start, end, onOpenGroup }: { title
           {halves.map((half) => <div key={half} className="half-header" style={{ gridColumn: "span 6" }}>{shortHalf(half)}</div>)}
           <div className="lane-corner muted">上线月份</div>
           {months.map((month) => <div key={month} className="month-header">{Number(month.slice(5))}月</div>)}
-          {(["基础", "进阶", "高阶"] as const).map((level) => (
-            <RoadmapLane key={level} level={level} months={months} groups={scoped.filter((item) => item.level === level)} onOpenGroup={onOpenGroup} />
+          {lanes.map((lane) => (
+            <RoadmapLane key={lane} lane={lane} months={months} groups={scoped.filter((item) => groupMatchesRoadmapLane(item, lane))} onOpenGroup={onOpenGroup} />
           ))}
         </div>
       </div>
@@ -540,12 +573,12 @@ function RoadmapBoard({ title, track, groups, start, end, onOpenGroup }: { title
   );
 }
 
-function RoadmapLane({ level, months, groups, onOpenGroup }: { level: "基础" | "进阶" | "高阶"; months: string[]; groups: RoadmapGroup[]; onOpenGroup: (group: RoadmapGroup) => void }) {
+function RoadmapLane({ lane, months, groups, onOpenGroup }: { lane: RoadmapLane; months: string[]; groups: RoadmapGroup[]; onOpenGroup: (group: RoadmapGroup) => void }) {
   return (
     <>
-      <div className="lane-label"><strong>{level}</strong><span>{groups.length} 卡片</span></div>
+      <div className="lane-label"><strong>{lane}</strong><span>{groups.length} 卡片</span></div>
       {months.map((month) => (
-        <div key={`${level}-${month}`} className="month-cell" data-roadmap-month={month} data-roadmap-level={level}>
+        <div key={`${lane}-${month}`} className="month-cell" data-roadmap-month={month} data-roadmap-lane={lane}>
           {groups.filter((item) => item.targetMonth === month).map((group) => <RoadmapCard key={group.key} group={group} onClick={() => onOpenGroup(group)} />)}
         </div>
       ))}
@@ -557,9 +590,21 @@ function RoadmapCard({ group, onClick }: { group: RoadmapGroup; onClick: () => v
   const hasExclusive = group.categories.includes("产品专属");
   const label = roadmapCardLabel(group);
   const requirementText = `${group.requirements.slice(0, 3).map((item) => item.title).join("、")}${group.requirements.length > 3 ? "等" : ""}`;
+  const visibleProducts = group.productNames.slice(0, 2);
+  const hiddenProductCount = Math.max(group.productNames.length - visibleProducts.length, 0);
+  const productLabel = group.productNames.length ? `涉及产品：${group.productNames.join("、")}` : "";
+  const regionLabel = group.overseasRegions.length ? `海外区域：${group.overseasRegions.join("、")}` : "";
+  const accessibleLabel = [label, regionLabel, productLabel, "点击查看全部需求"].filter(Boolean).join("；");
   return (
-    <button className={`roadmap-card ${hasExclusive ? "has-exclusive" : ""}`} onClick={onClick} title={label} aria-label={`${label}，点击查看全部需求`}>
-      <strong>{group.cardTitle}：</strong><span>{requirementText}</span>
+    <button className={`roadmap-card ${hasExclusive ? "has-exclusive" : ""}`} onClick={onClick} title={accessibleLabel} aria-label={accessibleLabel}>
+      <span className="roadmap-card-copy"><strong>{group.cardTitle}：</strong><span>{requirementText}</span></span>
+      {visibleProducts.length > 0 && (
+        <span className="roadmap-card-products" aria-label={productLabel}>
+          <i>涉及产品</i>
+          {visibleProducts.map((name) => <b key={name}>{name}</b>)}
+          {hiddenProductCount > 0 && <b title={group.productNames.slice(visibleProducts.length).join("、")}>+{hiddenProductCount}</b>}
+        </span>
+      )}
     </button>
   );
 }
@@ -575,6 +620,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       images: value.images ?? [],
       domainId: value.domainId,
       source: value.source,
+      overseasRegions: value.overseasRegions ?? [],
       category: value.category,
       targetMonth: value.targetMonth,
       productIds: value.productIds,
@@ -589,6 +635,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       images: [],
       domainId: snapshot.domains.find((item) => item.active)?.id ?? "",
       source: previous?.source ?? "运动基础",
+      overseasRegions: previous?.overseasRegions ?? [],
       category: previous?.category ?? "体验优化",
       targetMonth: previous?.targetMonth ?? new Date().toISOString().slice(0, 7),
       productIds: [],
@@ -603,6 +650,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
     cloud: value?.cloudWorkloadPm ? String(value.cloudWorkloadPm) : "",
   }));
   const [workloadError, setWorkloadError] = useState("");
+  const [regionError, setRegionError] = useState("");
   const [imageError, setImageError] = useState("");
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
@@ -625,6 +673,10 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (form.source === "海外研究" && form.overseasRegions.length === 0) {
+      setRegionError("请至少选择一个海外研究区域");
+      return;
+    }
     const parsed = [draftParts.device, draftParts.app, draftParts.cloud];
     if (parsed.some((item) => item === null)) {
       setWorkloadError("各侧工作量请输入 0、正整数或小数，例如 0.5");
@@ -699,10 +751,23 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
           </Field>
           <div className="form-grid">
             <Field label="领域" required><select value={form.domainId} onChange={(event) => setForm({ ...form, domainId: event.target.value })}><option value="">请选择</option>{snapshot.domains.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
-            <Field label="来源" required><select value={form.source} onChange={(event) => setForm({ ...form, source: event.target.value as RequirementSource })}>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select></Field>
+            <Field label="来源" required><select value={form.source} onChange={(event) => {
+              const source = event.target.value as RequirementSource;
+              setForm({ ...form, source, overseasRegions: source === "海外研究" ? form.overseasRegions : [] });
+              setRegionError("");
+            }}>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select></Field>
             <Field label="分类" required><div className="segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "体验优化" ? form.productIds : form.productIds })}>{item}</button>)}</div></Field>
             <Field label="上线年月" required><input type="month" value={form.targetMonth} onChange={(event) => setForm({ ...form, targetMonth: event.target.value })} /></Field>
           </div>
+          {form.source === "海外研究" && (
+            <Field label="海外研究区域" required>
+              <div className="check-grid overseas-region-grid">{OVERSEAS_REGIONS.map((region) => <label key={region}><input type="checkbox" checked={form.overseasRegions.includes(region)} onChange={(event) => {
+                setForm({ ...form, overseasRegions: event.target.checked ? [...form.overseasRegions, region] : form.overseasRegions.filter((item) => item !== region) });
+                setRegionError("");
+              }} /><span>{region}</span></label>)}</div>
+              {regionError && <small className="input-error">{regionError}</small>}
+            </Field>
+          )}
           <Field label={`匹配产品${form.category === "产品专属" ? "（必选）" : "（可选）"}`} required={form.category === "产品专属"}>
             {snapshot.products.length ? <div className="check-grid">{snapshot.products.filter((item) => item.active).map((item) => <label key={item.id}><input type="checkbox" checked={form.productIds.includes(item.id)} onChange={(event) => setForm({ ...form, productIds: event.target.checked ? [...form.productIds, item.id] : form.productIds.filter((id) => id !== item.id) })} /><span>{item.name}</span></label>)}</div> : <div className="inline-empty">暂无产品，可先保存体验优化需求，或前往字典设置新增产品。</div>}
           </Field>
@@ -740,6 +805,7 @@ function GroupDrawer({ group, onClose, onSave }: { group: RoadmapGroup; onClose:
         <div className="form-body">
           <Field label="路标卡片标题" required><input value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
           <Field label="详情 / PPT 摘要"><textarea rows={3} value={summary} onChange={(event) => setSummary(event.target.value)} /><small>该摘要保留给详情页与未来 PPT，不在路标轴卡片上显示。</small></Field>
+          {group.overseasRegions.length > 0 && <div className="detail-regions"><span>海外区域</span>{group.overseasRegions.map((region) => <b key={region}>{region}</b>)}</div>}
           {group.productNames.length > 0 && <div className="detail-products"><span>涉及产品</span>{group.productNames.map((name) => <b key={name}>{name}</b>)}</div>}
           <div className="detail-list">
             <div className="detail-list-head"><h3>领域全量需求</h3><span>工作量合计 {formatNumber(group.totalWorkloadPm)} PM</span></div>
@@ -747,7 +813,7 @@ function GroupDrawer({ group, onClose, onSave }: { group: RoadmapGroup; onClose:
               <details className="requirement-detail" key={item.id}>
                 <summary>
                   <em>{String(index + 1).padStart(2, "0")}</em>
-                  <div><strong>{item.title}</strong><span>{item.category}{item.productIds.length ? ` · ${group.requirementProductNames[item.id].join(" / ")}` : ""}</span></div>
+                  <div><strong>{item.title}</strong><span>{item.category}{item.overseasRegions.length ? ` · ${item.overseasRegions.join(" / ")}` : ""}{item.productIds.length ? ` · ${group.requirementProductNames[item.id].join(" / ")}` : ""}</span></div>
                   <b>{formatNumber(item.workloadPm)} PM</b>
                   <i>查看详情</i>
                 </summary>
@@ -796,7 +862,7 @@ function DictionaryPanel({ title, subtitle, items, onSave, onDelete }: { title: 
   );
 }
 
-function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExportWorkspace, onInspectWorkspace, onApplyWorkspace }: {
+function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook }: {
   snapshot: AppSnapshot;
   start: string;
   end: string;
@@ -805,10 +871,16 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
   onExportWorkspace: () => Promise<void>;
   onInspectWorkspace: () => Promise<WorkspaceImportPreview | undefined>;
   onApplyWorkspace: (token: string, mode: WorkspaceImportMode) => Promise<boolean>;
+  onExportWorkbook: () => Promise<void>;
+  onInspectWorkbook: () => Promise<WorkspaceWorkbookImportPreview | undefined>;
+  onApplyWorkbook: (token: string, conflictMode: WorkspaceWorkbookConflictMode) => Promise<boolean>;
 }) {
   const [preview, setPreview] = useState<WorkspaceImportPreview | null>(null);
+  const [workbookPreview, setWorkbookPreview] = useState<WorkspaceWorkbookImportPreview | null>(null);
   const [inspecting, setInspecting] = useState(false);
+  const [workbookInspecting, setWorkbookInspecting] = useState(false);
   const [applying, setApplying] = useState<WorkspaceImportMode | null>(null);
+  const [workbookApplying, setWorkbookApplying] = useState<WorkspaceWorkbookConflictMode | null>(null);
   const [exporting, setExporting] = useState(false);
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
 
@@ -832,6 +904,26 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
     }
   }
 
+  async function inspectWorkbook() {
+    setWorkbookInspecting(true);
+    try {
+      const result = await onInspectWorkbook();
+      if (result) setWorkbookPreview(result);
+    } finally {
+      setWorkbookInspecting(false);
+    }
+  }
+
+  async function applyWorkbook(conflictMode: WorkspaceWorkbookConflictMode) {
+    if (!workbookPreview || workbookPreview.errors.length) return;
+    setWorkbookApplying(conflictMode);
+    try {
+      if (await onApplyWorkbook(workbookPreview.token, conflictMode)) setWorkbookPreview(null);
+    } finally {
+      setWorkbookApplying(null);
+    }
+  }
+
   async function exportPpt() {
     setExporting(true);
     try {
@@ -847,20 +939,34 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
         <div className="panel template-main">
           <div className="template-icon">P</div>
           <span className="eyebrow">OFFLINE POWERPOINT</span>
-          <h2>需求路标模板 · 生产预览版 v0.2</h2>
-          <p>按当前选择的半年区间，将汇总、双路标、需求描述和本地图片自动生成可编辑 PowerPoint；共创版继续用于一起确认版式。</p>
+          <h2>需求路标模板 · 生产预览版 v0.3</h2>
+          <p>按当前选择的半年区间，将汇总、运动/健康/海外研究三类路标、需求描述和本地图片自动生成可编辑 PowerPoint；共创版继续用于一起确认版式。</p>
           <div className="template-meta"><span>导出区间</span><b>{shortHalf(start)} – {shortHalf(end)}</b><span>状态</span><b className="ready">可导出 / 待确认</b><span>处理方式</span><b>全程本地</b></div>
           <div className="template-actions"><button className="button primary" onClick={exportPpt} disabled={exporting}>{exporting ? "正在生成…" : "生成需求路标 PPT"}</button><button className="button dark" onClick={onExportDraft}>导出 6 页共创版</button></div>
-          <div className="template-contract"><h3>固定输出页面</h3><div>{["汇总分析页", "运动三泳道路标页", "健康三泳道路标页", "领域全量详情页"].map((item, index) => <span key={item}><b>0{index + 1}</b>{item}</span>)}</div></div>
+          <div className="template-contract"><h3>固定输出页面</h3><div>{["汇总分析页", "运动三泳道路标页", "健康三泳道路标页", "海外研究区域路标页", "领域全量详情页"].map((item, index) => <span key={item}><b>0{index + 1}</b>{item}</span>)}</div></div>
         </div>
         <div className="panel export-side transfer-side">
-          <PanelTitle title="完整数据交接" subtitle="打包全部业务内容，交给其他人继续管理" />
+          <PanelTitle title="数据协作与交接" subtitle="Excel 协作编辑，.roadmap 无损备份" />
           <dl><div><dt>需求</dt><dd>{snapshot.requirements.length} 条</dd></div><div><dt>原始图片</dt><dd>{imageCount} 张</dd></div><div><dt>领域 / 产品</dt><dd>{snapshot.domains.length} / {snapshot.products.length}</dd></div><div><dt>路标卡片编辑</dt><dd>{snapshot.groupOverrides.length} 项</dd></div></dl>
+          <div className="callout workbook-callout"><b>企业协作 Excel</b><span>导出全部结构化数据，上传到企业已有在线表格共同编辑；下载定稿后检查并合并导入。Excel 不携带图片。</span></div>
+          <div className="transfer-actions"><button className="button primary" onClick={onExportWorkbook}>导出协作 Excel</button><button className="button ghost" onClick={inspectWorkbook} disabled={workbookInspecting}>{workbookInspecting ? "检查中…" : "导入协作 Excel"}</button></div>
+          <div className="transfer-divider" />
           <div className="callout"><b>.roadmap 完整工作区</b><span>导出不受当前筛选和半年区间影响；包含需求描述、图片、字典、产品匹配和卡片编辑。</span></div>
           <div className="transfer-actions"><button className="button primary" onClick={onExportWorkspace}>导出完整数据包</button><button className="button ghost" onClick={inspectPackage} disabled={inspecting}>{inspecting ? "检查中…" : "导入数据包"}</button></div>
-          <small className="transfer-note">兼容导入旧版 JSON 备份；新的交接统一使用 .roadmap。</small>
+          <small className="transfer-note">Excel 负责多人协作；.roadmap 负责跨电脑完整交接原始图片，并兼容旧版 JSON 备份。</small>
         </div>
       </div>
+      {workbookPreview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !workbookApplying && setWorkbookPreview(null)}>
+        <div className="import-dialog workbook-import-dialog panel" role="dialog" aria-modal="true" aria-labelledby="workbook-import-title">
+          <div className="import-dialog-head"><div><span className="eyebrow">EXCEL COLLABORATION IMPORT</span><h2 id="workbook-import-title">检查协作 Excel</h2></div><button className="icon-button" onClick={() => setWorkbookPreview(null)} disabled={Boolean(workbookApplying)}>×</button></div>
+          <div className="import-file"><b>{workbookPreview.fileName}</b><span>{workbookPreview.formatVersion} · 导出于 {formatDateTime(workbookPreview.exportedAt)}</span></div>
+          <dl className="import-counts workbook-counts"><div><dt>新增需求</dt><dd>{workbookPreview.counts.added} 条</dd></div><div><dt>修改需求</dt><dd>{workbookPreview.counts.updated} 条</dd></div><div><dt>删除需求</dt><dd>{workbookPreview.counts.deleted} 条</dd></div><div><dt>未变化</dt><dd>{workbookPreview.counts.unchanged} 条</dd></div><div><dt>领域 / 产品调整</dt><dd>{workbookPreview.counts.domainsChanged} / {workbookPreview.counts.productsChanged}</dd></div><div><dt>卡片调整</dt><dd>{workbookPreview.counts.groupOverridesChanged} 项</dd></div><div><dt>冲突</dt><dd>{workbookPreview.counts.conflicts} 项</dd></div><div><dt>校验错误</dt><dd>{workbookPreview.errors.length} 项</dd></div></dl>
+          {workbookPreview.errors.length > 0 && <ImportIssueList title="需要先修正的错误" tone="error" items={workbookPreview.errors} />}
+          {workbookPreview.errors.length === 0 && workbookPreview.conflicts.length > 0 && <ImportIssueList title="本机与 Excel 同时修改" tone="warning" items={workbookPreview.conflicts} />}
+          {workbookPreview.errors.length === 0 && <div className="import-guidance"><b>图片处理</b><span>同 ID 需求保留本机图片；Excel 新增需求不带图片。默认按钮会保留发生冲突的本机版本。</span></div>}
+          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setWorkbookPreview(null)} disabled={Boolean(workbookApplying)}>取消</button><button className="button dark" onClick={() => applyWorkbook("local-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0}>{workbookApplying === "local-wins" ? "合并中…" : "合并并保留本机冲突"}</button>{workbookPreview.conflicts.length > 0 && <button className="button danger" onClick={() => applyWorkbook("excel-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0}>{workbookApplying === "excel-wins" ? "合并中…" : "Excel 覆盖冲突"}</button>}</div>
+        </div>
+      </div>}
       {preview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !applying && setPreview(null)}>
         <div className="import-dialog panel" role="dialog" aria-modal="true" aria-labelledby="import-title">
           <div className="import-dialog-head"><div><span className="eyebrow">WORKSPACE IMPORT</span><h2 id="import-title">确认导入数据包</h2></div><button className="icon-button" onClick={() => setPreview(null)} disabled={Boolean(applying)}>×</button></div>
@@ -872,6 +978,10 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
       </div>}
     </>
   );
+}
+
+function ImportIssueList({ title, tone, items }: { title: string; tone: "error" | "warning"; items: WorkspaceWorkbookImportPreview["errors"] }) {
+  return <div className={`import-issues ${tone}`}><b>{title}</b><ul>{items.slice(0, 8).map((item, index) => <li key={`${item.sheet}-${item.cell}-${index}`}><span>{item.sheet}!{item.cell}</span>{item.message}</li>)}</ul>{items.length > 8 && <small>另有 {items.length - 8} 项，请修正后重新选择文件检查。</small>}</div>;
 }
 
 function Metric({ label, value, suffix, accent = "plain" }: { label: string; value: string | number; suffix: string; accent?: string }) {
@@ -899,7 +1009,7 @@ function pageTitle(page: Page): string {
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与体验优化趋势", roadmap: "运动、健康双路标，三级泳道固定展开月份", dictionaries: "维护领域与产品的统一口径", template: "共同确认内置模板，后续按规范匹配需求内容输出" })[page];
+  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与体验优化趋势", roadmap: "运动、健康、海外研究三路标，按层级或区域展开月份", dictionaries: "维护领域与产品的统一口径", template: "共同确认内置模板，后续按规范匹配需求内容输出" })[page];
 }
 
 function formatNumber(value: number): string {

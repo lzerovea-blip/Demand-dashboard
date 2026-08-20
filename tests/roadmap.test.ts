@@ -3,10 +3,12 @@ import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
   groupKeyFor,
+  groupMatchesRoadmapLane,
   halfYearOf,
   halfYearSequence,
   monthsForHalfYear,
   roadmapCardLabel,
+  roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
   roadmapTrackOrder,
 } from "../src/shared/roadmap";
@@ -111,12 +113,24 @@ describe("工作量汇总", () => {
 describe("路标首屏排序", () => {
   it("只有健康需求时优先展示健康路标", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H1");
-    expect(roadmapTrackOrder(groups)).toEqual(["健康", "运动"]);
+    expect(roadmapTrackOrder(groups)).toEqual(["健康", "运动", "海外研究"]);
   });
 
   it("存在运动需求时保持运动路标在前", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
-    expect(roadmapTrackOrder(groups)).toEqual(["运动", "健康"]);
+    expect(roadmapTrackOrder(groups)).toEqual(["运动", "健康", "海外研究"]);
+  });
+
+  it("海外研究使用区域泳道并支持一张卡片进入多个区域", () => {
+    const overseas = {
+      ...requirement("overseas", "海外睡眠研究", "d1", "海外研究", "体验优化", "2026-05", [], 1),
+      overseasRegions: ["欧州", "欧亚"] as Requirement["overseasRegions"],
+    };
+    const [group] = buildRoadmapGroups({ ...snapshot, requirements: [overseas] }, "2026H1", "2026H1");
+    expect(group).toMatchObject({ track: "海外研究", level: null, overseasRegions: ["欧州", "欧亚"] });
+    expect(roadmapLanesForTrack("海外研究")).toEqual(["欧州", "亚非拉", "欧亚"]);
+    expect(groupMatchesRoadmapLane(group, "欧州")).toBe(true);
+    expect(groupMatchesRoadmapLane(group, "亚非拉")).toBe(false);
   });
 });
 
@@ -163,5 +177,5 @@ function requirement(
   workloadPm: number,
   breakdown: Partial<{ device: number; app: number; cloud: number }> = { app: workloadPm },
 ): Requirement {
-  return { id, title, description: "", images: [], domainId, source, category, targetMonth, productIds, deviceWorkloadPm: breakdown.device ?? 0, appWorkloadPm: breakdown.app ?? 0, cloudWorkloadPm: breakdown.cloud ?? 0, unallocatedWorkloadPm: 0, workloadPm, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
+  return { id, title, description: "", images: [], domainId, source, overseasRegions: [], category, targetMonth, productIds, deviceWorkloadPm: breakdown.device ?? 0, appWorkloadPm: breakdown.app ?? 0, cloudWorkloadPm: breakdown.cloud ?? 0, unallocatedWorkloadPm: 0, workloadPm, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
 }

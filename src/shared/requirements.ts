@@ -1,8 +1,9 @@
-import type { Requirement, RequirementCategory, RequirementSource } from "./types.js";
+import { OVERSEAS_REGIONS } from "./types.js";
+import type { OverseasRegion, Requirement, RequirementCategory, RequirementSource } from "./types.js";
 import { roundWorkload } from "./workload.js";
 
-type LegacyRequirement = Omit<Requirement, "description" | "images" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
-  Partial<Pick<Requirement, "description" | "images" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
+type LegacyRequirement = Omit<Requirement, "description" | "images" | "overseasRegions" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
+  Partial<Pick<Requirement, "description" | "images" | "overseasRegions" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
 
 export function normalizeRequirement(input: LegacyRequirement): Requirement {
   const hasBreakdown = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "unallocatedWorkloadPm"]
@@ -12,6 +13,9 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
   const cloudWorkloadPm = nonNegative(input.cloudWorkloadPm);
   const categorized = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm);
   const legacyTotal = nonNegative(input.workloadPm);
+  const overseasRegions = input.source === "海外研究" && Array.isArray(input.overseasRegions)
+    ? [...new Set(input.overseasRegions.filter((item): item is OverseasRegion => OVERSEAS_REGIONS.includes(item as OverseasRegion)))]
+    : [];
   const unallocatedWorkloadPm = hasBreakdown
     ? (Number.isFinite(input.unallocatedWorkloadPm) ? nonNegative(input.unallocatedWorkloadPm) : roundWorkload(Math.max(0, legacyTotal - categorized)))
     : legacyTotal;
@@ -19,6 +23,7 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
     ...input,
     description: typeof input.description === "string" ? input.description : "",
     images: Array.isArray(input.images) ? input.images : [],
+    overseasRegions,
     deviceWorkloadPm,
     appWorkloadPm,
     cloudWorkloadPm,
@@ -49,7 +54,7 @@ export function filterRequirements(
 ): Requirement[] {
   const normalizedQuery = filters.query.trim().toLocaleLowerCase("zh-CN");
   return requirements.filter((item) => {
-    const searchText = `${item.title} ${domainNames.get(item.domainId) ?? ""}`.toLocaleLowerCase("zh-CN");
+    const searchText = `${item.title} ${domainNames.get(item.domainId) ?? ""} ${item.overseasRegions.join(" ")}`.toLocaleLowerCase("zh-CN");
     return (!normalizedQuery || searchText.includes(normalizedQuery))
       && (!filters.source || item.source === filters.source)
       && (!filters.category || item.category === filters.category)

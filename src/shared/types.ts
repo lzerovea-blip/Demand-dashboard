@@ -5,13 +5,16 @@ export const SOURCES = [
   "健康基础",
   "健康进阶",
   "健康高阶",
+  "海外研究",
 ] as const;
 
 export const CATEGORIES = ["体验优化", "产品专属"] as const;
+export const OVERSEAS_REGIONS = ["欧州", "亚非拉", "欧亚"] as const;
 
 export type RequirementSource = (typeof SOURCES)[number];
 export type RequirementCategory = (typeof CATEGORIES)[number];
-export type Track = "运动" | "健康";
+export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
+export type Track = "运动" | "健康" | "海外研究";
 export type Level = "基础" | "进阶" | "高阶";
 
 export const MAX_REQUIREMENT_IMAGES = 5;
@@ -33,6 +36,7 @@ export interface Requirement {
   images: RequirementImage[];
   domainId: string;
   source: RequirementSource;
+  overseasRegions: OverseasRegion[];
   category: RequirementCategory;
   targetMonth: string;
   productIds: string[];
@@ -109,6 +113,7 @@ export interface SaveRequirementInput {
   images: RequirementImage[];
   domainId: string;
   source: RequirementSource;
+  overseasRegions: OverseasRegion[];
   category: RequirementCategory;
   targetMonth: string;
   productIds: string[];
@@ -166,6 +171,35 @@ export interface WorkspaceImportPreview {
   counts: WorkspacePackageCounts;
 }
 
+export type WorkspaceWorkbookConflictMode = "local-wins" | "excel-wins";
+
+export interface WorkspaceWorkbookIssue {
+  sheet: string;
+  cell: string;
+  message: string;
+}
+
+export interface WorkspaceWorkbookImportCounts {
+  added: number;
+  updated: number;
+  deleted: number;
+  unchanged: number;
+  conflicts: number;
+  domainsChanged: number;
+  productsChanged: number;
+  groupOverridesChanged: number;
+}
+
+export interface WorkspaceWorkbookImportPreview {
+  token: string;
+  fileName: string;
+  formatVersion: string;
+  exportedAt: string;
+  counts: WorkspaceWorkbookImportCounts;
+  errors: WorkspaceWorkbookIssue[];
+  conflicts: WorkspaceWorkbookIssue[];
+}
+
 export interface ElectronApi {
   getSnapshot(): Promise<AppSnapshot>;
   saveRequirement(input: SaveRequirementInput): Promise<AppSnapshot>;
@@ -178,6 +212,9 @@ export interface ElectronApi {
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspacePackage(): Promise<{ canceled: boolean; preview?: WorkspaceImportPreview }>;
   applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode }): Promise<{ snapshot: AppSnapshot }>;
+  exportWorkspaceWorkbook(): Promise<{ canceled: boolean; path?: string }>;
+  inspectWorkspaceWorkbook(): Promise<{ canceled: boolean; preview?: WorkspaceWorkbookImportPreview }>;
+  applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
   exportRoadmapPresentation(input: HalfYearRange): Promise<{ canceled: boolean; path?: string; slideCount?: number }>;
 }

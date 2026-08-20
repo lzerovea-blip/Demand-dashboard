@@ -53,6 +53,7 @@ function requirement(id: string, domainId: string, productIds: string[], updated
     images: [],
     domainId,
     source: "健康基础",
+    overseasRegions: [],
     category: productIds.length ? "产品专属" : "体验优化",
     targetMonth: "2027-03",
     productIds,

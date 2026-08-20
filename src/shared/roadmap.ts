@@ -1,7 +1,9 @@
+import { OVERSEAS_REGIONS, SOURCES } from "./types.js";
 import type {
   AppSnapshot,
   GroupOverride,
   Level,
+  OverseasRegion,
   Requirement,
   RequirementCategory,
   RequirementSource,
@@ -15,7 +17,8 @@ export interface RoadmapGroup {
   domainName: string;
   source: RequirementSource;
   track: Track;
-  level: Level;
+  level: Level | null;
+  overseasRegions: OverseasRegion[];
   targetMonth: string;
   cardTitle: string;
   cardSummary: string;
@@ -33,6 +36,7 @@ export interface HalfYearSummary {
   bySource: Record<RequirementSource, number>;
   sportsWorkload: number;
   healthWorkload: number;
+  overseasWorkload: number;
   experienceWorkload: number;
   exclusiveWorkload: number;
   totalWorkload: number;
@@ -46,10 +50,12 @@ export interface HalfYearSummary {
 }
 
 export function trackOf(source: RequirementSource): Track {
+  if (source === "海外研究") return "海外研究";
   return source.startsWith("运动") ? "运动" : "健康";
 }
 
-export function levelOf(source: RequirementSource): Level {
+export function levelOf(source: RequirementSource): Level | null {
+  if (source === "海外研究") return null;
   return source.replace(/^运动|^健康/, "") as Level;
 }
 
@@ -114,6 +120,7 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
       const domainName = domains.get(seed.domainId)?.name ?? "未命名领域";
       const override = overrides.get(key);
       const productIds = [...new Set(requirements.flatMap((item) => item.productIds))];
+      const overseasRegions = [...new Set(requirements.flatMap((item) => item.overseasRegions))];
       const categories = [...new Set(requirements.map((item) => item.category))];
       const requirementProductNames = Object.fromEntries(
         requirements.map((item) => [
@@ -129,6 +136,7 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
         source: seed.source,
         track: trackOf(seed.source),
         level: levelOf(seed.source),
+        overseasRegions,
         targetMonth: seed.targetMonth,
         cardTitle: override?.cardTitle.trim() || domainName,
         cardSummary: override?.cardSummary.trim() || requirements.map((item) => item.title).join("、"),
@@ -147,7 +155,19 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
 export function roadmapTrackOrder(groups: Pick<RoadmapGroup, "track">[]): Track[] {
   const hasSports = groups.some((item) => item.track === "运动");
   const hasHealth = groups.some((item) => item.track === "健康");
-  return !hasSports && hasHealth ? ["健康", "运动"] : ["运动", "健康"];
+  return !hasSports && hasHealth ? ["健康", "运动", "海外研究"] : ["运动", "健康", "海外研究"];
+}
+
+export type RoadmapLane = Level | OverseasRegion;
+
+export function roadmapLanesForTrack(track: Track): readonly RoadmapLane[] {
+  return track === "海外研究" ? OVERSEAS_REGIONS : ["基础", "进阶", "高阶"];
+}
+
+export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level" | "overseasRegions">, lane: RoadmapLane): boolean {
+  return group.track === "海外研究"
+    ? group.overseasRegions.includes(lane as OverseasRegion)
+    : group.level === lane;
 }
 
 export function roadmapMonthColumnTemplate(
@@ -165,13 +185,14 @@ export function buildHalfYearSummaries(requirements: Requirement[], start: strin
     const items = requirements.filter((item) => halfYearOf(item.targetMonth) === halfYear);
     const threeSideTotal = (item: Requirement) => item.deviceWorkloadPm + item.appWorkloadPm + item.cloudWorkloadPm;
     const bySource = Object.fromEntries(
-      ["运动基础", "运动进阶", "运动高阶", "健康基础", "健康进阶", "健康高阶"].map((source) => [
+      SOURCES.map((source) => [
         source,
         round(items.filter((item) => item.source === source).reduce((sum, item) => sum + threeSideTotal(item), 0)),
       ]),
     ) as Record<RequirementSource, number>;
     const sportsWorkload = round(items.filter((item) => trackOf(item.source) === "运动").reduce((sum, item) => sum + threeSideTotal(item), 0));
     const healthWorkload = round(items.filter((item) => trackOf(item.source) === "健康").reduce((sum, item) => sum + threeSideTotal(item), 0));
+    const overseasWorkload = round(items.filter((item) => trackOf(item.source) === "海外研究").reduce((sum, item) => sum + threeSideTotal(item), 0));
     const experienceItems = items.filter((item) => item.category === "体验优化");
     const experienceWorkload = round(experienceItems.reduce((sum, item) => sum + threeSideTotal(item), 0));
     const exclusiveWorkload = round(items.filter((item) => item.category === "产品专属").reduce((sum, item) => sum + threeSideTotal(item), 0));
@@ -192,6 +213,7 @@ export function buildHalfYearSummaries(requirements: Requirement[], start: strin
       bySource,
       sportsWorkload,
       healthWorkload,
+      overseasWorkload,
       experienceWorkload,
       exclusiveWorkload,
       totalWorkload: round(workloadBreakdown.device + workloadBreakdown.app + workloadBreakdown.cloud),

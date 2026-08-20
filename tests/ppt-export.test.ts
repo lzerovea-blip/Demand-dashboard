@@ -11,6 +11,7 @@ const requirements: Requirement[] = ["需求A", "需求B", "需求C"].map((title
   images: [],
   domainId: "d1",
   source: "健康基础",
+  overseasRegions: [],
   category: index === 2 ? "产品专属" : "体验优化",
   targetMonth: "2027-03",
   productIds: index === 2 ? ["p1"] : [],
@@ -32,12 +33,12 @@ const snapshot: AppSnapshot = {
 };
 
 describe("PPT导出计划", () => {
-  it("按半年生成双路标并对详情分页", () => {
+  it("按半年生成运动、健康、海外研究三路标并对详情分页", () => {
     const plan = buildPptExportPlan(snapshot, "2027H1", "2027H1");
-    expect(plan.roadmapPages).toHaveLength(2);
+    expect(plan.roadmapPages).toHaveLength(3);
     expect(plan.detailPages).toHaveLength(2);
-    expect(plan.firstDetailSlideByGroup[plan.groups[0].key]).toBe(6);
-    expect(plan.slideCount).toBe(7);
+    expect(plan.firstDetailSlideByGroup[plan.groups[0].key]).toBe(7);
+    expect(plan.slideCount).toBe(8);
   });
 
   it("空月份固定缩窄并把剩余宽度分配给有需求月份", () => {
@@ -52,7 +53,7 @@ describe("PPT导出计划", () => {
     const bytes = await createRoadmapPresentation(snapshot, "2027H1", "2027H1");
     const zip = await JSZip.loadAsync(bytes);
     expect(zip.file("ppt/slides/slide1.xml")).toBeTruthy();
-    expect(zip.file("ppt/slides/slide7.xml")).toBeTruthy();
+    expect(zip.file("ppt/slides/slide8.xml")).toBeTruthy();
     expect(zip.file("ppt/presentation.xml")).toBeTruthy();
   }, 20_000);
 });

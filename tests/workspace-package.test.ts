@@ -20,6 +20,7 @@ const workspace: WorkspaceData = {
     images: [image],
     domainId: "d1",
     source: "健康基础",
+    overseasRegions: [],
     category: "产品专属",
     targetMonth: "2027-03",
     productIds: ["p1"],

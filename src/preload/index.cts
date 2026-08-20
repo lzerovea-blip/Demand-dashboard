@@ -5,6 +5,7 @@ import type {
   SaveGroupOverrideInput,
   SaveRequirementInput,
   WorkspaceImportMode,
+  WorkspaceWorkbookConflictMode,
 } from "../shared/types.js";
 
 const api: ElectronApi = {
@@ -19,6 +20,9 @@ const api: ElectronApi = {
   exportWorkspacePackage: () => ipcRenderer.invoke("workspace:export"),
   inspectWorkspacePackage: () => ipcRenderer.invoke("workspace:inspect"),
   applyWorkspacePackage: (input: { token: string; mode: WorkspaceImportMode }) => ipcRenderer.invoke("workspace:apply", input),
+  exportWorkspaceWorkbook: () => ipcRenderer.invoke("workbook:export"),
+  inspectWorkspaceWorkbook: () => ipcRenderer.invoke("workbook:inspect"),
+  applyWorkspaceWorkbook: (input: { token: string; conflictMode: WorkspaceWorkbookConflictMode }) => ipcRenderer.invoke("workbook:apply", input),
   exportTemplateDraft: () => ipcRenderer.invoke("template:draft-export"),
   exportRoadmapPresentation: (input) => ipcRenderer.invoke("presentation:export", input),
 };

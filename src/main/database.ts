@@ -15,15 +15,18 @@ import type {
   TemplateProfile,
   WorkspaceData,
   WorkspaceImportMode,
+  WorkspaceWorkbookConflictMode,
 } from "../shared/types.js";
 import {
   MAX_REQUIREMENT_IMAGES,
   MAX_REQUIREMENT_IMAGE_BYTES,
+  OVERSEAS_REGIONS,
   REQUIREMENT_IMAGE_MIME_TYPES,
 } from "../shared/types.js";
 import { normalizeRequirement } from "../shared/requirements.js";
 import { mergeWorkspaceData } from "../shared/workspace.js";
 import { roundWorkload } from "../shared/workload.js";
+import { applyPreparedWorkspaceWorkbook, type PreparedWorkspaceWorkbookImport } from "./workspaceWorkbook.js";
 
 const SCHEMA_VERSION = 1;
 
@@ -73,6 +76,7 @@ export class LocalDatabase {
       title: input.title.trim(),
       description: input.description.trim(),
       images: input.images.map((image) => ({ ...image, name: image.name.trim() || "需求图片" })),
+      overseasRegions: input.source === "海外研究" ? [...new Set(input.overseasRegions)] : [],
       productIds: [...new Set(input.productIds)],
       deviceWorkloadPm,
       appWorkloadPm,
@@ -185,6 +189,11 @@ export class LocalDatabase {
     return this.getSnapshot();
   }
 
+  async importWorkspaceWorkbook(prepared: PreparedWorkspaceWorkbookImport, conflictMode: WorkspaceWorkbookConflictMode): Promise<AppSnapshot> {
+    const data = applyPreparedWorkspaceWorkbook(this.getWorkspaceData(), prepared, conflictMode);
+    return this.importWorkspace(data, "replace");
+  }
+
   private async saveDictionary(table: "domains" | "products", input: SaveDictionaryInput): Promise<AppSnapshot> {
     const name = input.name.trim();
     if (!name) throw new Error("名称不能为空");
@@ -250,6 +259,8 @@ export class LocalDatabase {
 function validateRequirement(input: SaveRequirementInput): void {
   if (!input.title.trim()) throw new Error("需求标题不能为空");
   if (!input.domainId) throw new Error("请选择领域");
+  if (input.overseasRegions.some((item) => !OVERSEAS_REGIONS.includes(item))) throw new Error("海外研究区域包含无效选项");
+  if (input.source === "海外研究" && input.overseasRegions.length === 0) throw new Error("海外研究需求必须选择至少一个区域");
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetMonth)) throw new Error("上线年月格式应为 YYYY-MM");
   const workloadParts = [input.deviceWorkloadPm, input.appWorkloadPm, input.cloudWorkloadPm];
   if (workloadParts.some((value) => !Number.isFinite(value) || value < 0)) throw new Error("各侧工作量必须是大于或等于0的人月数");

@@ -2,6 +2,7 @@ import type { Requirement } from "./types.js";
 
 export interface RequirementEntrySelections {
   source: Requirement["source"];
+  overseasRegions: Requirement["overseasRegions"];
   category: Requirement["category"];
   targetMonth: string;
 }
@@ -13,6 +14,6 @@ export function latestRequirementSelections(requirements: Requirement[]): Requir
   }, undefined);
 
   return latest
-    ? { source: latest.source, category: latest.category, targetMonth: latest.targetMonth }
+    ? { source: latest.source, overseasRegions: latest.overseasRegions, category: latest.category, targetMonth: latest.targetMonth }
     : undefined;
 }

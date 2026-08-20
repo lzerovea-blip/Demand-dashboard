@@ -18,6 +18,7 @@ describe("历史需求兼容", () => {
     });
     expect(normalized.description).toBe("");
     expect(normalized.images).toEqual([]);
+    expect(normalized.overseasRegions).toEqual([]);
     expect(normalized).toMatchObject({
       deviceWorkloadPm: 0,
       appWorkloadPm: 0,
@@ -80,6 +81,7 @@ function requirement(id: string, title: string, domainId: string, source: Requir
     images: [],
     domainId,
     source,
+    overseasRegions: [],
     category,
     targetMonth,
     productIds: [],

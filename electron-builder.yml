@@ -1,5 +1,6 @@
 appId: com.local.healthroadmap
 productName: 需求路标工作台
+compression: maximum
 directories:
   output: release
 files:
@@ -17,6 +18,9 @@ mac:
     - dmg
     - zip
 win:
+  electronLanguages:
+    - zh-CN
+    - en-US
   target:
     - nsis
     - portable

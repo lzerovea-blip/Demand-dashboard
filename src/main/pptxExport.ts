@@ -1,7 +1,7 @@
 import PptxGenJSImport from "pptxgenjs";
 import { imageSize } from "image-size";
 import { buildPptExportPlan, dynamicRoadmapMonthWidths, type PptDetailPagePlan, type PptExportPlan, type PptRoadmapPagePlan } from "../shared/pptExport.js";
-import { roadmapCardLabel, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
+import { groupMatchesRoadmapLane, roadmapCardLabel, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
 import type { AppSnapshot, Requirement, RequirementCategory, RequirementImage, Track } from "../shared/types.js";
 import { sumWorkloadBreakdown, type WorkloadSide } from "../shared/workload.js";
 
@@ -97,11 +97,12 @@ function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
   addShape(slide, "roundRect", 8.46, 1.36, 3.9, 4.62, C.navy2, "334654", 1);
   addText(slide, `${plan.halfYears.length} 个半年`, 8.83, 1.77, 1.7, 0.27, 14, C.mint, true);
   addText(slide, "路标概览", 8.83, 2.14, 2.4, 0.42, 24, C.white, true);
-  const tracks: Track[] = ["运动", "健康"];
+  const tracks: Track[] = ["运动", "健康", "海外研究"];
   tracks.forEach((track, index) => {
     const scoped = plan.groups.filter((group) => group.track === track);
-    const y = 3.0 + index * 1.2;
-    addShape(slide, "ellipse", 8.86, y + 0.12, 0.09, 0.09, index ? C.orange : C.blue, index ? C.orange : C.blue);
+    const y = 2.82 + index * 0.9;
+    const color = track === "运动" ? C.blue : track === "健康" ? C.orange : C.cyan;
+    addShape(slide, "ellipse", 8.86, y + 0.12, 0.09, 0.09, color, color);
     addText(slide, `${track}路标`, 9.12, y, 1.0, 0.28, 12, "B6C5CF", true);
     addShape(slide, "line", 10.05, y + 0.17, 1.72, 0, "40515E", "40515E", 1);
     addText(slide, `${scoped.length} 张卡片`, 10.1, y + 0.25, 1.6, 0.28, 12, C.white, true, "right");
@@ -125,9 +126,10 @@ function addSummaryOverviewSlide(pptx: PptxPresentation, plan: PptExportPlan): v
     { label: "App 侧", value: totals.app, color: C.blue },
     { label: "云侧", value: totals.cloud, color: C.violet },
   ]);
-  addDonut(slide, "运动 / 健康占比", 4.84, 3.7, 3.65, 2.65, [
+  addDonut(slide, "运动 / 健康 / 海外研究", 4.84, 3.7, 3.65, 2.65, [
     { label: "运动", value: totals.sports, color: C.blue },
     { label: "健康", value: totals.health, color: C.orange },
+    { label: "海外研究", value: totals.overseas, color: C.cyan },
   ]);
   addDonut(slide, "体验优化 / 产品专属", 9.0, 3.7, 3.65, 2.65, [
     { label: "体验优化", value: totals.experience, color: C.violet },
@@ -190,7 +192,8 @@ function addRoadmapSlide(pptx: PptxPresentation, plan: PptExportPlan, page: PptR
   const slide = pptx.addSlide({ masterName: "ROADMAP_LIGHT" });
   addTopBar(slide, `${page.track}路标`);
   const pageWorkload = page.groups.reduce((sum, group) => sum + group.totalWorkloadPm, 0);
-  addTitle(slide, `${page.track === "运动" ? "SPORT" : "HEALTH"} ROADMAP`, `${formatHalfYear(page.halfYear)} ${page.track}需求路标`, `${page.groups.length} 张卡片 · ${formatNumber(pageWorkload)} 人月 · 点击卡片跳转详情`);
+  const trackEnglish = page.track === "运动" ? "SPORT" : page.track === "健康" ? "HEALTH" : "OVERSEAS RESEARCH";
+  addTitle(slide, `${trackEnglish} ROADMAP`, `${formatHalfYear(page.halfYear)} ${page.track}需求路标`, `${page.groups.length} 张卡片 · ${formatNumber(pageWorkload)} 人月 · 点击卡片跳转详情`);
   addRoadmapGrid(slide, page, plan.firstDetailSlideByGroup);
   addNotes(slide, "同领域、同来源、同上线年月自动合并为一张卡片；产品专属卡片使用深色边框。");
 }
@@ -215,16 +218,16 @@ function addRoadmapGrid(slide: PptxSlide, page: PptRoadmapPagePlan, detailLinks:
   monthWidths.reduce((x, width) => { monthX.push(x); return x + width; }, gridX);
   addText(slide, page.halfYear.slice(0, 4), 0.7, 2.33, 0.7, 0.28, 14, C.ink, true);
   page.months.forEach((month, index) => addText(slide, `${Number(month.slice(5))}月`, monthX[index], 2.33, monthWidths[index], 0.25, 11, C.muted, true, "center"));
-  const levels = ["基础", "进阶", "高阶"] as const;
-  levels.forEach((level, row) => {
-    const accent = row === 0 ? C.orange : row === 1 ? C.blue : C.violet;
+  const lanes = roadmapLanesForTrack(page.track);
+  lanes.forEach((lane, row) => {
+    const accent = page.track === "海外研究" ? C.cyan : row === 0 ? C.orange : row === 1 ? C.blue : C.violet;
     addShape(slide, "ellipse", 0.76, gridY + row * rowHeight + 0.43, 0.1, 0.1, accent, accent);
-    addText(slide, level, 0.96, gridY + row * rowHeight + 0.32, 0.55, 0.3, 13, C.ink, true);
+    addText(slide, lane, 0.91, gridY + row * rowHeight + 0.32, 0.65, 0.3, 12, C.ink, true);
     page.months.forEach((month, col) => {
       const x = monthX[col];
       const w = monthWidths[col];
       addShape(slide, "roundRect", x, gridY + row * rowHeight, Math.max(0.5, w - 0.06), rowHeight - 0.07, C.white, C.faint, 1);
-      const groups = page.groups.filter((group) => group.level === level && group.targetMonth === month);
+      const groups = page.groups.filter((group) => groupMatchesRoadmapLane(group, lane) && group.targetMonth === month);
       if (groups.length) addRoadmapCellCards(slide, groups, x + 0.06, gridY + row * rowHeight + 0.07, Math.max(0.42, w - 0.18), rowHeight - 0.21, detailLinks);
     });
   });
@@ -264,7 +267,7 @@ function addRequirementCard(slide: PptxSlide, requirement: Requirement, group: R
   const image = requirement.images[0];
   const cardW = image ? 8.1 : 11.95;
   addShape(slide, "roundRect", 0.66, cardY, cardW, cardH, C.paper, C.paper, 1);
-  const accent = group.level === "基础" ? C.orange : group.level === "进阶" ? C.blue : C.violet;
+  const accent = group.track === "海外研究" ? C.cyan : group.level === "基础" ? C.orange : group.level === "进阶" ? C.blue : C.violet;
   addShape(slide, "ellipse", 0.92, cardY + 0.26, 0.13, 0.13, accent, accent);
   addText(slide, String(index + 1).padStart(2, "0"), 1.18, cardY + 0.17, 0.42, 0.24, 10, C.muted, true);
   addText(slide, requirement.title, 1.68, cardY + 0.12, image ? 4.25 : 6.6, 0.38, count === 1 ? 23 : 18, C.ink, true);
@@ -403,6 +406,7 @@ function summaryTotals(summaries: HalfYearSummary[]) {
     total: device + app + cloud,
     sports: summaries.reduce((sum, item) => sum + item.sportsWorkload, 0),
     health: summaries.reduce((sum, item) => sum + item.healthWorkload, 0),
+    overseas: summaries.reduce((sum, item) => sum + item.overseasWorkload, 0),
     experience: summaries.reduce((sum, item) => sum + item.experienceWorkload, 0),
     exclusive: summaries.reduce((sum, item) => sum + item.exclusiveWorkload, 0),
     unallocated: summaries.reduce((sum, item) => sum + item.unallocatedWorkload, 0),
@@ -416,8 +420,8 @@ function totalWorkload(summaries: HalfYearSummary[]): number {
 function emptySummary(halfYear: string): HalfYearSummary {
   return {
     halfYear,
-    bySource: { 运动基础: 0, 运动进阶: 0, 运动高阶: 0, 健康基础: 0, 健康进阶: 0, 健康高阶: 0 },
-    sportsWorkload: 0, healthWorkload: 0, experienceWorkload: 0, exclusiveWorkload: 0,
+    bySource: { 运动基础: 0, 运动进阶: 0, 运动高阶: 0, 健康基础: 0, 健康进阶: 0, 健康高阶: 0, 海外研究: 0 },
+    sportsWorkload: 0, healthWorkload: 0, overseasWorkload: 0, experienceWorkload: 0, exclusiveWorkload: 0,
     totalWorkload: 0, deviceWorkload: 0, appWorkload: 0, cloudWorkload: 0, unallocatedWorkload: 0,
     bySide: { device: 0, app: 0, cloud: 0 },
     experienceBySide: { device: 0, app: 0, cloud: 0 },

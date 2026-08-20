@@ -8,7 +8,7 @@ import type {
   WorkspaceImportPreview,
   WorkspacePackageCounts,
 } from "../shared/types.js";
-import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, REQUIREMENT_IMAGE_MIME_TYPES, SOURCES } from "../shared/types.js";
+import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, OVERSEAS_REGIONS, REQUIREMENT_IMAGE_MIME_TYPES, SOURCES } from "../shared/types.js";
 import { normalizeRequirement } from "../shared/requirements.js";
 import { workspaceCounts } from "../shared/workspace.js";
 
@@ -208,6 +208,8 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     requirementIds.add(item.id);
     if (!domainIds.has(item.domainId)) throw new Error(`需求“${item.title}”引用了不存在的领域`);
     if (!SOURCES.includes(item.source) || !CATEGORIES.includes(item.category)) throw new Error(`需求“${item.title}”的来源或分类无效`);
+    if (item.overseasRegions.some((region) => !OVERSEAS_REGIONS.includes(region))) throw new Error(`需求“${item.title}”的海外研究区域无效`);
+    if (item.source === "海外研究" && item.overseasRegions.length === 0) throw new Error(`海外研究需求“${item.title}”未选择区域`);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(item.targetMonth)) throw new Error(`需求“${item.title}”的上线年月无效`);
     if (!Number.isFinite(item.workloadPm) || item.workloadPm <= 0) throw new Error(`需求“${item.title}”的工作量无效`);
     if (item.description.length > 5000 || !validTimestamp(item.createdAt) || !validTimestamp(item.updatedAt)) throw new Error(`需求“${item.title}”的文本或时间信息无效`);

@@ -10,6 +10,7 @@ describe("快速录入默认项", () => {
     ];
     expect(latestRequirementSelections(requirements)).toEqual({
       source: "健康进阶",
+      overseasRegions: [],
       category: "产品专属",
       targetMonth: "2027-03",
     });
@@ -34,6 +35,7 @@ function requirement(
     images: [],
     domainId: "d1",
     source,
+    overseasRegions: [],
     category,
     targetMonth,
     productIds: [],
