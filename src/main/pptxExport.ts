@@ -2,6 +2,7 @@ import PptxGenJSImport from "pptxgenjs";
 import { imageSize } from "image-size";
 import { buildPptExportPlan, dynamicRoadmapMonthWidths, type PptDetailPagePlan, type PptExportPlan, type PptRoadmapPagePlan } from "../shared/pptExport.js";
 import { groupMatchesRoadmapLane, roadmapCardLabel, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
+import { ROADMAP_TRACKS, SOURCES } from "../shared/types.js";
 import type { AppSnapshot, Requirement, RequirementCategory, RequirementImage, Track } from "../shared/types.js";
 import { sumWorkloadBreakdown, type WorkloadSide } from "../shared/workload.js";
 
@@ -32,9 +33,35 @@ const SIDE_META: Record<WorkloadSide, { label: string; color: string }> = {
   cloud: { label: "云侧", color: C.violet },
 };
 
+const TRACK_COLORS: Record<Track, string> = {
+  运动: C.blue,
+  健康: C.orange,
+  行业: C.cyan,
+  全场景: "5B6EE1",
+  health平台: "11A8C7",
+  AI: "8B5CF6",
+  医疗送检: "D64D85",
+};
+
 type PptxPresentation = any;
 type PptxSlide = any;
 const PptxGenJS = PptxGenJSImport as unknown as { new(): PptxPresentation };
+
+function trackColor(track: Track): string {
+  return TRACK_COLORS[track];
+}
+
+function trackEnglishName(track: Track): string {
+  return ({
+    运动: "SPORT",
+    健康: "HEALTH",
+    行业: "INDUSTRY",
+    全场景: "ALL SCENARIOS",
+    health平台: "HEALTH PLATFORM",
+    AI: "AI",
+    医疗送检: "MEDICAL SUBMISSION",
+  } satisfies Record<Track, string>)[track];
+}
 
 export async function createRoadmapPresentation(
   snapshot: AppSnapshot,
@@ -44,7 +71,7 @@ export async function createRoadmapPresentation(
   const plan = buildPptExportPlan(snapshot, start, end);
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
-  pptx.author = "需求路标工作台";
+  pptx.author = "解决方案需求管理";
   pptx.company = "运动健康方案团队";
   pptx.subject = `${formatHalfYear(start)} 至 ${formatHalfYear(end)}需求路标`;
   pptx.title = "运动健康需求路标";
@@ -97,15 +124,14 @@ function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
   addShape(slide, "roundRect", 8.46, 1.36, 3.9, 4.62, C.navy2, "334654", 1);
   addText(slide, `${plan.halfYears.length} 个半年`, 8.83, 1.77, 1.7, 0.27, 14, C.mint, true);
   addText(slide, "路标概览", 8.83, 2.14, 2.4, 0.42, 24, C.white, true);
-  const tracks: Track[] = ["运动", "健康", "海外研究"];
-  tracks.forEach((track, index) => {
+  ROADMAP_TRACKS.forEach((track, index) => {
     const scoped = plan.groups.filter((group) => group.track === track);
-    const y = 2.82 + index * 0.9;
-    const color = track === "运动" ? C.blue : track === "健康" ? C.orange : C.cyan;
-    addShape(slide, "ellipse", 8.86, y + 0.12, 0.09, 0.09, color, color);
-    addText(slide, `${track}路标`, 9.12, y, 1.0, 0.28, 12, "B6C5CF", true);
-    addShape(slide, "line", 10.05, y + 0.17, 1.72, 0, "40515E", "40515E", 1);
-    addText(slide, `${scoped.length} 张卡片`, 10.1, y + 0.25, 1.6, 0.28, 12, C.white, true, "right");
+    const y = 2.7 + index * 0.43;
+    const color = trackColor(track);
+    addShape(slide, "ellipse", 8.86, y + 0.1, 0.08, 0.08, color, color);
+    addText(slide, `${track}路标`, 9.08, y, 1.25, 0.24, 9, "B6C5CF", true);
+    addShape(slide, "line", 10.33, y + 0.13, 1.42, 0, "40515E", "40515E", 1);
+    addText(slide, `${scoped.length} 张`, 10.48, y, 1.25, 0.24, 9, C.white, true, "right");
   });
   addNotes(slide, "封面数据来自本地工作区当前选定时间范围。");
 }
@@ -126,11 +152,11 @@ function addSummaryOverviewSlide(pptx: PptxPresentation, plan: PptExportPlan): v
     { label: "App 侧", value: totals.app, color: C.blue },
     { label: "云侧", value: totals.cloud, color: C.violet },
   ]);
-  addDonut(slide, "运动 / 健康 / 海外研究", 4.84, 3.7, 3.65, 2.65, [
-    { label: "运动", value: totals.sports, color: C.blue },
-    { label: "健康", value: totals.health, color: C.orange },
-    { label: "海外研究", value: totals.overseas, color: C.cyan },
-  ]);
+  addDonut(slide, "各路标来源投入占比", 4.84, 3.7, 3.65, 2.65, ROADMAP_TRACKS.map((track) => ({
+    label: track,
+    value: totals.byTrack[track],
+    color: trackColor(track),
+  })));
   addDonut(slide, "体验优化 / 产品专属", 9.0, 3.7, 3.65, 2.65, [
     { label: "体验优化", value: totals.experience, color: C.violet },
     { label: "产品专属", value: totals.exclusive, color: C.ink },
@@ -192,7 +218,7 @@ function addRoadmapSlide(pptx: PptxPresentation, plan: PptExportPlan, page: PptR
   const slide = pptx.addSlide({ masterName: "ROADMAP_LIGHT" });
   addTopBar(slide, `${page.track}路标`);
   const pageWorkload = page.groups.reduce((sum, group) => sum + group.totalWorkloadPm, 0);
-  const trackEnglish = page.track === "运动" ? "SPORT" : page.track === "健康" ? "HEALTH" : "OVERSEAS RESEARCH";
+  const trackEnglish = trackEnglishName(page.track);
   addTitle(slide, `${trackEnglish} ROADMAP`, `${formatHalfYear(page.halfYear)} ${page.track}需求路标`, `${page.groups.length} 张卡片 · ${formatNumber(pageWorkload)} 人月 · 点击卡片跳转详情`);
   addRoadmapGrid(slide, page, plan.firstDetailSlideByGroup);
   addNotes(slide, "同领域、同来源、同上线年月自动合并为一张卡片；产品专属卡片使用深色边框。");
@@ -220,7 +246,7 @@ function addRoadmapGrid(slide: PptxSlide, page: PptRoadmapPagePlan, detailLinks:
   page.months.forEach((month, index) => addText(slide, `${Number(month.slice(5))}月`, monthX[index], 2.33, monthWidths[index], 0.25, 11, C.muted, true, "center"));
   const lanes = roadmapLanesForTrack(page.track);
   lanes.forEach((lane, row) => {
-    const accent = page.track === "海外研究" ? C.cyan : row === 0 ? C.orange : row === 1 ? C.blue : C.violet;
+    const accent = page.track === "运动" || page.track === "健康" ? (row === 0 ? C.orange : row === 1 ? C.blue : C.violet) : trackColor(page.track);
     addShape(slide, "ellipse", 0.76, gridY + row * rowHeight + 0.43, 0.1, 0.1, accent, accent);
     addText(slide, lane, 0.91, gridY + row * rowHeight + 0.32, 0.65, 0.3, 12, C.ink, true);
     page.months.forEach((month, col) => {
@@ -233,7 +259,7 @@ function addRoadmapGrid(slide: PptxSlide, page: PptRoadmapPagePlan, detailLinks:
   });
   if (!page.groups.length) {
     addText(slide, `当前半年暂无${page.track}需求`, 4.35, 4.02, 4.65, 0.46, 19, C.muted, true, "center");
-    addText(slide, "空状态保留月份与三级泳道，避免误解为漏数。", 4.15, 4.48, 5.05, 0.35, 12, C.muted, false, "center");
+    addText(slide, "空状态保留月份与对应泳道，避免误解为漏数。", 4.15, 4.48, 5.05, 0.35, 12, C.muted, false, "center");
   }
 }
 
@@ -267,7 +293,7 @@ function addRequirementCard(slide: PptxSlide, requirement: Requirement, group: R
   const image = requirement.images[0];
   const cardW = image ? 8.1 : 11.95;
   addShape(slide, "roundRect", 0.66, cardY, cardW, cardH, C.paper, C.paper, 1);
-  const accent = group.track === "海外研究" ? C.cyan : group.level === "基础" ? C.orange : group.level === "进阶" ? C.blue : C.violet;
+  const accent = group.level === "基础" ? C.orange : group.level === "进阶" ? C.blue : group.level === "高阶" ? C.violet : trackColor(group.track);
   addShape(slide, "ellipse", 0.92, cardY + 0.26, 0.13, 0.13, accent, accent);
   addText(slide, String(index + 1).padStart(2, "0"), 1.18, cardY + 0.17, 0.42, 0.24, 10, C.muted, true);
   addText(slide, requirement.title, 1.68, cardY + 0.12, image ? 4.25 : 6.6, 0.38, count === 1 ? 23 : 18, C.ink, true);
@@ -326,7 +352,7 @@ function addDonut(
 
 function addTopBar(slide: PptxSlide, section: string, dark = false): void {
   const muted = dark ? "AFC0CB" : C.muted;
-  addText(slide, "需求路标工作台", 0.67, 0.27, 2.5, 0.22, 9, muted, true);
+  addText(slide, "解决方案需求管理", 0.67, 0.27, 2.5, 0.22, 9, muted, true);
   addText(slide, section, 10.25, 0.27, 1.65, 0.22, 9, muted, true, "right");
 }
 
@@ -392,7 +418,7 @@ function addShape(
 }
 
 function addNotes(slide: PptxSlide, note: string): void {
-  slide.addNotes(`[Sources]\n- 本地需求路标工作台数据快照（离线生成）\n\n${note}`);
+  slide.addNotes(`[Sources]\n- 本地解决方案需求管理数据快照（离线生成）\n\n${note}`);
 }
 
 function summaryTotals(summaries: HalfYearSummary[]) {
@@ -404,9 +430,7 @@ function summaryTotals(summaries: HalfYearSummary[]) {
     app,
     cloud,
     total: device + app + cloud,
-    sports: summaries.reduce((sum, item) => sum + item.sportsWorkload, 0),
-    health: summaries.reduce((sum, item) => sum + item.healthWorkload, 0),
-    overseas: summaries.reduce((sum, item) => sum + item.overseasWorkload, 0),
+    byTrack: Object.fromEntries(ROADMAP_TRACKS.map((track) => [track, summaries.reduce((sum, item) => sum + item.byTrack[track], 0)])) as Record<Track, number>,
     experience: summaries.reduce((sum, item) => sum + item.experienceWorkload, 0),
     exclusive: summaries.reduce((sum, item) => sum + item.exclusiveWorkload, 0),
     unallocated: summaries.reduce((sum, item) => sum + item.unallocatedWorkload, 0),
@@ -420,8 +444,9 @@ function totalWorkload(summaries: HalfYearSummary[]): number {
 function emptySummary(halfYear: string): HalfYearSummary {
   return {
     halfYear,
-    bySource: { 运动基础: 0, 运动进阶: 0, 运动高阶: 0, 健康基础: 0, 健康进阶: 0, 健康高阶: 0, 海外研究: 0 },
-    sportsWorkload: 0, healthWorkload: 0, overseasWorkload: 0, experienceWorkload: 0, exclusiveWorkload: 0,
+    bySource: Object.fromEntries(SOURCES.map((source) => [source, 0])) as HalfYearSummary["bySource"],
+    byTrack: Object.fromEntries(ROADMAP_TRACKS.map((track) => [track, 0])) as HalfYearSummary["byTrack"],
+    sportsWorkload: 0, healthWorkload: 0, experienceWorkload: 0, exclusiveWorkload: 0,
     totalWorkload: 0, deviceWorkload: 0, appWorkload: 0, cloudWorkload: 0, unallocatedWorkload: 0,
     bySide: { device: 0, app: 0, cloud: 0 },
     experienceBySide: { device: 0, app: 0, cloud: 0 },

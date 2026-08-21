@@ -7,6 +7,7 @@ import {
   type HalfYearSummary,
   type RoadmapGroup,
 } from "./roadmap.js";
+import { ROADMAP_TRACKS } from "./types.js";
 import type { AppSnapshot, Requirement, Track } from "./types.js";
 
 export interface PptRoadmapPagePlan {
@@ -50,7 +51,7 @@ export function buildPptExportPlan(snapshot: AppSnapshot, start: string, end: st
     const months = monthsForHalfYear(halfYear);
     const halfGroups = groups.filter((group) => months.includes(group.targetMonth));
     const occupiedMonths = [...new Set(halfGroups.map((group) => group.targetMonth))];
-    return (["运动", "健康", "海外研究"] as Track[]).map((track) => ({
+    return ROADMAP_TRACKS.map((track) => ({
       halfYear,
       track,
       months,

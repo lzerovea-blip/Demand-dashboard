@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
 import { basename, join } from "node:path";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { LocalDatabase } from "./database.js";
@@ -19,20 +19,26 @@ import {
 } from "./workspaceWorkbook.js";
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
-const database = new LocalDatabase();
+const PRODUCT_NAME = "解决方案需求管理";
+const APP_RELEASED_AT = "2026-08-21";
+const APP_AUTHOR = "林忠维";
+const APP_UPDATE_URL = "https://github.com/lzerovea-blip/Demand-dashboard";
+const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
+
+let database: LocalDatabase;
 let mainWindow: BrowserWindow | null = null;
 const BUILTIN_TEMPLATE_FILE = "需求路标模板-共创版-v0.1.pptx";
 const pendingImports = new Map<string, PreparedWorkspaceImport>();
 const pendingWorkbookImports = new Map<string, PreparedWorkspaceWorkbookImport>();
 
 async function createWindow(): Promise<void> {
-  mainWindow = new BrowserWindow({
+  const appWindow = new BrowserWindow({
     width: 1480,
     height: 960,
     minWidth: 1120,
     minHeight: 760,
     backgroundColor: "#f4f6f8",
-    title: "需求路标工作台",
+    title: PRODUCT_NAME,
     webPreferences: {
       preload: join(app.getAppPath(), "dist-electron", "preload", "index.cjs"),
       contextIsolation: true,
@@ -40,16 +46,42 @@ async function createWindow(): Promise<void> {
       sandbox: true,
     },
   });
+  mainWindow = appWindow;
+
+  const notifyFullscreenChange = (enabled: boolean) => {
+    if (!appWindow.webContents.isDestroyed()) {
+      appWindow.webContents.send("window:fullscreen:changed", enabled);
+    }
+  };
+  appWindow.on("enter-full-screen", () => notifyFullscreenChange(true));
+  appWindow.on("leave-full-screen", () => notifyFullscreenChange(false));
 
   if (process.env.VITE_DEV_SERVER_URL) {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+    await appWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    await mainWindow.loadFile(join(app.getAppPath(), "dist-renderer", "index.html"));
+    await appWindow.loadFile(join(app.getAppPath(), "dist-renderer", "index.html"));
   }
 }
 
 function registerIpc(): void {
+  ipcMain.handle("app:info", () => ({
+    name: PRODUCT_NAME,
+    version: app.getVersion(),
+    releasedAt: APP_RELEASED_AT,
+    author: APP_AUTHOR,
+    updateUrl: APP_UPDATE_URL,
+  }));
+  ipcMain.handle("app:update:open", async () => {
+    await shell.openExternal(APP_UPDATE_URL);
+  });
   ipcMain.handle("snapshot:get", () => database.getSnapshot());
+  ipcMain.handle("window:fullscreen:get", (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false);
+  ipcMain.handle("window:fullscreen:set", (event, enabled: boolean) => {
+    if (typeof enabled !== "boolean") throw new Error("请提供有效的全屏状态");
+    const targetWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!targetWindow) throw new Error("无法获取当前应用窗口");
+    targetWindow.setFullScreen(enabled);
+  });
   ipcMain.handle("requirements:save", (_event, input: SaveRequirementInput) => database.saveRequirement(input));
   ipcMain.handle("requirements:delete", (_event, id: string) => database.deleteRequirement(id));
   ipcMain.handle("domains:save", (_event, input: SaveDictionaryInput) => database.saveDomain(input));
@@ -164,6 +196,8 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   nativeTheme.themeSource = "light";
+  app.setPath("userData", join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY));
+  database = new LocalDatabase();
   await database.initialize();
   registerIpc();
   await createWindow();

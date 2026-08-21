@@ -1,24 +1,30 @@
 import type { DictionaryItem, GroupOverride, Requirement, WorkspaceData } from "./types.js";
-import { normalizeRequirement } from "./requirements.js";
+import { normalizeLegacyGroupOverride, normalizeRequirement } from "./requirements.js";
 
 export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData): WorkspaceData {
-  const domainMerge = mergeDictionaries(local.domains, incoming.domains);
+  const domainMerge = mergeDomainDictionaries(local.domains, incoming.domains);
   const productMerge = mergeDictionaries(local.products, incoming.products);
 
   const remappedRequirements = incoming.requirements.map((item) => {
     const normalized = normalizeRequirement(item);
+    const domainId = domainMerge.idMap.get(normalized.domainId) ?? normalized.domainId;
+    const mergedDomainL1 = domainMerge.items.find((domain) => domain.id === domainId);
     return {
       ...normalized,
-      domainId: domainMerge.idMap.get(normalized.domainId) ?? normalized.domainId,
+      domainL0Id: mergedDomainL1?.parentId ?? domainMerge.idMap.get(normalized.domainL0Id) ?? normalized.domainL0Id,
+      domainId,
       productIds: [...new Set(normalized.productIds.map((id) => productMerge.idMap.get(id) ?? id))],
     };
   });
 
-  const requirements = mergeByUpdatedAt(local.requirements, remappedRequirements);
-  const remappedOverrides = incoming.groupOverrides.map((item) => ({
-    ...item,
-    groupKey: remapGroupKey(item.groupKey, domainMerge.idMap),
-  }));
+  const requirements = mergeByUpdatedAt(local.requirements.map((item) => normalizeRequirement(item)), remappedRequirements);
+  const remappedOverrides = incoming.groupOverrides.map((item) => {
+    const normalized = normalizeLegacyGroupOverride(item);
+    return {
+      ...normalized,
+      groupKey: remapGroupKey(normalized.groupKey, domainMerge.idMap),
+    };
+  });
 
   return {
     requirements,
@@ -28,23 +34,39 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
   };
 }
 
+function mergeDomainDictionaries(local: DictionaryItem[], incoming: DictionaryItem[]): { items: DictionaryItem[]; idMap: Map<string, string> } {
+  const localL0s = local.filter((item) => item.level === "L0").map((item) => ({ ...item, level: "L0" as const, parentId: undefined }));
+  const incomingL0s = incoming.filter((item) => item.level === "L0").map((item) => ({ ...item, level: "L0" as const, parentId: undefined }));
+  const l0Merge = mergeDictionaries(localL0s, incomingL0s);
+  const localL1s = local.filter((item) => (item.level ?? "L1") === "L1").map((item) => ({ ...item, level: "L1" as const }));
+  const incomingL1s = incoming
+    .filter((item) => (item.level ?? "L1") === "L1")
+    .map((item) => ({ ...item, level: "L1" as const, parentId: item.parentId ? (l0Merge.idMap.get(item.parentId) ?? item.parentId) : undefined }));
+  const l1Merge = mergeDictionaries(localL1s, incomingL1s);
+  return {
+    items: [...l0Merge.items, ...l1Merge.items],
+    idMap: new Map([...l0Merge.idMap, ...l1Merge.idMap]),
+  };
+}
+
 function mergeDictionaries(local: DictionaryItem[], incoming: DictionaryItem[]): { items: DictionaryItem[]; idMap: Map<string, string> } {
   const items = local.map((item) => ({ ...item }));
-  const byName = new Map(items.map((item) => [normalizeName(item.name), item]));
+  const byName = new Map(items.map((item) => [dictionaryKey(item), item]));
   const usedIds = new Set(items.map((item) => item.id));
   const idMap = new Map<string, string>();
 
   for (const incomingItem of incoming) {
-    const sameName = byName.get(normalizeName(incomingItem.name));
+    const sameName = byName.get(dictionaryKey(incomingItem));
     if (sameName) {
       idMap.set(incomingItem.id, sameName.id);
+      if (!sameName.parentId && incomingItem.parentId) sameName.parentId = incomingItem.parentId;
       continue;
     }
     const id = uniqueId(incomingItem.id, usedIds);
     const item = { ...incomingItem, id, sortOrder: items.length };
     items.push(item);
     usedIds.add(id);
-    byName.set(normalizeName(item.name), item);
+    byName.set(dictionaryKey(item), item);
     idMap.set(incomingItem.id, id);
   }
 
@@ -78,6 +100,10 @@ function uniqueId(preferred: string, used: ReadonlySet<string>): string {
 
 function normalizeName(value: string): string {
   return value.trim().toLocaleLowerCase("zh-CN");
+}
+
+function dictionaryKey(item: DictionaryItem): string {
+  return `${item.level ?? "L1"}:${normalizeName(item.name)}`;
 }
 
 function timestamp(value: string): number {

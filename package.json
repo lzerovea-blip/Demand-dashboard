@@ -1,8 +1,8 @@
 {
-  "name": "health-roadmap-studio",
-  "version": "0.3.0",
+  "name": "solution-requirements-manager",
+  "version": "0.7.0",
   "private": true,
-  "description": "离线运动健康需求汇总与路标 PPT 模板写入工具",
+  "description": "离线解决方案需求汇总、路标管理与 PPT 输出工具",
   "main": "dist-electron/main/index.cjs",
   "type": "module",
   "scripts": {

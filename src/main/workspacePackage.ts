@@ -8,8 +8,8 @@ import type {
   WorkspaceImportPreview,
   WorkspacePackageCounts,
 } from "../shared/types.js";
-import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, OVERSEAS_REGIONS, REQUIREMENT_IMAGE_MIME_TYPES, SOURCES } from "../shared/types.js";
-import { normalizeRequirement } from "../shared/requirements.js";
+import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, REQUIREMENT_IMAGE_MIME_TYPES, SOURCES } from "../shared/types.js";
+import { normalizeLegacyGroupOverride, normalizeLegacySource, normalizeRequirement } from "../shared/requirements.js";
 import { workspaceCounts } from "../shared/workspace.js";
 
 const PACKAGE_FORMAT = "health-roadmap-workspace";
@@ -78,7 +78,7 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
 
   const packedData: PackedWorkspaceData = {
     requirements: packedRequirements,
-    domains: data.domains,
+    domains: normalizeDomains(data.domains),
     products: data.products,
     groupOverrides: data.groupOverrides,
   };
@@ -127,11 +127,11 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string): 
   if (!dataBytes) throw new Error("数据包缺少结构化数据");
   const packedData = JSON.parse(dataBytes.toString("utf8")) as PackedWorkspaceData;
   const data: WorkspaceData = {
-    domains: packedData.domains,
+    domains: normalizeDomains(packedData.domains),
     products: packedData.products,
-    groupOverrides: packedData.groupOverrides,
+    groupOverrides: packedData.groupOverrides.map(normalizeLegacyGroupOverride),
     requirements: packedData.requirements.map((requirement) => ({
-      ...requirement,
+      ...normalizeRequirement({ ...requirement, images: [] }),
       images: requirement.images.map((image) => {
         const content = verifiedFiles.get(image.path);
         if (!content) throw new Error(`需求图片缺失：${image.name}`);
@@ -166,9 +166,9 @@ function inspectLegacyBackup(bytes: Buffer): PreparedWorkspaceImport {
   if (backup.schemaVersion !== 1 || !backup.data) throw new Error("不支持的旧版备份格式");
   const data: WorkspaceData = {
     requirements: backup.data.requirements.map((item) => normalizeRequirement(item)),
-    domains: backup.data.domains,
+    domains: normalizeDomains(backup.data.domains),
     products: backup.data.products,
-    groupOverrides: backup.data.groupOverrides,
+    groupOverrides: backup.data.groupOverrides.map(normalizeLegacyGroupOverride),
   };
   validateWorkspaceData(data);
   return {
@@ -198,23 +198,32 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     throw new Error("数据包结构无效");
   }
   const domainIds = validateDictionaries(data.domains, "领域");
+  const domainsById = new Map(data.domains.map((item) => [item.id, { ...item, level: item.level ?? "L1" }]));
   const productIds = validateDictionaries(data.products, "产品");
   const requirementIds = new Set<string>();
+
+  for (const domain of domainsById.values()) {
+    if (domain.level === "L0" && domain.parentId) throw new Error(`领域 L0“${domain.name}”不能设置上游领域`);
+    if (domain.level === "L1" && domain.parentId && domainsById.get(domain.parentId)?.level !== "L0") {
+      throw new Error(`领域 L1“${domain.name}”引用了不存在的上游领域 L0`);
+    }
+  }
 
   for (const raw of data.requirements) {
     validateRawWorkload(raw);
     const item = normalizeRequirement(raw);
     if (!item.id || requirementIds.has(item.id) || !item.title.trim()) throw new Error("数据包包含无效或重复需求");
     requirementIds.add(item.id);
-    if (!domainIds.has(item.domainId)) throw new Error(`需求“${item.title}”引用了不存在的领域`);
+    if (item.domainL0Id && domainsById.get(item.domainL0Id)?.level !== "L0") throw new Error(`需求“${item.title}”引用了不存在的领域 L0`);
+    if (!domainIds.has(item.domainId) || domainsById.get(item.domainId)?.level !== "L1") throw new Error(`需求“${item.title}”引用了不存在的领域 L1`);
+    if (item.domainL0Id && domainsById.get(item.domainId)?.parentId !== item.domainL0Id) throw new Error(`需求“${item.title}”的领域 L1 不属于所选领域 L0`);
     if (!SOURCES.includes(item.source) || !CATEGORIES.includes(item.category)) throw new Error(`需求“${item.title}”的来源或分类无效`);
-    if (item.overseasRegions.some((region) => !OVERSEAS_REGIONS.includes(region))) throw new Error(`需求“${item.title}”的海外研究区域无效`);
-    if (item.source === "海外研究" && item.overseasRegions.length === 0) throw new Error(`海外研究需求“${item.title}”未选择区域`);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(item.targetMonth)) throw new Error(`需求“${item.title}”的上线年月无效`);
     if (!Number.isFinite(item.workloadPm) || item.workloadPm <= 0) throw new Error(`需求“${item.title}”的工作量无效`);
     if (item.description.length > 5000 || !validTimestamp(item.createdAt) || !validTimestamp(item.updatedAt)) throw new Error(`需求“${item.title}”的文本或时间信息无效`);
     if (item.productIds.some((id) => !productIds.has(id))) throw new Error(`需求“${item.title}”引用了不存在的产品`);
-    if (item.category === "产品专属" && item.productIds.length === 0) throw new Error(`产品专属需求“${item.title}”未匹配产品`);
+    if (item.category === "产品专属" && item.productIds.length !== 1) throw new Error(`产品专属需求“${item.title}”必须且只能匹配一个产品`);
+    if (item.category === "体验优化" && item.productIds.length > 0) throw new Error(`体验优化需求“${item.title}”不应匹配产品`);
     if (item.images.length > MAX_REQUIREMENT_IMAGES) throw new Error(`需求“${item.title}”的图片数量超限`);
     for (const image of item.images) decodeDataUrl(image);
   }
@@ -224,7 +233,7 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (!item.groupKey || overrideKeys.has(item.groupKey) || !item.cardTitle?.trim() || !validTimestamp(item.updatedAt)) throw new Error("数据包包含无效或重复路标卡片编辑");
     overrideKeys.add(item.groupKey);
     const [domainId, source, targetMonth] = item.groupKey.split("::");
-    if (!domainIds.has(domainId) || !SOURCES.includes(source as (typeof SOURCES)[number]) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth ?? "")) {
+    if (!domainIds.has(domainId) || !SOURCES.includes(normalizeLegacySource(source) as (typeof SOURCES)[number]) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth ?? "")) {
       throw new Error(`路标卡片“${item.cardTitle}”的关联信息无效`);
     }
   }
@@ -252,11 +261,23 @@ function validateDictionaries(items: WorkspaceData["domains"], label: string): S
   const names = new Set<string>();
   for (const item of items) {
     const name = item?.name?.trim().toLocaleLowerCase("zh-CN");
-    if (!item?.id || !name || ids.has(item.id) || names.has(name)) throw new Error(`数据包包含无效或重复${label}`);
+    const dictionaryName = `${item.level ?? "L1"}:${name}`;
+    if (!item?.id || !name || ids.has(item.id) || names.has(dictionaryName)) throw new Error(`数据包包含无效或重复${label}`);
     ids.add(item.id);
-    names.add(name);
+    names.add(dictionaryName);
   }
   return ids;
+}
+
+function normalizeDomains(items: WorkspaceData["domains"]): WorkspaceData["domains"] {
+  return items.map((item) => {
+    const level = item.level ?? "L1";
+    if (level === "L0") {
+      const { parentId: _ignoredParent, ...rest } = item;
+      return { ...rest, level };
+    }
+    return { ...item, level };
+  });
 }
 
 function decodeDataUrl(image: RequirementImage): Buffer {

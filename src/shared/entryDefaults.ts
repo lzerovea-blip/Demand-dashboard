@@ -1,6 +1,8 @@
 import type { Requirement } from "./types.js";
 
 export interface RequirementEntrySelections {
+  domainL0Id: string;
+  domainId: string;
   source: Requirement["source"];
   overseasRegions: Requirement["overseasRegions"];
   category: Requirement["category"];
@@ -14,6 +16,6 @@ export function latestRequirementSelections(requirements: Requirement[]): Requir
   }, undefined);
 
   return latest
-    ? { source: latest.source, overseasRegions: latest.overseasRegions, category: latest.category, targetMonth: latest.targetMonth }
+    ? { domainL0Id: latest.domainL0Id, domainId: latest.domainId, source: latest.source, overseasRegions: latest.overseasRegions, category: latest.category, targetMonth: latest.targetMonth }
     : undefined;
 }

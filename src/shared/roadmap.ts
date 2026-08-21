@@ -1,9 +1,8 @@
-import { OVERSEAS_REGIONS, SOURCES } from "./types.js";
+import { ROADMAP_TRACKS, SOURCES } from "./types.js";
 import type {
   AppSnapshot,
   GroupOverride,
   Level,
-  OverseasRegion,
   Requirement,
   RequirementCategory,
   RequirementSource,
@@ -18,7 +17,7 @@ export interface RoadmapGroup {
   source: RequirementSource;
   track: Track;
   level: Level | null;
-  overseasRegions: OverseasRegion[];
+  overseasRegions: Requirement["overseasRegions"];
   targetMonth: string;
   cardTitle: string;
   cardSummary: string;
@@ -34,9 +33,9 @@ export interface RoadmapGroup {
 export interface HalfYearSummary {
   halfYear: string;
   bySource: Record<RequirementSource, number>;
+  byTrack: Record<Track, number>;
   sportsWorkload: number;
   healthWorkload: number;
-  overseasWorkload: number;
   experienceWorkload: number;
   exclusiveWorkload: number;
   totalWorkload: number;
@@ -50,12 +49,13 @@ export interface HalfYearSummary {
 }
 
 export function trackOf(source: RequirementSource): Track {
-  if (source === "海外研究") return "海外研究";
-  return source.startsWith("运动") ? "运动" : "健康";
+  if (source.startsWith("运动")) return "运动";
+  if (source.startsWith("健康")) return "健康";
+  return source as Track;
 }
 
 export function levelOf(source: RequirementSource): Level | null {
-  if (source === "海外研究") return null;
+  if (!source.startsWith("运动") && !source.startsWith("健康")) return null;
   return source.replace(/^运动|^健康/, "") as Level;
 }
 
@@ -155,19 +155,22 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
 export function roadmapTrackOrder(groups: Pick<RoadmapGroup, "track">[]): Track[] {
   const hasSports = groups.some((item) => item.track === "运动");
   const hasHealth = groups.some((item) => item.track === "健康");
-  return !hasSports && hasHealth ? ["健康", "运动", "海外研究"] : ["运动", "健康", "海外研究"];
+  const core: Track[] = !hasSports && hasHealth ? ["健康", "运动"] : ["运动", "健康"];
+  return [...core, ...ROADMAP_TRACKS.filter((track) => track !== "运动" && track !== "健康")];
 }
 
-export type RoadmapLane = Level | OverseasRegion;
+export type RoadmapLane = Level | "需求";
 
 export function roadmapLanesForTrack(track: Track): readonly RoadmapLane[] {
-  return track === "海外研究" ? OVERSEAS_REGIONS : ["基础", "进阶", "高阶"];
+  return track === "运动" || track === "健康" ? ["基础", "进阶", "高阶"] : ["需求"];
 }
 
-export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level" | "overseasRegions">, lane: RoadmapLane): boolean {
-  return group.track === "海外研究"
-    ? group.overseasRegions.includes(lane as OverseasRegion)
-    : group.level === lane;
+export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level">, lane: RoadmapLane): boolean {
+  return group.track === "运动" || group.track === "健康" ? group.level === lane : lane === "需求";
+}
+
+export function roadmapPrimaryLane(group: Pick<RoadmapGroup, "track" | "level">): RoadmapLane {
+  return group.track === "运动" || group.track === "健康" ? group.level ?? "基础" : "需求";
 }
 
 export function roadmapMonthColumnTemplate(
@@ -190,9 +193,14 @@ export function buildHalfYearSummaries(requirements: Requirement[], start: strin
         round(items.filter((item) => item.source === source).reduce((sum, item) => sum + threeSideTotal(item), 0)),
       ]),
     ) as Record<RequirementSource, number>;
-    const sportsWorkload = round(items.filter((item) => trackOf(item.source) === "运动").reduce((sum, item) => sum + threeSideTotal(item), 0));
-    const healthWorkload = round(items.filter((item) => trackOf(item.source) === "健康").reduce((sum, item) => sum + threeSideTotal(item), 0));
-    const overseasWorkload = round(items.filter((item) => trackOf(item.source) === "海外研究").reduce((sum, item) => sum + threeSideTotal(item), 0));
+    const byTrack = Object.fromEntries(
+      ROADMAP_TRACKS.map((track) => [
+        track,
+        round(items.filter((item) => trackOf(item.source) === track).reduce((sum, item) => sum + threeSideTotal(item), 0)),
+      ]),
+    ) as Record<Track, number>;
+    const sportsWorkload = byTrack.运动;
+    const healthWorkload = byTrack.健康;
     const experienceItems = items.filter((item) => item.category === "体验优化");
     const experienceWorkload = round(experienceItems.reduce((sum, item) => sum + threeSideTotal(item), 0));
     const exclusiveWorkload = round(items.filter((item) => item.category === "产品专属").reduce((sum, item) => sum + threeSideTotal(item), 0));
@@ -211,9 +219,9 @@ export function buildHalfYearSummaries(requirements: Requirement[], start: strin
     return {
       halfYear,
       bySource,
+      byTrack,
       sportsWorkload,
       healthWorkload,
-      overseasWorkload,
       experienceWorkload,
       exclusiveWorkload,
       totalWorkload: round(workloadBreakdown.device + workloadBreakdown.app + workloadBreakdown.cloud),

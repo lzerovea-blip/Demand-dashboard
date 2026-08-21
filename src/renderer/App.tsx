@@ -8,6 +8,7 @@ import {
   roadmapCardLabel,
   roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
+  roadmapPrimaryLane,
   roadmapTrackOrder,
   type HalfYearSummary,
   type RoadmapLane,
@@ -19,15 +20,17 @@ import {
   CATEGORIES,
   MAX_REQUIREMENT_IMAGE_BYTES,
   MAX_REQUIREMENT_IMAGES,
-  OVERSEAS_REGIONS,
+  ROADMAP_TRACKS,
   REQUIREMENT_IMAGE_MIME_TYPES,
   SOURCES,
+  type AppInfo,
   type AppSnapshot,
   type DictionaryItem,
   type Requirement,
   type RequirementCategory,
   type RequirementImage,
   type RequirementSource,
+  type SaveDictionaryInput,
   type SaveRequirementInput,
   type Track,
   type WorkspaceImportMode,
@@ -45,6 +48,14 @@ import {
 } from "../shared/workload";
 
 type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template";
+
+const DEFAULT_APP_INFO: AppInfo = {
+  name: "解决方案需求管理",
+  version: "0.7.0",
+  releasedAt: "2026-08-21",
+  author: "林忠维",
+  updateUrl: "https://github.com/lzerovea-blip/Demand-dashboard",
+};
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
   requirements: [],
@@ -66,7 +77,21 @@ const SOURCE_COLORS: Record<RequirementSource, string> = {
   健康基础: "#ef6b54",
   健康进阶: "#f1a33c",
   健康高阶: "#d64d85",
-  海外研究: "#14927f",
+  行业: "#14927f",
+  全场景: "#5b6ee1",
+  health平台: "#11a8c7",
+  AI: "#8b5cf6",
+  医疗送检: "#d64d85",
+};
+
+const TRACK_COLORS: Record<Track, string> = {
+  运动: "#287ef0",
+  健康: "#ef6b54",
+  行业: "#14927f",
+  全场景: "#5b6ee1",
+  health平台: "#11a8c7",
+  AI: "#8b5cf6",
+  医疗送检: "#d64d85",
 };
 
 const WORKLOAD_SIDE_META: Record<WorkloadSide, { label: string; color: string }> = {
@@ -76,6 +101,7 @@ const WORKLOAD_SIDE_META: Record<WorkloadSide, { label: string; color: string }>
 };
 
 export default function App() {
+  const [appInfo, setAppInfo] = useState<AppInfo>(DEFAULT_APP_INFO);
   const [snapshot, setSnapshot] = useState<AppSnapshot>(EMPTY_SNAPSHOT);
   const [page, setPage] = useState<Page>("requirements");
   const [loading, setLoading] = useState(true);
@@ -85,6 +111,13 @@ export default function App() {
   const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null);
   const [startHalf, setStartHalf] = useState("2026H1");
   const [endHalf, setEndHalf] = useState("2027H2");
+  const [windowFullscreen, setWindowFullscreenState] = useState(false);
+  const [roadmapFocusRequested, setRoadmapFocusRequested] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+
+  useEffect(() => {
+    window.roadmapApi.getAppInfo().then(setAppInfo).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     window.roadmapApi
@@ -92,6 +125,33 @@ export default function App() {
       .then(setSnapshot)
       .catch((reason) => setError(messageOf(reason)))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let receivedEvent = false;
+    const unsubscribe = window.roadmapApi.onWindowFullscreenChange((enabled) => {
+      receivedEvent = true;
+      if (active) {
+        setWindowFullscreenState(enabled);
+        if (!enabled) setRoadmapFocusRequested(false);
+      }
+    });
+    window.roadmapApi
+      .getWindowFullscreen()
+      .then((enabled) => {
+        if (active && !receivedEvent) {
+          setWindowFullscreenState(enabled);
+          if (!enabled) setRoadmapFocusRequested(false);
+        }
+      })
+      .catch((reason) => {
+        if (active) setError(messageOf(reason));
+      });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -119,6 +179,22 @@ export default function App() {
       return [];
     }
   }, [snapshot.requirements, startHalf, endHalf]);
+  const roadmapFocusMode = page === "roadmap" && windowFullscreen && roadmapFocusRequested;
+
+  useEffect(() => {
+    if (page !== "roadmap") setRoadmapFocusRequested(false);
+  }, [page]);
+
+  useEffect(() => {
+    if (!roadmapFocusMode) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      void exitRoadmapFullscreen();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [roadmapFocusMode]);
 
   async function update(action: () => Promise<AppSnapshot>, success: string) {
     try {
@@ -131,28 +207,53 @@ export default function App() {
     }
   }
 
+  async function enterRoadmapFullscreen() {
+    setRoadmapFocusRequested(true);
+    try {
+      setError("");
+      await window.roadmapApi.setWindowFullscreen(true);
+    } catch (reason) {
+      setRoadmapFocusRequested(false);
+      setError(messageOf(reason));
+    }
+  }
+
+  async function exitRoadmapFullscreen() {
+    setRoadmapFocusRequested(false);
+    try {
+      setError("");
+      await window.roadmapApi.setWindowFullscreen(false);
+    } catch (reason) {
+      setError(messageOf(reason));
+    }
+  }
+
   if (loading) return <div className="boot">正在打开离线需求库…</div>;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${roadmapFocusMode ? " roadmap-focus-mode" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">R</div>
           <div>
-            <strong>需求路标</strong>
-            <span>OFFLINE STUDIO</span>
+            <strong>解决方案需求管理</strong>
+            <span>SOLUTION STUDIO</span>
           </div>
         </div>
         <nav>
           <NavButton active={page === "requirements"} icon="⌘" label="需求池" onClick={() => setPage("requirements")} />
           <NavButton active={page === "summary"} icon="↗" label="汇总分析" onClick={() => setPage("summary")} />
-          <NavButton active={page === "roadmap"} icon="▦" label="路标预览" onClick={() => setPage("roadmap")} />
+          <NavButton active={page === "roadmap"} icon="▦" label="路标" onClick={() => setPage("roadmap")} />
           <NavButton active={page === "dictionaries"} icon="◇" label="字典设置" onClick={() => setPage("dictionaries")} />
-          <NavButton active={page === "template"} icon="P" label="PPT 输出" onClick={() => setPage("template")} />
+          <NavButton active={page === "template"} icon="⇩" label="导出中心" onClick={() => setPage("template")} />
         </nav>
         <div className="sidebar-foot">
           <div className="offline-dot"><i /> 全程本地处理</div>
-          <small>{snapshot.requirements.length} 条需求 · {groups.length} 张领域卡片</small>
+          <div className="sidebar-version">
+            <b>v{appInfo.version}</b>
+            <span>{formatReleaseDate(appInfo.releasedAt)}</span>
+          </div>
+          <small>制作者：{appInfo.author}</small>
+          <button type="button" className="about-trigger" onClick={() => setAboutOpen(true)}>使用说明与版本信息</button>
         </div>
       </aside>
 
@@ -165,6 +266,9 @@ export default function App() {
           <div className="top-actions">
             {(page === "summary" || page === "roadmap" || page === "template") && (
               <PeriodSelector start={startHalf} end={endHalf} onStart={setStartHalf} onEnd={setEndHalf} />
+            )}
+            {page === "roadmap" && (
+              <button type="button" className="button dark roadmap-fullscreen-enter" onClick={() => void enterRoadmapFullscreen()}>⛶ 全屏查看</button>
             )}
             {page === "requirements" && (
               <button className="button primary" onClick={() => setEditor("new")}>＋ 新建需求</button>
@@ -185,7 +289,7 @@ export default function App() {
           )}
           {page === "summary" && <SummaryPage summaries={summaries} />}
           {page === "roadmap" && (
-            <RoadmapPage groups={groups} start={startHalf} end={endHalf} onOpenGroup={(group) => setSelectedGroupKey(group.key)} />
+            <RoadmapPage groups={groups} start={startHalf} end={endHalf} focusMode={roadmapFocusMode} onOpenGroup={(group) => setSelectedGroupKey(group.key)} />
           )}
           {page === "dictionaries" && (
             <DictionariesPage
@@ -302,7 +406,45 @@ export default function App() {
           }}
         />
       )}
+      {aboutOpen && <AboutDialog info={appInfo} onClose={() => setAboutOpen(false)} />}
       {(notice || error) && <div className={`toast ${error ? "error" : "success"}`}>{error || notice}</div>}
+    </div>
+  );
+}
+
+function AboutDialog({ info, onClose }: { info: AppInfo; onClose: () => void }) {
+  return (
+    <div className="overlay about-overlay" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
+      <div className="about-dialog panel" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <div className="about-head">
+          <div>
+            <span className="eyebrow">ABOUT &amp; GUIDE</span>
+            <h2 id="about-title">{info.name}</h2>
+            <p>离线汇总、管理并输出运动健康与穿戴解决方案需求</p>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button>
+        </div>
+        <dl className="about-meta">
+          <div><dt>应用版本</dt><dd>v{info.version}</dd></div>
+          <div><dt>发版时间</dt><dd>{formatReleaseDate(info.releasedAt)}</dd></div>
+          <div><dt>制作者</dt><dd>{info.author}</dd></div>
+          <div className="about-update-row">
+            <dt>GitHub 更新地址</dt>
+            <dd><code>{info.updateUrl}</code><button type="button" onClick={() => void window.roadmapApi.openUpdatePage()}>打开更新地址 ↗</button></dd>
+          </div>
+        </dl>
+        <div className="about-guide">
+          <h3>使用说明</h3>
+          <ol>
+            <li><b>准备字典</b><span>在“字典设置”维护领域和产品，作为需求录入的统一口径。</span></li>
+            <li><b>录入需求</b><span>在“需求池”新建或编辑需求，填写来源、上线月份、三端工作量、描述、图片和匹配产品。</span></li>
+            <li><b>查看汇总与路标</b><span>选择半年区间查看投入分析和七张路标；路标页可进入全屏 Tab 查看。</span></li>
+            <li><b>输出与交接</b><span>在“导出中心”生成需求路标、协作 Excel 或完整需求包。</span></li>
+          </ol>
+          <div className="about-privacy"><i /> 所有业务数据和图片均在本机离线处理。</div>
+        </div>
+        <div className="about-actions"><button type="button" className="button primary" onClick={onClose}>我知道了</button></div>
+      </div>
     </div>
   );
 }
@@ -347,14 +489,14 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
         {rows.length ? (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>需求标题</th><th>领域</th><th>来源</th><th>海外区域</th><th>分类</th><th>上线月份</th><th>匹配产品</th><th className="numeric">工作量</th><th /></tr></thead>
+              <thead><tr><th>需求标题</th><th>领域 L0</th><th>领域 L1</th><th>来源</th><th>分类</th><th>上线月份</th><th>匹配产品</th><th className="numeric">工作量</th><th /></tr></thead>
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
                     <td><strong>{item.title}</strong></td>
+                    <td>{domains.get(item.domainL0Id) ?? "—"}</td>
                     <td>{domains.get(item.domainId) ?? "未命名"}</td>
                     <td><SourceBadge source={item.source} /></td>
-                    <td>{item.overseasRegions.join("、") || "—"}</td>
                     <td><span className={`category ${item.category === "产品专属" ? "exclusive" : "experience"}`}>{item.category}</span></td>
                     <td>{formatMonth(item.targetMonth)}</td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
@@ -377,9 +519,10 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
   const app = summaries.reduce((sum, item) => sum + item.appWorkload, 0);
   const cloud = summaries.reduce((sum, item) => sum + item.cloudWorkload, 0);
   const total = device + app + cloud;
-  const sports = summaries.reduce((sum, item) => sum + item.sportsWorkload, 0);
-  const health = summaries.reduce((sum, item) => sum + item.healthWorkload, 0);
-  const overseas = summaries.reduce((sum, item) => sum + item.overseasWorkload, 0);
+  const trackWorkload = Object.fromEntries(ROADMAP_TRACKS.map((track) => [
+    track,
+    summaries.reduce((sum, item) => sum + item.byTrack[track], 0),
+  ])) as Record<Track, number>;
   const experience = summaries.reduce((sum, item) => sum + item.experienceWorkload, 0);
   const exclusive = summaries.reduce((sum, item) => sum + item.exclusiveWorkload, 0);
   const unallocated = summaries.reduce((sum, item) => sum + item.unallocatedWorkload, 0);
@@ -398,11 +541,11 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
           { label: "App 侧", value: app, color: WORKLOAD_SIDE_META.app.color },
           { label: "云侧", value: cloud, color: WORKLOAD_SIDE_META.cloud.color },
         ]} />
-        <DonutChart title="运动 / 健康 / 海外研究占比" subtitle="按需求来源归属" items={[
-          { label: "运动", value: sports, color: "#287ef0" },
-          { label: "健康", value: health, color: "#ef6b54" },
-          { label: "海外研究", value: overseas, color: "#14927f" },
-        ]} />
+        <DonutChart title="各路标来源投入占比" subtitle="按需求来源归属" items={ROADMAP_TRACKS.map((track) => ({
+          label: track,
+          value: trackWorkload[track],
+          color: TRACK_COLORS[track],
+        }))} />
         <DonutChart title="体验优化 / 产品专属" subtitle="按需求分类归属" items={[
           { label: "体验优化", value: experience, color: "#7357d9" },
           { label: "产品专属", value: exclusive, color: "#17202a" },
@@ -513,13 +656,51 @@ function SideExperienceChart({ summaries, side }: { summaries: HalfYearSummary[]
   );
 }
 
-function RoadmapPage({ groups, start, end, onOpenGroup }: { groups: RoadmapGroup[]; start: string; end: string; onOpenGroup: (group: RoadmapGroup) => void }) {
+function RoadmapPage({ groups, start, end, focusMode, onOpenGroup }: { groups: RoadmapGroup[]; start: string; end: string; focusMode: boolean; onOpenGroup: (group: RoadmapGroup) => void }) {
   const tracks = roadmapTrackOrder(groups);
+  const [focusIndex, setFocusIndex] = useState(0);
+
+  useEffect(() => {
+    if (focusMode) setFocusIndex(0);
+  }, [focusMode]);
+
+  useEffect(() => {
+    setFocusIndex((current) => Math.min(current, Math.max(tracks.length - 1, 0)));
+  }, [tracks.join("|")]);
+
   return (
-    <div className="roadmap-stack">
-      {tracks.map((track) => (
-        <RoadmapBoard key={track} title={`${track}路标`} track={track} groups={groups} start={start} end={end} onOpenGroup={onOpenGroup} />
+    <div className={`roadmap-stack${focusMode ? " is-focus" : ""}`}>
+      {tracks.map((track, index) => (
+        <div
+          key={track}
+          id={`roadmap-focus-panel-${index}`}
+          role={focusMode ? "tabpanel" : undefined}
+          className={`roadmap-focus-slide${!focusMode || index === focusIndex ? " is-active" : ""}`}
+          aria-hidden={focusMode && index !== focusIndex}
+          aria-labelledby={focusMode ? `roadmap-focus-tab-${index}` : undefined}
+        >
+          <RoadmapBoard title={`${track}路标`} track={track} groups={groups} start={start} end={end} onOpenGroup={onOpenGroup} />
+        </div>
       ))}
+      {focusMode && (
+        <div className="roadmap-focus-tabs" role="tablist" aria-label="选择路标">
+          {tracks.map((track, index) => (
+            <button
+              key={track}
+              id={`roadmap-focus-tab-${index}`}
+              type="button"
+              role="tab"
+              aria-selected={focusIndex === index}
+              aria-controls={`roadmap-focus-panel-${index}`}
+              className={focusIndex === index ? "active" : ""}
+              style={focusIndex === index ? { background: TRACK_COLORS[track] } : undefined}
+              onClick={() => setFocusIndex(index)}
+            >
+              {track}路标
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -531,7 +712,7 @@ function RoadmapBoard({ title, track, groups, start, end, onOpenGroup }: { title
   const scoped = groups.filter((item) => item.track === track);
   const firstGroup = scoped[0];
   const lanes = roadmapLanesForTrack(track);
-  const firstLane = firstGroup ? (firstGroup.track === "海外研究" ? firstGroup.overseasRegions[0] : firstGroup.level) : undefined;
+  const firstLane = firstGroup ? roadmapPrimaryLane(firstGroup) : undefined;
   const monthColumnTemplate = roadmapMonthColumnTemplate(months, groups);
 
   function locateFirstGroup(behavior: ScrollBehavior = "auto") {
@@ -550,10 +731,9 @@ function RoadmapBoard({ title, track, groups, start, end, onOpenGroup }: { title
   }, [firstGroup?.key, firstLane, start, end]);
 
   return (
-    <div className={`panel roadmap-board ${track === "运动" ? "sports" : track === "健康" ? "health" : "overseas"}`}>
+    <div className="panel roadmap-board" style={{ borderTopColor: TRACK_COLORS[track] }}>
       <PanelTitle
         title={title}
-        subtitle={`${shortHalf(start)} – ${shortHalf(end)} · ${scoped.length} 张卡片 · 点击卡片查看领域全量需求`}
         action={firstGroup
           ? <button type="button" className="roadmap-locate" onClick={() => locateFirstGroup("smooth")}>定位 {formatMonth(firstGroup.targetMonth)}</button>
           : <span className="roadmap-empty-count">暂无卡片</span>}
@@ -593,8 +773,7 @@ function RoadmapCard({ group, onClick }: { group: RoadmapGroup; onClick: () => v
   const visibleProducts = group.productNames.slice(0, 2);
   const hiddenProductCount = Math.max(group.productNames.length - visibleProducts.length, 0);
   const productLabel = group.productNames.length ? `涉及产品：${group.productNames.join("、")}` : "";
-  const regionLabel = group.overseasRegions.length ? `海外区域：${group.overseasRegions.join("、")}` : "";
-  const accessibleLabel = [label, regionLabel, productLabel, "点击查看全部需求"].filter(Boolean).join("；");
+  const accessibleLabel = [label, productLabel, "点击查看全部需求"].filter(Boolean).join("；");
   return (
     <button className={`roadmap-card ${hasExclusive ? "has-exclusive" : ""}`} onClick={onClick} title={accessibleLabel} aria-label={accessibleLabel}>
       <span className="roadmap-card-copy"><strong>{group.cardTitle}：</strong><span>{requirementText}</span></span>
@@ -612,12 +791,15 @@ function RoadmapCard({ group, onClick }: { group: RoadmapGroup; onClick: () => v
 type WorkloadTexts = { device: string; app: string; cloud: string };
 
 function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requirement; snapshot: AppSnapshot; onClose: () => void; onSave: (input: SaveRequirementInput, keepOpen: boolean) => Promise<void> }) {
+  const domainL0s = snapshot.domains.filter((item) => item.active && item.level === "L0");
+  const allDomainL1s = snapshot.domains.filter((item) => item.active && (item.level ?? "L1") === "L1");
   const [form, setForm] = useState<SaveRequirementInput>(() => {
     if (value) return {
       id: value.id,
       title: value.title,
       description: value.description ?? "",
       images: value.images ?? [],
+      domainL0Id: value.domainL0Id ?? "",
       domainId: value.domainId,
       source: value.source,
       overseasRegions: value.overseasRegions ?? [],
@@ -629,11 +811,14 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       cloudWorkloadPm: value.cloudWorkloadPm,
     };
     const previous = latestRequirementSelections(snapshot.requirements);
+    const domainL0Id = domainL0s.some((item) => item.id === previous?.domainL0Id) ? previous?.domainL0Id ?? "" : domainL0s[0]?.id ?? "";
+    const linkedDomainL1s = allDomainL1s.filter((item) => item.parentId === domainL0Id);
     return {
       title: "",
       description: "",
       images: [],
-      domainId: snapshot.domains.find((item) => item.active)?.id ?? "",
+      domainL0Id,
+      domainId: linkedDomainL1s.some((item) => item.id === previous?.domainId) ? previous?.domainId ?? "" : linkedDomainL1s[0]?.id ?? "",
       source: previous?.source ?? "运动基础",
       overseasRegions: previous?.overseasRegions ?? [],
       category: previous?.category ?? "体验优化",
@@ -644,13 +829,13 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       cloudWorkloadPm: 0,
     };
   });
+  const domainL1s = allDomainL1s.filter((item) => item.parentId === form.domainL0Id);
   const [workloadTexts, setWorkloadTexts] = useState<WorkloadTexts>(() => ({
     device: value?.deviceWorkloadPm ? String(value.deviceWorkloadPm) : "",
     app: value?.appWorkloadPm ? String(value.appWorkloadPm) : "",
     cloud: value?.cloudWorkloadPm ? String(value.cloudWorkloadPm) : "",
   }));
   const [workloadError, setWorkloadError] = useState("");
-  const [regionError, setRegionError] = useState("");
   const [imageError, setImageError] = useState("");
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
@@ -673,13 +858,9 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (form.source === "海外研究" && form.overseasRegions.length === 0) {
-      setRegionError("请至少选择一个海外研究区域");
-      return;
-    }
     const parsed = [draftParts.device, draftParts.app, draftParts.cloud];
     if (parsed.some((item) => item === null)) {
-      setWorkloadError("各侧工作量请输入 0、正整数或小数，例如 0.5");
+      setWorkloadError("设备、App、云侧三项工作量均为必填；暂无投入请填写 0");
       return;
     }
     if ((draftTotal ?? 0) <= 0) {
@@ -709,7 +890,9 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       <form className="drawer editor-drawer" onSubmit={submit}>
         <div className="drawer-header"><div><span className="eyebrow">STRUCTURED INPUT</span><h2>{value ? "编辑需求" : "新建需求"}</h2></div><button type="button" className="icon-button" onClick={onClose}>×</button></div>
         <div className="form-body">
-          {snapshot.domains.length === 0 && <div className="callout warning">请先到“字典设置”新增至少一个领域。</div>}
+          {domainL0s.length === 0 && <div className="callout warning">请先到“字典设置”新增领域 L0。</div>}
+          {domainL0s.length > 0 && !allDomainL1s.some((item) => item.parentId) && <div className="callout warning">请先到“字典设置”为领域 L1 指定所属 L0。</div>}
+          {form.domainL0Id && domainL1s.length === 0 && <div className="callout warning">所选领域 L0 暂无关联的领域 L1，请先到字典设置完成关联。</div>}
           <Field label="需求标题" required><input autoFocus value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="例如：支持早间血压测量" /></Field>
           <Field label="需求描述">
             <textarea rows={5} maxLength={5000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="补充使用场景、用户问题、方案范围或验收要求" />
@@ -749,45 +932,48 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
             ))}</div>}
             {imageError && <small className="input-error">{imageError}</small>}
           </Field>
-          <div className="form-grid">
-            <Field label="领域" required><select value={form.domainId} onChange={(event) => setForm({ ...form, domainId: event.target.value })}><option value="">请选择</option>{snapshot.domains.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+          <div className="form-row-pair">
+            <Field label="领域 L0" required><select value={form.domainL0Id} onChange={(event) => {
+              const domainL0Id = event.target.value;
+              const firstChild = allDomainL1s.find((item) => item.parentId === domainL0Id);
+              setForm({ ...form, domainL0Id, domainId: firstChild?.id ?? "" });
+            }}><option value="">请选择领域 L0</option>{domainL0s.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+            <Field label="领域 L1" required><select value={domainL1s.some((item) => item.id === form.domainId) ? form.domainId : ""} disabled={!form.domainL0Id || domainL1s.length === 0} onChange={(event) => setForm({ ...form, domainId: event.target.value })}><option value="">{form.domainL0Id ? "请选择该 L0 下的领域 L1" : "请先选择领域 L0"}</option>{domainL1s.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+          </div>
+          <div className="form-row-pair">
             <Field label="来源" required><select value={form.source} onChange={(event) => {
               const source = event.target.value as RequirementSource;
-              setForm({ ...form, source, overseasRegions: source === "海外研究" ? form.overseasRegions : [] });
-              setRegionError("");
+              setForm({ ...form, source, overseasRegions: [] });
             }}>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select></Field>
-            <Field label="分类" required><div className="segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "体验优化" ? form.productIds : form.productIds })}>{item}</button>)}</div></Field>
             <Field label="上线年月" required><input type="month" value={form.targetMonth} onChange={(event) => setForm({ ...form, targetMonth: event.target.value })} /></Field>
           </div>
-          {form.source === "海外研究" && (
-            <Field label="海外研究区域" required>
-              <div className="check-grid overseas-region-grid">{OVERSEAS_REGIONS.map((region) => <label key={region}><input type="checkbox" checked={form.overseasRegions.includes(region)} onChange={(event) => {
-                setForm({ ...form, overseasRegions: event.target.checked ? [...form.overseasRegions, region] : form.overseasRegions.filter((item) => item !== region) });
-                setRegionError("");
-              }} /><span>{region}</span></label>)}</div>
-              {regionError && <small className="input-error">{regionError}</small>}
-            </Field>
-          )}
-          <Field label={`匹配产品${form.category === "产品专属" ? "（必选）" : "（可选）"}`} required={form.category === "产品专属"}>
-            {snapshot.products.length ? <div className="check-grid">{snapshot.products.filter((item) => item.active).map((item) => <label key={item.id}><input type="checkbox" checked={form.productIds.includes(item.id)} onChange={(event) => setForm({ ...form, productIds: event.target.checked ? [...form.productIds, item.id] : form.productIds.filter((id) => id !== item.id) })} /><span>{item.name}</span></label>)}</div> : <div className="inline-empty">暂无产品，可先保存体验优化需求，或前往字典设置新增产品。</div>}
-          </Field>
+          <div className="form-row-pair category-product-row">
+            <Field label="分类" required><div className="segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "体验优化" ? [] : form.productIds.slice(0, 1) })}>{item}</button>)}</div></Field>
+            {form.category === "产品专属"
+              ? <Field label="匹配产品" required>
+                {snapshot.products.some((item) => item.active)
+                  ? <select className="product-wheel-select" value={form.productIds[0] ?? ""} onChange={(event) => setForm({ ...form, productIds: event.target.value ? [event.target.value] : [] })}><option value="">请选择一个产品</option>{snapshot.products.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+                  : <div className="inline-empty">暂无产品，请先到字典设置新增产品。</div>}
+              </Field>
+              : <div className="product-not-required"><span>匹配产品</span><b>体验优化无需选择产品</b></div>}
+          </div>
           <div className="workload-section">
             <div className="workload-section-head"><span>工作量（人月） <b>*</b></span><strong>合计 {draftTotal === null ? "—" : formatNumber(draftTotal)} 人月</strong></div>
             {Boolean(value?.unallocatedWorkloadPm) && <div className="legacy-workload-warning">这条历史需求有 {formatNumber(value?.unallocatedWorkloadPm ?? 0)} 人月尚未拆分，请分配到下方三项后保存。</div>}
             <div className="workload-input-grid">
-              <label><span>设备工作量</span><input type="text" inputMode="decimal" value={workloadTexts.device} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="0" onChange={(event) => updateWorkloadText("device", event.target.value)} /></label>
-              <label><span>App 工作量</span><input type="text" inputMode="decimal" value={workloadTexts.app} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="0" onChange={(event) => updateWorkloadText("app", event.target.value)} /></label>
-              <label><span>云侧工作量</span><input type="text" inputMode="decimal" value={workloadTexts.cloud} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="0" onChange={(event) => updateWorkloadText("cloud", event.target.value)} /></label>
+              <label><span>设备工作量 <b>*</b></span><input required type="text" inputMode="decimal" value={workloadTexts.device} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="请输入，暂无填 0" onChange={(event) => updateWorkloadText("device", event.target.value)} /></label>
+              <label><span>App 工作量 <b>*</b></span><input required type="text" inputMode="decimal" value={workloadTexts.app} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="请输入，暂无填 0" onChange={(event) => updateWorkloadText("app", event.target.value)} /></label>
+              <label><span>云侧工作量 <b>*</b></span><input required type="text" inputMode="decimal" value={workloadTexts.cloud} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="请输入，暂无填 0" onChange={(event) => updateWorkloadText("cloud", event.target.value)} /></label>
             </div>
             {workloadError
               ? <small className="input-error">{workloadError}</small>
-              : <small>每项可填整数、小数或 0，系统自动合计；工作量不展示在路标轴卡片上。</small>}
+              : <small>三项均为必填；暂无投入可填 0，系统自动合计，工作量不展示在路标轴卡片上。</small>}
           </div>
-          <div className="merge-hint"><b>自动合并规则</b><span>同领域、同来源、同上线年月的需求会合并为一张路标卡片；分类可以不同。</span></div>
+          <div className="merge-hint"><b>自动合并规则</b><span>同领域 L1、同来源、同上线年月的需求会合并为一张路标卡片；路标卡片只显示领域 L1。</span></div>
         </div>
         <div className="drawer-footer">
           {!value && <label className="keep-open"><input type="checkbox" checked={keepOpen} onChange={(event) => setKeepOpen(event.target.checked)} /> 保存后继续录入</label>}
-          <div><button type="button" className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={saving || snapshot.domains.length === 0}>{saving ? "保存中…" : "保存需求"}</button></div>
+          <div><button type="button" className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={saving || !form.domainL0Id || !domainL1s.some((item) => item.id === form.domainId)}>{saving ? "保存中…" : "保存需求"}</button></div>
         </div>
       </form>
     </div>
@@ -805,7 +991,6 @@ function GroupDrawer({ group, onClose, onSave }: { group: RoadmapGroup; onClose:
         <div className="form-body">
           <Field label="路标卡片标题" required><input value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
           <Field label="详情 / PPT 摘要"><textarea rows={3} value={summary} onChange={(event) => setSummary(event.target.value)} /><small>该摘要保留给详情页与未来 PPT，不在路标轴卡片上显示。</small></Field>
-          {group.overseasRegions.length > 0 && <div className="detail-regions"><span>海外区域</span>{group.overseasRegions.map((region) => <b key={region}>{region}</b>)}</div>}
           {group.productNames.length > 0 && <div className="detail-products"><span>涉及产品</span>{group.productNames.map((name) => <b key={name}>{name}</b>)}</div>}
           <div className="detail-list">
             <div className="detail-list-head"><h3>领域全量需求</h3><span>工作量合计 {formatNumber(group.totalWorkloadPm)} PM</span></div>
@@ -813,7 +998,7 @@ function GroupDrawer({ group, onClose, onSave }: { group: RoadmapGroup; onClose:
               <details className="requirement-detail" key={item.id}>
                 <summary>
                   <em>{String(index + 1).padStart(2, "0")}</em>
-                  <div><strong>{item.title}</strong><span>{item.category}{item.overseasRegions.length ? ` · ${item.overseasRegions.join(" / ")}` : ""}{item.productIds.length ? ` · ${group.requirementProductNames[item.id].join(" / ")}` : ""}</span></div>
+                  <div><strong>{item.title}</strong><span>{item.category}{item.productIds.length ? ` · ${group.requirementProductNames[item.id].join(" / ")}` : ""}</span></div>
                   <b>{formatNumber(item.workloadPm)} PM</b>
                   <i>查看详情</i>
                 </summary>
@@ -833,29 +1018,44 @@ function GroupDrawer({ group, onClose, onSave }: { group: RoadmapGroup; onClose:
   );
 }
 
-function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDeleteDomain, onDeleteProduct }: { domains: DictionaryItem[]; products: DictionaryItem[]; onSaveDomain: (input: { name: string }) => Promise<void>; onSaveProduct: (input: { name: string }) => Promise<void>; onDeleteDomain: (id: string) => Promise<void>; onDeleteProduct: (id: string) => Promise<void> }) {
+function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDeleteDomain, onDeleteProduct }: { domains: DictionaryItem[]; products: DictionaryItem[]; onSaveDomain: (input: SaveDictionaryInput) => Promise<void>; onSaveProduct: (input: SaveDictionaryInput) => Promise<void>; onDeleteDomain: (id: string) => Promise<void>; onDeleteProduct: (id: string) => Promise<void> }) {
+  const domainL0s = domains.filter((item) => item.level === "L0");
+  const domainL1s = domains.filter((item) => (item.level ?? "L1") === "L1");
   return (
     <div className="dictionary-grid">
-      <DictionaryPanel title="领域字典" subtitle="用于合并相同领域需求，例如血压、睡眠、跑步" items={domains} onSave={onSaveDomain} onDelete={onDeleteDomain} />
-      <DictionaryPanel title="产品字典" subtitle="产品专属需求必须选择至少一个产品" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} />
+      <DictionaryPanel title="领域 L0 字典" subtitle="上游领域；一个 L0 可以关联多个 L1" items={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L0", parentId: undefined })} onDelete={onDeleteDomain} />
+      <DictionaryPanel title="领域 L1 字典" subtitle="新增或调整 L1 时必须指定所属 L0；路标仅显示 L1" items={domainL1s} parentOptions={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L1" })} onDelete={onDeleteDomain} />
+      <DictionaryPanel title="产品字典" subtitle="产品专属需求必须且只能选择一个产品" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} />
     </div>
   );
 }
 
-function DictionaryPanel({ title, subtitle, items, onSave, onDelete }: { title: string; subtitle: string; items: DictionaryItem[]; onSave: (input: { name: string }) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
+function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDelete }: { title: string; subtitle: string; items: DictionaryItem[]; parentOptions?: DictionaryItem[]; onSave: (input: SaveDictionaryInput) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [name, setName] = useState("");
+  const [parentId, setParentId] = useState(parentOptions?.[0]?.id ?? "");
+  useEffect(() => {
+    if (parentOptions && !parentOptions.some((item) => item.id === parentId)) setParentId(parentOptions[0]?.id ?? "");
+  }, [parentId, parentOptions]);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim()) return;
-    await onSave({ name });
+    if (!name.trim() || (parentOptions && !parentId)) return;
+    await onSave({ name, ...(parentOptions ? { parentId } : {}) });
     setName("");
   }
   return (
     <div className="panel dictionary-panel">
       <PanelTitle title={title} subtitle={subtitle} />
-      <form className="dictionary-add" onSubmit={submit}><input value={name} onChange={(event) => setName(event.target.value)} placeholder={`新增${title.replace("字典", "")}`} /><button className="button primary">添加</button></form>
+      <form className={`dictionary-add ${parentOptions ? "with-parent" : ""}`} onSubmit={submit}>
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder={`新增${title.replace("字典", "")}`} />
+        {parentOptions && <select aria-label="所属领域 L0" value={parentId} onChange={(event) => setParentId(event.target.value)}><option value="" disabled>选择所属 L0</option>{parentOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
+        <button className="button primary" disabled={Boolean(parentOptions && !parentId)}>添加</button>
+      </form>
       <div className="dictionary-list">
-        {items.map((item, index) => <div key={item.id}><span><em>{String(index + 1).padStart(2, "0")}</em><b>{item.name}</b></span><button className="danger-text" onClick={() => window.confirm(`确定删除“${item.name}”？`) && onDelete(item.id)}>删除</button></div>)}
+        {items.map((item, index) => <div key={item.id} className={parentOptions ? "dictionary-item hierarchical" : "dictionary-item"}>
+          <span><em>{String(index + 1).padStart(2, "0")}</em><b>{item.name}</b></span>
+          {parentOptions && <select aria-label={`${item.name}所属领域 L0`} value={item.parentId ?? ""} onChange={(event) => void onSave({ id: item.id, name: item.name, sortOrder: item.sortOrder, active: item.active, parentId: event.target.value })}><option value="" disabled>未关联 L0</option>{parentOptions.map((parent) => <option key={parent.id} value={parent.id}>{parent.name}</option>)}</select>}
+          <button className="danger-text" onClick={() => window.confirm(`确定删除“${item.name}”？`) && onDelete(item.id)}>删除</button>
+        </div>)}
         {!items.length && <Empty title="字典为空" body="添加后即可在需求表单中选择。" />}
       </div>
     </div>
@@ -935,26 +1135,66 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
 
   return (
     <>
-      <div className="template-layout">
-        <div className="panel template-main">
-          <div className="template-icon">P</div>
-          <span className="eyebrow">OFFLINE POWERPOINT</span>
-          <h2>需求路标模板 · 生产预览版 v0.3</h2>
-          <p>按当前选择的半年区间，将汇总、运动/健康/海外研究三类路标、需求描述和本地图片自动生成可编辑 PowerPoint；共创版继续用于一起确认版式。</p>
-          <div className="template-meta"><span>导出区间</span><b>{shortHalf(start)} – {shortHalf(end)}</b><span>状态</span><b className="ready">可导出 / 待确认</b><span>处理方式</span><b>全程本地</b></div>
-          <div className="template-actions"><button className="button primary" onClick={exportPpt} disabled={exporting}>{exporting ? "正在生成…" : "生成需求路标 PPT"}</button><button className="button dark" onClick={onExportDraft}>导出 6 页共创版</button></div>
-          <div className="template-contract"><h3>固定输出页面</h3><div>{["汇总分析页", "运动三泳道路标页", "健康三泳道路标页", "海外研究区域路标页", "领域全量详情页"].map((item, index) => <span key={item}><b>0{index + 1}</b>{item}</span>)}</div></div>
+      <div className="export-page">
+        <section className="panel export-overview">
+          <div className="export-overview-copy">
+            <span className="eyebrow">OFFLINE EXPORT CENTER</span>
+            <h2>输出与数据交接</h2>
+            <p>根据使用场景选择导出方式，所有文件均在本机生成和处理。</p>
+          </div>
+          <dl className="export-overview-stats">
+            <div><dt>需求</dt><dd>{snapshot.requirements.length} 条</dd></div>
+            <div><dt>原始图片</dt><dd>{imageCount} 张</dd></div>
+            <div><dt>领域 / 产品</dt><dd>{snapshot.domains.length} / {snapshot.products.length}</dd></div>
+            <div><dt>数据位置</dt><dd>仅本机</dd></div>
+          </dl>
+        </section>
+
+        <div className="export-type-grid">
+          <section className="panel export-type-card roadmap-export-card">
+            <div className="export-type-head"><span className="export-type-icon">P</span><span className="eyebrow">POWERPOINT</span></div>
+            <h3>需求路标</h3>
+            <p>按当前半年区间生成可编辑 PowerPoint，包含汇总、七类路标、需求描述和本地图片。</p>
+            <dl className="export-type-meta">
+              <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
+              <div><dt>处理方式</dt><dd>全程本地</dd></div>
+            </dl>
+            <div className="export-card-actions">
+              <button className="button primary" onClick={exportPpt} disabled={exporting}>{exporting ? "正在生成…" : "生成需求路标 PPT"}</button>
+              <button className="button ghost" onClick={onExportDraft}>导出 6 页共创版</button>
+            </div>
+          </section>
+
+          <section className="panel export-type-card excel-export-card">
+            <div className="export-type-head"><span className="export-type-icon">X</span><span className="eyebrow">EXCEL COLLABORATION</span></div>
+            <h3>Excel 表格</h3>
+            <p>导出全部结构化数据用于多人协作编辑，定稿后可检查并合并导入本机。</p>
+            <dl className="export-type-meta">
+              <div><dt>协作范围</dt><dd>全部需求数据</dd></div>
+              <div><dt>图片</dt><dd>不包含</dd></div>
+            </dl>
+            <div className="export-card-actions">
+              <button className="button primary" onClick={onExportWorkbook}>导出协作 Excel</button>
+              <button className="button ghost" onClick={inspectWorkbook} disabled={workbookInspecting}>{workbookInspecting ? "检查中…" : "导入协作 Excel"}</button>
+            </div>
+          </section>
+
+          <section className="panel export-type-card package-export-card">
+            <div className="export-type-head"><span className="export-type-icon">R</span><span className="eyebrow">ROADMAP PACKAGE</span></div>
+            <h3>完整需求包</h3>
+            <p>用于跨电脑完整交接，包含需求描述、原始图片、字典、产品匹配和路标卡片编辑。</p>
+            <dl className="export-type-meta">
+              <div><dt>文件格式</dt><dd>.roadmap</dd></div>
+              <div><dt>导出范围</dt><dd>完整工作区</dd></div>
+            </dl>
+            <div className="export-card-actions">
+              <button className="button primary" onClick={onExportWorkspace}>导出完整需求包</button>
+              <button className="button ghost" onClick={inspectPackage} disabled={inspecting}>{inspecting ? "检查中…" : "导入完整需求包"}</button>
+            </div>
+          </section>
         </div>
-        <div className="panel export-side transfer-side">
-          <PanelTitle title="数据协作与交接" subtitle="Excel 协作编辑，.roadmap 无损备份" />
-          <dl><div><dt>需求</dt><dd>{snapshot.requirements.length} 条</dd></div><div><dt>原始图片</dt><dd>{imageCount} 张</dd></div><div><dt>领域 / 产品</dt><dd>{snapshot.domains.length} / {snapshot.products.length}</dd></div><div><dt>路标卡片编辑</dt><dd>{snapshot.groupOverrides.length} 项</dd></div></dl>
-          <div className="callout workbook-callout"><b>企业协作 Excel</b><span>导出全部结构化数据，上传到企业已有在线表格共同编辑；下载定稿后检查并合并导入。Excel 不携带图片。</span></div>
-          <div className="transfer-actions"><button className="button primary" onClick={onExportWorkbook}>导出协作 Excel</button><button className="button ghost" onClick={inspectWorkbook} disabled={workbookInspecting}>{workbookInspecting ? "检查中…" : "导入协作 Excel"}</button></div>
-          <div className="transfer-divider" />
-          <div className="callout"><b>.roadmap 完整工作区</b><span>导出不受当前筛选和半年区间影响；包含需求描述、图片、字典、产品匹配和卡片编辑。</span></div>
-          <div className="transfer-actions"><button className="button primary" onClick={onExportWorkspace}>导出完整数据包</button><button className="button ghost" onClick={inspectPackage} disabled={inspecting}>{inspecting ? "检查中…" : "导入数据包"}</button></div>
-          <small className="transfer-note">Excel 负责多人协作；.roadmap 负责跨电脑完整交接原始图片，并兼容旧版 JSON 备份。</small>
-        </div>
+
+        <p className="export-footnote">Excel 适合多人协作编辑；完整需求包适合跨电脑无损交接，并兼容旧版 JSON 备份。</p>
       </div>
       {workbookPreview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !workbookApplying && setWorkbookPreview(null)}>
         <div className="import-dialog workbook-import-dialog panel" role="dialog" aria-modal="true" aria-labelledby="workbook-import-title">
@@ -988,8 +1228,8 @@ function Metric({ label, value, suffix, accent = "plain" }: { label: string; val
   return <div className={`metric ${accent}`}><span>{label}</span><div><strong>{value}</strong><small>{suffix}</small></div></div>;
 }
 
-function PanelTitle({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
-  return <div className="panel-title"><div><h3>{title}</h3><p>{subtitle}</p></div>{action ?? <span>•••</span>}</div>;
+function PanelTitle({ title, subtitle, action }: { title: string; subtitle?: string; action?: ReactNode }) {
+  return <div className="panel-title"><div><h3>{title}</h3>{subtitle && <p>{subtitle}</p>}</div>{action ?? <span>•••</span>}</div>;
 }
 
 function SourceBadge({ source }: { source: RequirementSource }) {
@@ -1005,11 +1245,11 @@ function Empty({ title, body }: { title: string; body: string }) {
 }
 
 function pageTitle(page: Page): string {
-  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标预览", dictionaries: "字典设置", template: "PPT 输出" })[page];
+  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标", dictionaries: "字典设置", template: "导出中心" })[page];
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与体验优化趋势", roadmap: "运动、健康、海外研究三路标，按层级或区域展开月份", dictionaries: "维护领域与产品的统一口径", template: "共同确认内置模板，后续按规范匹配需求内容输出" })[page];
+  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与体验优化趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", dictionaries: "维护领域与产品的统一口径", template: "导出需求路标、协作表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {
@@ -1034,6 +1274,11 @@ function formatMonth(value: string): string {
 function formatDateTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function formatReleaseDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? `${match[1]}年${Number(match[2])}月${Number(match[3])}日` : value;
 }
 
 function shortHalf(value: string): string {

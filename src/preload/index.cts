@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   ElectronApi,
   SaveDictionaryInput,
@@ -9,7 +9,16 @@ import type {
 } from "../shared/types.js";
 
 const api: ElectronApi = {
+  getAppInfo: () => ipcRenderer.invoke("app:info"),
+  openUpdatePage: () => ipcRenderer.invoke("app:update:open"),
   getSnapshot: () => ipcRenderer.invoke("snapshot:get"),
+  getWindowFullscreen: () => ipcRenderer.invoke("window:fullscreen:get"),
+  setWindowFullscreen: (enabled: boolean) => ipcRenderer.invoke("window:fullscreen:set", enabled),
+  onWindowFullscreenChange: (listener: (enabled: boolean) => void) => {
+    const subscription = (_event: IpcRendererEvent, enabled: boolean) => listener(enabled);
+    ipcRenderer.on("window:fullscreen:changed", subscription);
+    return () => ipcRenderer.removeListener("window:fullscreen:changed", subscription);
+  },
   saveRequirement: (input: SaveRequirementInput) => ipcRenderer.invoke("requirements:save", input),
   deleteRequirement: (id: string) => ipcRenderer.invoke("requirements:delete", id),
   saveDomain: (input: SaveDictionaryInput) => ipcRenderer.invoke("domains:save", input),

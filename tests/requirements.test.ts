@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterRequirements, listTargetMonths, normalizeRequirement } from "../src/shared/requirements";
+import { filterRequirements, listTargetMonths, normalizeLegacyGroupOverride, normalizeRequirement } from "../src/shared/requirements";
 import type { Requirement } from "../src/shared/types";
 
 describe("历史需求兼容", () => {
@@ -49,6 +49,64 @@ describe("历史需求兼容", () => {
     });
     expect(normalized.workloadPm).toBe(1.75);
   });
+
+  it("把旧版海外研究来源迁移为行业并移除旧区域", () => {
+    const normalized = normalizeRequirement({
+      id: "legacy-overseas",
+      title: "旧版海外研究需求",
+      description: "",
+      images: [],
+      domainId: "d1",
+      source: "海外研究",
+      overseasRegions: ["欧州"],
+      category: "体验优化",
+      targetMonth: "2027-04",
+      productIds: [],
+      workloadPm: 1,
+      createdAt: "2026-08-19",
+      updatedAt: "2026-08-19",
+    });
+    expect(normalized.source).toBe("行业");
+    expect(normalized.overseasRegions).toEqual([]);
+  });
+
+  it("把旧版小写 ai 来源迁移为大写 AI", () => {
+    const normalized = normalizeRequirement({
+      id: "legacy-ai",
+      title: "AI 健康助手",
+      description: "",
+      images: [],
+      domainId: "d1",
+      source: "ai",
+      overseasRegions: [],
+      category: "体验优化",
+      targetMonth: "2027-05",
+      productIds: [],
+      workloadPm: 1,
+      createdAt: "2026-08-19",
+      updatedAt: "2026-08-19",
+    });
+    expect(normalized.source).toBe("AI");
+    expect(normalizeLegacyGroupOverride({
+      groupKey: "d1::ai::2027-05",
+      cardTitle: "AI 健康助手",
+      cardSummary: "",
+      updatedAt: "2026-08-19",
+    }).groupKey).toBe("d1::AI::2027-05");
+  });
+
+  it("把旧版产品匹配收敛为产品专属单选，体验优化不保留产品", () => {
+    const exclusive = normalizeRequirement({
+      ...requirement("legacy-exclusive", "旧多产品", "d1", "健康基础", "产品专属", "2027-05"),
+      productIds: ["p1", "p2", "p1"],
+    });
+    const experience = normalizeRequirement({
+      ...requirement("legacy-experience", "旧体验优化", "d1", "健康基础", "体验优化", "2027-05"),
+      productIds: ["p1"],
+    });
+    expect(exclusive.productIds).toEqual(["p1"]);
+    expect(experience.productIds).toEqual([]);
+  });
 });
 
 describe("需求池筛选", () => {
@@ -79,6 +137,7 @@ function requirement(id: string, title: string, domainId: string, source: Requir
     title,
     description: "",
     images: [],
+    domainL0Id: "l0",
     domainId,
     source,
     overseasRegions: [],

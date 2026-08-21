@@ -1,5 +1,5 @@
 appId: com.local.healthroadmap
-productName: 需求路标工作台
+productName: 解决方案需求管理
 compression: maximum
 directories:
   output: release

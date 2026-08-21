@@ -5,20 +5,27 @@ import type { Requirement, WorkspaceData } from "../src/shared/types";
 describe("工作区合并", () => {
   it("按名称合并字典并重映射需求和卡片键", () => {
     const local = data({
-      domains: [{ id: "local-sleep", name: "睡眠", sortOrder: 0, active: true }],
+      domains: [
+        { id: "local-health", name: "健康", sortOrder: 0, active: true, level: "L0" },
+        { id: "local-sleep", name: "睡眠", sortOrder: 0, active: true, level: "L1", parentId: "local-health" },
+      ],
       products: [{ id: "local-watch", name: "手表", sortOrder: 0, active: true }],
     });
     const incoming = data({
-      domains: [{ id: "incoming-sleep", name: " 睡眠 ", sortOrder: 0, active: true }],
+      domains: [
+        { id: "incoming-health", name: " 健康 ", sortOrder: 0, active: true, level: "L0" },
+        { id: "incoming-sleep", name: " 睡眠 ", sortOrder: 0, active: true, level: "L1", parentId: "incoming-health" },
+      ],
       products: [{ id: "incoming-watch", name: "手表", sortOrder: 0, active: true }],
-      requirements: [requirement("r1", "incoming-sleep", ["incoming-watch"], "2026-08-20")],
+      requirements: [{ ...requirement("r1", "incoming-sleep", ["incoming-watch"], "2026-08-20"), domainL0Id: "incoming-health" }],
       groupOverrides: [{ groupKey: "incoming-sleep::健康基础::2027-03", cardTitle: "睡眠", cardSummary: "摘要", updatedAt: "2026-08-20" }],
     });
 
     const merged = mergeWorkspaceData(local, incoming);
-    expect(merged.domains).toHaveLength(1);
+    expect(merged.domains).toHaveLength(2);
     expect(merged.products).toHaveLength(1);
-    expect(merged.requirements[0]).toMatchObject({ domainId: "local-sleep", productIds: ["local-watch"] });
+    expect(merged.domains.find((item) => item.id === "local-sleep")?.parentId).toBe("local-health");
+    expect(merged.requirements[0]).toMatchObject({ domainL0Id: "local-health", domainId: "local-sleep", productIds: ["local-watch"] });
     expect(merged.groupOverrides[0].groupKey).toBe("local-sleep::健康基础::2027-03");
   });
 
@@ -38,7 +45,7 @@ describe("工作区合并", () => {
 function data(overrides: Partial<WorkspaceData> = {}): WorkspaceData {
   return {
     requirements: [],
-    domains: [{ id: "d1", name: "默认领域", sortOrder: 0, active: true }],
+    domains: [{ id: "d1", name: "默认领域", sortOrder: 0, active: true, level: "L1" }],
     products: [],
     groupOverrides: [],
     ...overrides,
@@ -51,6 +58,7 @@ function requirement(id: string, domainId: string, productIds: string[], updated
     title,
     description: "",
     images: [],
+    domainL0Id: "",
     domainId,
     source: "健康基础",
     overseasRegions: [],

@@ -24,8 +24,9 @@ const baseRequirements: Requirement[] = [
 const snapshot: AppSnapshot = {
   requirements: baseRequirements,
   domains: [
-    { id: "d1", name: "血压", active: true, sortOrder: 0 },
-    { id: "d2", name: "跑步", active: true, sortOrder: 1 },
+    { id: "l0", name: "健康管理", active: true, sortOrder: 0, level: "L0" },
+    { id: "d1", name: "血压", active: true, sortOrder: 0, level: "L1" },
+    { id: "d2", name: "跑步", active: true, sortOrder: 1, level: "L1" },
   ],
   products: [
     { id: "p1", name: "产品A", active: true, sortOrder: 0 },
@@ -63,6 +64,26 @@ describe("领域合并", () => {
     const june = groupKeyFor(baseRequirements[2]);
     expect(may).not.toBe(june);
   });
+
+  it("路标分组和卡片标题只使用领域L1", () => {
+    const items = [
+      { ...baseRequirements[0], id: "l0-a", domainL0Id: "l0-a" },
+      { ...baseRequirements[1], id: "l0-b", domainL0Id: "l0-b" },
+    ];
+    const [group] = buildRoadmapGroups({
+      ...snapshot,
+      requirements: items,
+      domains: [
+        ...snapshot.domains,
+        { id: "l0-a", name: "生理健康", active: true, sortOrder: 2, level: "L0" },
+        { id: "l0-b", name: "慢病管理", active: true, sortOrder: 3, level: "L0" },
+      ],
+      groupOverrides: [],
+    }, "2026H1", "2026H1");
+    expect(group.requirements).toHaveLength(2);
+    expect(group.domainName).toBe("血压");
+    expect(group.cardTitle).toBe("血压");
+  });
 });
 
 describe("工作量汇总", () => {
@@ -70,6 +91,7 @@ describe("工作量汇总", () => {
     const summaries = buildHalfYearSummaries(baseRequirements, "2026H1", "2026H2");
     expect(summaries[0]).toMatchObject({
       halfYear: "2026H1",
+      byTrack: { 运动: 0, 健康: 6, 行业: 0, 全场景: 0, health平台: 0, AI: 0, 医疗送检: 0 },
       healthWorkload: 6,
       sportsWorkload: 0,
       experienceWorkload: 1.5,
@@ -113,24 +135,22 @@ describe("工作量汇总", () => {
 describe("路标首屏排序", () => {
   it("只有健康需求时优先展示健康路标", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H1");
-    expect(roadmapTrackOrder(groups)).toEqual(["健康", "运动", "海外研究"]);
+    expect(roadmapTrackOrder(groups)).toEqual(["健康", "运动", "行业", "全场景", "health平台", "AI", "医疗送检"]);
   });
 
   it("存在运动需求时保持运动路标在前", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
-    expect(roadmapTrackOrder(groups)).toEqual(["运动", "健康", "海外研究"]);
+    expect(roadmapTrackOrder(groups)).toEqual(["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"]);
   });
 
-  it("海外研究使用区域泳道并支持一张卡片进入多个区域", () => {
-    const overseas = {
-      ...requirement("overseas", "海外睡眠研究", "d1", "海外研究", "体验优化", "2026-05", [], 1),
-      overseasRegions: ["欧州", "欧亚"] as Requirement["overseasRegions"],
-    };
-    const [group] = buildRoadmapGroups({ ...snapshot, requirements: [overseas] }, "2026H1", "2026H1");
-    expect(group).toMatchObject({ track: "海外研究", level: null, overseasRegions: ["欧州", "欧亚"] });
-    expect(roadmapLanesForTrack("海外研究")).toEqual(["欧州", "亚非拉", "欧亚"]);
-    expect(groupMatchesRoadmapLane(group, "欧州")).toBe(true);
-    expect(groupMatchesRoadmapLane(group, "亚非拉")).toBe(false);
+  it("五类新增来源各自成为单泳道路标", () => {
+    for (const source of ["行业", "全场景", "health平台", "AI", "医疗送检"] as const) {
+      const item = requirement(`r-${source}`, `${source}需求`, "d1", source, "体验优化", "2026-05", [], 1);
+      const [group] = buildRoadmapGroups({ ...snapshot, requirements: [item] }, "2026H1", "2026H1");
+      expect(group).toMatchObject({ track: source, level: null });
+      expect(roadmapLanesForTrack(source)).toEqual(["需求"]);
+      expect(groupMatchesRoadmapLane(group, "需求")).toBe(true);
+    }
   });
 });
 
@@ -177,5 +197,5 @@ function requirement(
   workloadPm: number,
   breakdown: Partial<{ device: number; app: number; cloud: number }> = { app: workloadPm },
 ): Requirement {
-  return { id, title, description: "", images: [], domainId, source, overseasRegions: [], category, targetMonth, productIds, deviceWorkloadPm: breakdown.device ?? 0, appWorkloadPm: breakdown.app ?? 0, cloudWorkloadPm: breakdown.cloud ?? 0, unallocatedWorkloadPm: 0, workloadPm, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
+  return { id, title, description: "", images: [], domainL0Id: "l0", domainId, source, overseasRegions: [], category, targetMonth, productIds, deviceWorkloadPm: breakdown.device ?? 0, appWorkloadPm: breakdown.app ?? 0, cloudWorkloadPm: breakdown.cloud ?? 0, unallocatedWorkloadPm: 0, workloadPm, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
 }

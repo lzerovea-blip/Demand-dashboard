@@ -23,6 +23,7 @@ function workspace(overrides: Partial<WorkspaceData> = {}): WorkspaceData {
       title: "社交时差",
       description: "评估周末和周内的睡眠规律性",
       images: [image],
+      domainL0Id: "l0",
       domainId: "d1",
       source: "健康基础",
       overseasRegions: [],
@@ -37,7 +38,10 @@ function workspace(overrides: Partial<WorkspaceData> = {}): WorkspaceData {
       createdAt: "2026-08-19T00:00:00.000Z",
       updatedAt: "2026-08-20T00:00:00.000Z",
     }],
-    domains: [{ id: "d1", name: "睡眠", sortOrder: 0, active: true }],
+    domains: [
+      { id: "l0", name: "健康", sortOrder: 0, active: true, level: "L0" },
+      { id: "d1", name: "睡眠", sortOrder: 0, active: true, level: "L1", parentId: "l0" },
+    ],
     products: [{ id: "p1", name: "手表", sortOrder: 0, active: true }],
     groupOverrides: [{ groupKey: "d1::健康基础::2027-03", cardTitle: "睡眠", cardSummary: "摘要", updatedAt: "2026-08-20T00:00:00.000Z" }],
     ...overrides,
@@ -66,9 +70,12 @@ describe("企业协作 Excel", () => {
     const bytes = await createWorkspaceWorkbook(data, "0.1.0", "2026-08-20T08:00:00.000Z");
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(bytes as never);
-    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["填写说明", "领域字典", "产品字典", "需求清单", "路标卡片"]);
-    expect(workbook.getWorksheet("填写说明")?.getCell("B12").value).toBe("health-roadmap-collaboration");
-    expect(workbook.getWorksheet("填写说明")?.getCell("B13").value).toBe("v1");
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["填写说明", "领域L0字典", "领域L1字典", "产品字典", "需求清单", "路标卡片"]);
+    expect(workbook.getWorksheet("填写说明")?.getCell("B13").value).toBe("health-roadmap-collaboration");
+    expect(workbook.getWorksheet("填写说明")?.getCell("B14").value).toBe("v2");
+    expect(workbook.getWorksheet("需求清单")?.getRow(3).values).not.toContain("海外区域（用、分隔）");
+    expect(workbook.getWorksheet("需求清单")?.getRow(3).values).toEqual(expect.arrayContaining(["领域L0", "领域L1", "匹配产品（单选）"]));
+    expect(workbook.getWorksheet("领域L1字典")?.getCell("B4").value).toBe("健康");
     expect(workbook.getWorksheet("需求清单")?.getCell("N4").value).toMatchObject({ formula: "SUM(J4:M4)", result: 1 });
 
     const prepared = await inspectWorkspaceWorkbook(bytes, "协作.xlsx", data);
@@ -89,11 +96,12 @@ describe("企业协作 Excel", () => {
         操作: "保留",
         需求标题: "午睡识别",
         需求描述: "新增协作需求",
-        领域: "睡眠",
+        领域L0: "健康",
+        领域L1: "睡眠",
         来源: "健康进阶",
         分类: "体验优化",
         上线月份: new Date(2027, 4, 1, 12),
-        "匹配产品（用、分隔）": "",
+        "匹配产品（单选）": "",
         "设备工作量（人月）": 0.5,
         "App工作量（人月）": 0.5,
         "云侧工作量（人月）": 0,
@@ -142,12 +150,12 @@ describe("企业协作 Excel", () => {
     const data = workspace();
     const bytes = await createWorkspaceWorkbook(data, "0.1.0");
     const edited = await editWorkbook(bytes, (workbook) => {
-      workbook.getWorksheet("领域字典")!.getCell("A4").value = "睡眠健康";
+      workbook.getWorksheet("领域L1字典")!.getCell("A4").value = "睡眠健康";
     });
     const prepared = await inspectWorkspaceWorkbook(edited, "协作.xlsx", data);
     expect(prepared.preview.errors).toEqual([]);
     const applied = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins");
-    expect(applied.domains[0].name).toBe("睡眠健康");
+    expect(applied.domains.find((item) => item.id === "d1")?.name).toBe("睡眠健康");
     expect(applied.requirements[0].domainId).toBe("d1");
     expect(applied.groupOverrides[0].groupKey).toBe("d1::健康基础::2027-03");
   });
@@ -170,26 +178,63 @@ describe("企业协作 Excel", () => {
     expect(headerPrepared.preview.errors.some((item) => item.message.includes("缺少必要列"))).toBe(true);
   });
 
-  it("海外研究必须填写允许的海外区域并完整回导", async () => {
+  it("旧版海外研究来源回导时迁移为行业并清空旧区域", async () => {
     const data = workspace();
     const bytes = await createWorkspaceWorkbook(data, "0.1.0");
-    const missingRegion = await editWorkbook(bytes, (workbook) => {
+    const legacyWorkbook = await editWorkbook(bytes, (workbook) => {
       const sheet = workbook.getWorksheet("需求清单")!;
       sheet.getCell(4, headerColumn(sheet, "来源")).value = "海外研究";
-      sheet.getCell(4, headerColumn(sheet, "海外区域（用、分隔）")).value = "";
     });
-    const invalid = await inspectWorkspaceWorkbook(missingRegion, "海外协作.xlsx", data);
-    expect(invalid.preview.errors.some((item) => item.message.includes("至少选择一个海外区域"))).toBe(true);
-
-    const validRegion = await editWorkbook(bytes, (workbook) => {
-      const sheet = workbook.getWorksheet("需求清单")!;
-      sheet.getCell(4, headerColumn(sheet, "来源")).value = "海外研究";
-      sheet.getCell(4, headerColumn(sheet, "海外区域（用、分隔）")).value = "欧州、欧亚";
-    });
-    const prepared = await inspectWorkspaceWorkbook(validRegion, "海外协作.xlsx", data);
+    const prepared = await inspectWorkspaceWorkbook(legacyWorkbook, "旧版海外协作.xlsx", data);
     expect(prepared.preview.errors).toEqual([]);
     const applied = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins");
-    expect(applied.requirements[0].overseasRegions).toEqual(["欧州", "欧亚"]);
+    expect(applied.requirements[0].source).toBe("行业");
+    expect(applied.requirements[0].overseasRegions).toEqual([]);
+  });
+
+  it("三端工作量均为必填并允许显式填写0", async () => {
+    const data = workspace();
+    const bytes = await createWorkspaceWorkbook(data, "0.1.0");
+    const missing = await editWorkbook(bytes, (workbook) => {
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.getCell(4, headerColumn(sheet, "云侧工作量（人月）")).value = null;
+    });
+    const missingPrepared = await inspectWorkspaceWorkbook(missing, "缺少工作量.xlsx", data);
+    expect(missingPrepared.preview.errors.some((item) => item.message.includes("三端工作量均为必填"))).toBe(true);
+
+    const explicitZero = await editWorkbook(bytes, (workbook) => {
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.getCell(4, headerColumn(sheet, "云侧工作量（人月）")).value = 0;
+    });
+    expect((await inspectWorkspaceWorkbook(explicitZero, "零工作量.xlsx", data)).preview.errors).toEqual([]);
+  });
+
+  it("产品专属只能匹配一个产品，体验优化不匹配产品", async () => {
+    const data = workspace({ products: [
+      { id: "p1", name: "手表", sortOrder: 0, active: true },
+      { id: "p2", name: "手环", sortOrder: 1, active: true },
+    ] });
+    const bytes = await createWorkspaceWorkbook(data, "0.1.0");
+    const edited = await editWorkbook(bytes, (workbook) => {
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.getCell(4, headerColumn(sheet, "匹配产品（单选）")).value = "手表、手环";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "多产品.xlsx", data);
+    expect(prepared.preview.errors.some((item) => item.message.includes("只能选择一个"))).toBe(true);
+  });
+
+  it("领域L1必须关联L0，需求中的两级领域必须匹配", async () => {
+    const data = workspace({ domains: [
+      { id: "l0", name: "健康", sortOrder: 0, active: true, level: "L0" },
+      { id: "l0-2", name: "运动", sortOrder: 1, active: true, level: "L0" },
+      { id: "d1", name: "睡眠", sortOrder: 0, active: true, level: "L1", parentId: "l0" },
+    ] });
+    const bytes = await createWorkspaceWorkbook(data, "0.1.0");
+    const mismatched = await editWorkbook(bytes, (workbook) => {
+      workbook.getWorksheet("领域L1字典")!.getCell("B4").value = "运动";
+    });
+    const prepared = await inspectWorkspaceWorkbook(mismatched, "领域不匹配.xlsx", data);
+    expect(prepared.preview.errors.some((item) => item.message.includes("不属于领域 L0"))).toBe(true);
   });
 
   it("空工作区也能导出并重新检查", async () => {

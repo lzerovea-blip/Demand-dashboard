@@ -5,17 +5,24 @@ export const SOURCES = [
   "健康基础",
   "健康进阶",
   "健康高阶",
-  "海外研究",
+  "行业",
+  "全场景",
+  "health平台",
+  "AI",
+  "医疗送检",
 ] as const;
 
 export const CATEGORIES = ["体验优化", "产品专属"] as const;
+/** 仅用于兼容旧版“海外研究”数据包，当前界面不再提供该字段。 */
 export const OVERSEAS_REGIONS = ["欧州", "亚非拉", "欧亚"] as const;
+export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"] as const;
 
 export type RequirementSource = (typeof SOURCES)[number];
 export type RequirementCategory = (typeof CATEGORIES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
-export type Track = "运动" | "健康" | "海外研究";
+export type Track = (typeof ROADMAP_TRACKS)[number];
 export type Level = "基础" | "进阶" | "高阶";
+export type DomainLevel = "L0" | "L1";
 
 export const MAX_REQUIREMENT_IMAGES = 5;
 export const MAX_REQUIREMENT_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -34,6 +41,7 @@ export interface Requirement {
   title: string;
   description: string;
   images: RequirementImage[];
+  domainL0Id: string;
   domainId: string;
   source: RequirementSource;
   overseasRegions: OverseasRegion[];
@@ -54,6 +62,10 @@ export interface DictionaryItem {
   name: string;
   sortOrder: number;
   active: boolean;
+  /** 仅领域字典使用；历史领域默认按 L1 处理。 */
+  level?: DomainLevel;
+  /** 仅领域 L1 使用，指向其上游领域 L0；历史未归属的 L1 可暂时为空。 */
+  parentId?: string;
 }
 
 export interface GroupOverride {
@@ -111,6 +123,7 @@ export interface SaveRequirementInput {
   title: string;
   description: string;
   images: RequirementImage[];
+  domainL0Id: string;
   domainId: string;
   source: RequirementSource;
   overseasRegions: OverseasRegion[];
@@ -127,6 +140,8 @@ export interface SaveDictionaryInput {
   name: string;
   sortOrder?: number;
   active?: boolean;
+  level?: DomainLevel;
+  parentId?: string;
 }
 
 export interface SaveGroupOverrideInput {
@@ -200,8 +215,21 @@ export interface WorkspaceWorkbookImportPreview {
   conflicts: WorkspaceWorkbookIssue[];
 }
 
+export interface AppInfo {
+  name: string;
+  version: string;
+  releasedAt: string;
+  author: string;
+  updateUrl: string;
+}
+
 export interface ElectronApi {
+  getAppInfo(): Promise<AppInfo>;
+  openUpdatePage(): Promise<void>;
   getSnapshot(): Promise<AppSnapshot>;
+  getWindowFullscreen(): Promise<boolean>;
+  setWindowFullscreen(enabled: boolean): Promise<void>;
+  onWindowFullscreenChange(listener: (enabled: boolean) => void): () => void;
   saveRequirement(input: SaveRequirementInput): Promise<AppSnapshot>;
   deleteRequirement(id: string): Promise<AppSnapshot>;
   saveDomain(input: SaveDictionaryInput): Promise<AppSnapshot>;
