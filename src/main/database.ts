@@ -20,6 +20,7 @@ import type {
 import {
   MAX_REQUIREMENT_IMAGES,
   MAX_REQUIREMENT_IMAGE_BYTES,
+  REQUIREMENT_SCOPES,
   REQUIREMENT_IMAGE_MIME_TYPES,
 } from "../shared/types.js";
 import { LEGACY_AI_SOURCE, LEGACY_OVERSEAS_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement } from "../shared/requirements.js";
@@ -28,7 +29,7 @@ import { roundWorkload } from "../shared/workload.js";
 import { applyPreparedWorkspaceWorkbook, type PreparedWorkspaceWorkbookImport } from "./workspaceWorkbook.js";
 
 const BACKUP_SCHEMA_VERSION = 1;
-const DATABASE_SCHEMA_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 3;
 
 export class LocalDatabase {
   private sql!: SqlJsStatic;
@@ -252,6 +253,7 @@ export class LocalDatabase {
     this.migrateDomainLevels();
     this.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", [DATABASE_SCHEMA_VERSION]);
     this.migrateLegacySources();
+    this.migrateRequirementScopes();
   }
 
   private migrateDomainLevels(): void {
@@ -300,6 +302,15 @@ export class LocalDatabase {
     }
   }
 
+  private migrateRequirementScopes(): void {
+    for (const row of this.all<{ id: string; payload: string }>("SELECT id, payload FROM requirements")) {
+      const raw = JSON.parse(row.payload) as Requirement & { scope?: Requirement["scope"] };
+      const normalized = normalizeRequirement(raw);
+      if (raw.scope === normalized.scope) continue;
+      this.run("UPDATE requirements SET payload = ? WHERE id = ?", [JSON.stringify(normalized), row.id]);
+    }
+  }
+
   private run(sql: string, params: Array<string | number | null> = []): void {
     this.db.run(sql, params);
   }
@@ -333,6 +344,7 @@ function validateRequirement(input: SaveRequirementInput): void {
   if (!input.title.trim()) throw new Error("需求标题不能为空");
   if (!input.domainL0Id) throw new Error("请选择领域 L0");
   if (!input.domainId) throw new Error("请选择领域 L1");
+  if (!REQUIREMENT_SCOPES.includes(input.scope)) throw new Error("请选择有效的适用范围");
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetMonth)) throw new Error("上线年月格式应为 YYYY-MM");
   const workloadParts = [input.deviceWorkloadPm, input.appWorkloadPm, input.cloudWorkloadPm];
   if (workloadParts.some((value) => !Number.isFinite(value) || value < 0)) throw new Error("各侧工作量必须是大于或等于0的人月数");

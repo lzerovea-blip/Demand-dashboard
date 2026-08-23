@@ -6,12 +6,13 @@ describe("快速录入默认项", () => {
   it("沿用最近一次保存的来源、分类和上线年月", () => {
     const requirements = [
       requirement("旧", "运动基础", "体验优化", "2026-08", "2026-08-01"),
-      requirement("新", "健康进阶", "产品专属", "2027-03", "2026-08-02"),
+      { ...requirement("新", "健康进阶", "产品专属", "2027-03", "2026-08-02"), scope: "仅海外" as const },
     ];
     expect(latestRequirementSelections(requirements)).toEqual({
       domainL0Id: "l0",
       domainId: "d1",
       source: "健康进阶",
+      scope: "仅海外",
       overseasRegions: [],
       category: "产品专属",
       targetMonth: "2027-03",
@@ -38,6 +39,7 @@ function requirement(
     domainL0Id: "l0",
     domainId: "d1",
     source,
+    scope: "全球",
     overseasRegions: [],
     category,
     targetMonth,

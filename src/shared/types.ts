@@ -13,12 +13,14 @@ export const SOURCES = [
 ] as const;
 
 export const CATEGORIES = ["体验优化", "产品专属"] as const;
+export const REQUIREMENT_SCOPES = ["仅国内", "仅海外", "全球"] as const;
 /** 仅用于兼容旧版“海外研究”数据包，当前界面不再提供该字段。 */
 export const OVERSEAS_REGIONS = ["欧州", "亚非拉", "欧亚"] as const;
 export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"] as const;
 
 export type RequirementSource = (typeof SOURCES)[number];
 export type RequirementCategory = (typeof CATEGORIES)[number];
+export type RequirementScope = (typeof REQUIREMENT_SCOPES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
 export type Track = (typeof ROADMAP_TRACKS)[number];
 export type Level = "基础" | "进阶" | "高阶";
@@ -44,6 +46,7 @@ export interface Requirement {
   domainL0Id: string;
   domainId: string;
   source: RequirementSource;
+  scope: RequirementScope;
   overseasRegions: OverseasRegion[];
   category: RequirementCategory;
   targetMonth: string;
@@ -126,6 +129,7 @@ export interface SaveRequirementInput {
   domainL0Id: string;
   domainId: string;
   source: RequirementSource;
+  scope: RequirementScope;
   overseasRegions: OverseasRegion[];
   category: RequirementCategory;
   targetMonth: string;

@@ -228,5 +228,5 @@ function requirement(
   workloadPm: number,
   breakdown: Partial<{ device: number; app: number; cloud: number }> = { app: workloadPm },
 ): Requirement {
-  return { id, title, description: "", images: [], domainL0Id: "l0", domainId, source, overseasRegions: [], category, targetMonth, productIds, deviceWorkloadPm: breakdown.device ?? 0, appWorkloadPm: breakdown.app ?? 0, cloudWorkloadPm: breakdown.cloud ?? 0, unallocatedWorkloadPm: 0, workloadPm, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
+  return { id, title, description: "", images: [], domainL0Id: "l0", domainId, source, scope: "全球", overseasRegions: [], category, targetMonth, productIds, deviceWorkloadPm: breakdown.device ?? 0, appWorkloadPm: breakdown.app ?? 0, cloudWorkloadPm: breakdown.cloud ?? 0, unallocatedWorkloadPm: 0, workloadPm, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
 }

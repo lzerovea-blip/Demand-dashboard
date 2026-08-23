@@ -12,6 +12,7 @@ const requirements: Requirement[] = ["需求A", "需求B", "需求C"].map((title
   domainL0Id: "l0",
   domainId: "d1",
   source: "健康基础",
+  scope: "全球",
   overseasRegions: [],
   category: index === 2 ? "产品专属" : "体验优化",
   targetMonth: "2027-03",

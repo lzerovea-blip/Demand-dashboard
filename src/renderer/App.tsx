@@ -16,7 +16,7 @@ import {
   type RoadmapGroup,
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
-import { filterRequirements, listTargetMonths } from "../shared/requirements";
+import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type RoadmapRegion } from "../shared/requirements";
 import { windowsSetupDownloadUrl } from "../shared/release";
 import { splitTextIntoLines } from "../shared/text";
 import {
@@ -25,6 +25,7 @@ import {
   MAX_REQUIREMENT_IMAGES,
   ROADMAP_TRACKS,
   REQUIREMENT_IMAGE_MIME_TYPES,
+  REQUIREMENT_SCOPES,
   SOURCES,
   type AppInfo,
   type AppSnapshot,
@@ -32,6 +33,7 @@ import {
   type Requirement,
   type RequirementCategory,
   type RequirementImage,
+  type RequirementScope,
   type RequirementSource,
   type SaveDictionaryInput,
   type SaveRequirementInput,
@@ -55,7 +57,7 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.1",
+  version: "0.7.2",
   releasedAt: "2026-08-23",
   author: "林忠维",
   updateUrl: windowsSetupDownloadUrl("0.7.1"),
@@ -112,11 +114,12 @@ export default function App() {
   const [notice, setNotice] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [editor, setEditor] = useState<Requirement | "new" | null>(null);
-  const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null);
+  const [selectedGroupContext, setSelectedGroupContext] = useState<{ key: string; region: RoadmapRegion | null } | null>(null);
   const [startHalf, setStartHalf] = useState("2026H1");
   const [endHalf, setEndHalf] = useState("2027H2");
   const [windowFullscreen, setWindowFullscreenState] = useState(false);
   const [roadmapFocusRequested, setRoadmapFocusRequested] = useState(false);
+  const [roadmapRegion, setRoadmapRegion] = useState<RoadmapRegion>("domestic");
   const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
@@ -175,7 +178,24 @@ export default function App() {
     }
   }, [snapshot, startHalf, endHalf]);
 
-  const selectedGroup = groups.find((item) => item.key === selectedGroupKey) ?? null;
+  const regionalGroups = useMemo<Record<RoadmapRegion, RoadmapGroup[]>>(() => {
+    const build = (region: RoadmapRegion) => {
+      try {
+        return buildRoadmapGroups(
+          { ...snapshot, requirements: filterRequirementsForRegion(snapshot.requirements, region) },
+          startHalf,
+          endHalf,
+        );
+      } catch {
+        return [];
+      }
+    };
+    return { domestic: build("domestic"), overseas: build("overseas") };
+  }, [snapshot, startHalf, endHalf]);
+  const selectedGroup = selectedGroupContext
+    ? (selectedGroupContext.region ? regionalGroups[selectedGroupContext.region] : groups)
+      .find((item) => item.key === selectedGroupContext.key) ?? null
+    : null;
   const summaries = useMemo(() => {
     try {
       return buildHalfYearSummaries(snapshot.requirements, startHalf, endHalf);
@@ -200,11 +220,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [roadmapFocusMode]);
 
-  async function update(action: () => Promise<AppSnapshot>, success: string) {
+  async function update(action: () => Promise<AppSnapshot>, success: string): Promise<AppSnapshot> {
     try {
       setError("");
-      setSnapshot(await action());
+      const nextSnapshot = await action();
+      setSnapshot(nextSnapshot);
       setNotice(success);
+      return nextSnapshot;
     } catch (reason) {
       setError(messageOf(reason));
       throw reason;
@@ -212,6 +234,8 @@ export default function App() {
   }
 
   async function enterRoadmapFullscreen() {
+    setRoadmapRegion("domestic");
+    setSelectedGroupContext(null);
     setRoadmapFocusRequested(true);
     try {
       setError("");
@@ -293,16 +317,28 @@ export default function App() {
           )}
           {page === "summary" && <SummaryPage summaries={summaries} />}
           {page === "roadmap" && (
-            <RoadmapPage groups={groups} start={startHalf} end={endHalf} focusMode={roadmapFocusMode} onOpenGroup={(group) => setSelectedGroupKey(group.key)} />
+            <RoadmapPage
+              groups={groups}
+              focusGroups={regionalGroups[roadmapRegion]}
+              start={startHalf}
+              end={endHalf}
+              focusMode={roadmapFocusMode}
+              region={roadmapRegion}
+              onRegionChange={(region) => {
+                setRoadmapRegion(region);
+                setSelectedGroupContext(null);
+              }}
+              onOpenGroup={(group, region) => setSelectedGroupContext({ key: group.key, region })}
+            />
           )}
           {page === "dictionaries" && (
             <DictionariesPage
               domains={snapshot.domains}
               products={snapshot.products}
-              onSaveDomain={(input) => update(() => window.roadmapApi.saveDomain(input), "领域已保存")}
-              onSaveProduct={(input) => update(() => window.roadmapApi.saveProduct(input), "产品已保存")}
-              onDeleteDomain={(id) => update(() => window.roadmapApi.deleteDomain(id), "领域已删除")}
-              onDeleteProduct={(id) => update(() => window.roadmapApi.deleteProduct(id), "产品已删除")}
+              onSaveDomain={async (input) => { await update(() => window.roadmapApi.saveDomain(input), "领域已保存"); }}
+              onSaveProduct={async (input) => { await update(() => window.roadmapApi.saveProduct(input), "产品已保存"); }}
+              onDeleteDomain={async (id) => { await update(() => window.roadmapApi.deleteDomain(id), "领域已删除"); }}
+              onDeleteProduct={async (id) => { await update(() => window.roadmapApi.deleteProduct(id), "产品已删除"); }}
             />
           )}
           {page === "template" && (
@@ -387,26 +423,41 @@ export default function App() {
         </section>
       </main>
 
+      {selectedGroup && (
+        <GroupDrawer
+          key={selectedGroup.key}
+          group={selectedGroup}
+          onClose={() => setSelectedGroupContext(null)}
+          onEditRequirement={setEditor}
+          onSave={async (cardTitle, cardSummary) => {
+            await update(
+              () => window.roadmapApi.saveGroupOverride({ groupKey: selectedGroup.key, cardTitle, cardSummary }),
+              "领域卡片已更新",
+            );
+          }}
+        />
+      )}
       {editor && (
         <RequirementEditor
           value={editor === "new" ? undefined : editor}
           snapshot={snapshot}
           onClose={() => setEditor(null)}
           onSave={async (input, keepOpen) => {
-            await update(() => window.roadmapApi.saveRequirement(input), input.id ? "需求已更新" : "需求已加入路标");
+            const nextSnapshot = await update(() => window.roadmapApi.saveRequirement(input), input.id ? "需求已更新" : "需求已加入路标");
+            if (input.id && selectedGroupContext) {
+              const visibleRequirements = selectedGroupContext.region
+                ? filterRequirementsForRegion(nextSnapshot.requirements, selectedGroupContext.region)
+                : nextSnapshot.requirements;
+              const nextGroups = buildRoadmapGroups({ ...nextSnapshot, requirements: visibleRequirements }, startHalf, endHalf);
+              const nextGroup = nextGroups.find((group) => group.requirements.some((item) => item.id === input.id));
+              if (nextGroup) {
+                setSelectedGroupContext({ ...selectedGroupContext, key: nextGroup.key });
+              } else {
+                setSelectedGroupContext(null);
+                setNotice(selectedGroupContext.region ? "需求已更新，已不在当前国内/海外视图" : "需求已更新，已移出当前路标区间");
+              }
+            }
             setEditor(keepOpen ? "new" : null);
-          }}
-        />
-      )}
-      {selectedGroup && (
-        <GroupDrawer
-          group={selectedGroup}
-          onClose={() => setSelectedGroupKey(null)}
-          onSave={async (cardTitle, cardSummary) => {
-            await update(
-              () => window.roadmapApi.saveGroupOverride({ groupKey: selectedGroup.key, cardTitle, cardSummary }),
-              "领域卡片已更新",
-            );
           }}
         />
       )}
@@ -433,7 +484,7 @@ function AboutDialog({ info, onClose }: { info: AppInfo; onClose: () => void }) 
           <div><dt>发版时间</dt><dd>{formatReleaseDate(info.releasedAt)}</dd></div>
           <div><dt>制作者</dt><dd>{info.author}</dd></div>
           <div className="about-update-row">
-            <dt>当前版本 Windows EXE</dt>
+            <dt>最新公开 Windows EXE</dt>
             <dd><code>{info.updateUrl}</code><button type="button" onClick={() => void window.roadmapApi.openUpdatePage()}>下载安装版 EXE ↗</button></dd>
           </div>
         </dl>
@@ -493,7 +544,7 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
         {rows.length ? (
           <div className="table-wrap">
             <table className="requirements-table">
-              <thead><tr><th>需求标题</th><th>领域 L0</th><th>领域 L1</th><th>来源</th><th>分类</th><th>上线月份</th><th>匹配产品</th><th className="numeric">工作量</th><th /></tr></thead>
+              <thead><tr><th>需求标题</th><th>领域 L0</th><th>领域 L1</th><th>来源</th><th>适用范围</th><th>分类</th><th>上线月份</th><th>匹配产品</th><th className="numeric">工作量</th><th /></tr></thead>
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
@@ -501,6 +552,7 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
                     <td>{domains.get(item.domainL0Id) ?? "—"}</td>
                     <td>{domains.get(item.domainId) ?? "未命名"}</td>
                     <td><SourceBadge source={item.source} /></td>
+                    <td><ScopeBadge scope={item.scope} /></td>
                     <td><span className={`category ${item.category === "产品专属" ? "exclusive" : "experience"}`}>{item.category}</span></td>
                     <td>{formatMonth(item.targetMonth)}</td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
@@ -660,9 +712,19 @@ function SideExperienceChart({ summaries, side }: { summaries: HalfYearSummary[]
   );
 }
 
-function RoadmapPage({ groups, start, end, focusMode, onOpenGroup }: { groups: RoadmapGroup[]; start: string; end: string; focusMode: boolean; onOpenGroup: (group: RoadmapGroup) => void }) {
+function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onRegionChange, onOpenGroup }: {
+  groups: RoadmapGroup[];
+  focusGroups: RoadmapGroup[];
+  start: string;
+  end: string;
+  focusMode: boolean;
+  region: RoadmapRegion;
+  onRegionChange: (region: RoadmapRegion) => void;
+  onOpenGroup: (group: RoadmapGroup, region: RoadmapRegion | null) => void;
+}) {
   const tracks = roadmapTrackOrder(groups);
   const [focusIndex, setFocusIndex] = useState(0);
+  const displayedGroups = focusMode ? focusGroups : groups;
 
   useEffect(() => {
     if (focusMode) setFocusIndex(0);
@@ -683,7 +745,18 @@ function RoadmapPage({ groups, start, end, focusMode, onOpenGroup }: { groups: R
           aria-hidden={focusMode && index !== focusIndex}
           aria-labelledby={focusMode ? `roadmap-focus-tab-${index}` : undefined}
         >
-          <RoadmapBoard title={`${track}路标`} track={track} groups={groups} start={start} end={end} focusActive={focusMode && index === focusIndex} onOpenGroup={onOpenGroup} />
+          <RoadmapBoard
+            title={`${track}路标`}
+            track={track}
+            groups={displayedGroups}
+            start={start}
+            end={end}
+            focusMode={focusMode}
+            focusActive={focusMode && index === focusIndex}
+            region={region}
+            onRegionChange={onRegionChange}
+            onOpenGroup={(group) => onOpenGroup(group, focusMode ? region : null)}
+          />
         </div>
       ))}
       {focusMode && (
@@ -709,7 +782,18 @@ function RoadmapPage({ groups, start, end, focusMode, onOpenGroup }: { groups: R
   );
 }
 
-function RoadmapBoard({ title, track, groups, start, end, focusActive, onOpenGroup }: { title: string; track: Track; groups: RoadmapGroup[]; start: string; end: string; focusActive: boolean; onOpenGroup: (group: RoadmapGroup) => void }) {
+function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup }: {
+  title: string;
+  track: Track;
+  groups: RoadmapGroup[];
+  start: string;
+  end: string;
+  focusMode: boolean;
+  focusActive: boolean;
+  region: RoadmapRegion;
+  onRegionChange: (region: RoadmapRegion) => void;
+  onOpenGroup: (group: RoadmapGroup) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const halves = halfYearSequence(start, end);
   const months = halves.flatMap(monthsForHalfYear);
@@ -748,7 +832,16 @@ function RoadmapBoard({ title, track, groups, start, end, focusActive, onOpenGro
       />
       <div className="roadmap-scroll" ref={scrollRef}>
         <div className="roadmap-grid" style={{ gridTemplateColumns: `116px ${monthColumnTemplate}` }}>
-          <div className="lane-corner">来源泳道</div>
+          <div className="lane-corner">
+            {focusMode
+              ? <button
+                type="button"
+                className="roadmap-region-toggle"
+                aria-label={`当前${region === "domestic" ? "国内" : "海外"}路标，${region === "domestic" ? "切换海外" : "切换国内"}`}
+                onClick={() => onRegionChange(region === "domestic" ? "overseas" : "domestic")}
+              >{region === "domestic" ? "切换海外" : "切换国内"}</button>
+              : "来源泳道"}
+          </div>
           {halves.map((half) => <div key={half} className="half-header" style={{ gridColumn: "span 6" }}>{shortHalf(half)}</div>)}
           <div className="lane-corner muted">上线月份</div>
           {months.map((month) => <div key={month} className="month-header">{Number(month.slice(5))}月</div>)}
@@ -817,6 +910,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       domainL0Id: value.domainL0Id ?? "",
       domainId: value.domainId,
       source: value.source,
+      scope: value.scope,
       overseasRegions: value.overseasRegions ?? [],
       category: value.category,
       targetMonth: value.targetMonth,
@@ -835,6 +929,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       domainL0Id,
       domainId: linkedDomainL1s.some((item) => item.id === previous?.domainId) ? previous?.domainId ?? "" : linkedDomainL1s[0]?.id ?? "",
       source: previous?.source ?? "运动基础",
+      scope: previous?.scope ?? "全球",
       overseasRegions: previous?.overseasRegions ?? [],
       category: previous?.category ?? "体验优化",
       targetMonth: previous?.targetMonth ?? new Date().toISOString().slice(0, 7),
@@ -958,6 +1053,20 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
             }}>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select></Field>
             <Field label="上线年月" required><input type="month" value={form.targetMonth} onChange={(event) => setForm({ ...form, targetMonth: event.target.value })} /></Field>
           </div>
+          <Field label="适用范围" required>
+            <div className="segmented scope-segmented" role="radiogroup" aria-label="适用范围">
+              {REQUIREMENT_SCOPES.map((item) => (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={form.scope === item}
+                  key={item}
+                  className={form.scope === item ? "active" : ""}
+                  onClick={() => setForm({ ...form, scope: item })}
+                >{item}</button>
+              ))}
+            </div>
+          </Field>
           <div className="form-row-pair category-product-row">
             <Field label="分类" required><div className="segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "体验优化" ? [] : form.productIds.slice(0, 1) })}>{item}</button>)}</div></Field>
             {form.category === "产品专属"
@@ -991,7 +1100,12 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
   );
 }
 
-function GroupDrawer({ group, onClose, onSave }: { group: RoadmapGroup; onClose: () => void; onSave: (title: string, summary: string) => Promise<void> }) {
+function GroupDrawer({ group, onClose, onSave, onEditRequirement }: {
+  group: RoadmapGroup;
+  onClose: () => void;
+  onSave: (title: string, summary: string) => Promise<void>;
+  onEditRequirement: (requirement: Requirement) => void;
+}) {
   const [title, setTitle] = useState(group.cardTitle);
   const [summary, setSummary] = useState(group.cardSummary);
   return (
@@ -1009,11 +1123,12 @@ function GroupDrawer({ group, onClose, onSave }: { group: RoadmapGroup; onClose:
               <details className="requirement-detail" key={item.id}>
                 <summary>
                   <em>{String(index + 1).padStart(2, "0")}</em>
-                  <div><strong>{item.title}</strong><span>{item.category}{item.productIds.length ? ` · ${group.requirementProductNames[item.id].join(" / ")}` : ""}</span></div>
+                  <div><strong>{item.title}</strong><span>{item.category}{item.productIds.length ? ` · ${group.requirementProductNames[item.id].join(" / ")}` : ""}</span><ScopeBadge scope={item.scope} /></div>
                   <b>{formatNumber(item.workloadPm)} PM</b>
                   <i>查看详情</i>
                 </summary>
                 <div className="requirement-detail-body">
+                  <div className="requirement-detail-actions"><button type="button" className="button ghost" onClick={() => onEditRequirement(item)}>编辑需求</button></div>
                   <div className="detail-workload-breakdown">{workloadBreakdownItems(workloadBreakdownOf(item)).map(([label, value]) => <span key={label}><b>{label}</b>{formatNumber(value)} 人月</span>)}</div>
                   {item.description ? <p>{item.description}</p> : <p className="muted-detail">暂无需求描述</p>}
                   {item.images.length > 0 && <div className="detail-image-grid">{item.images.map((image) => <figure key={image.id}><img src={image.dataUrl} alt={image.name} /><figcaption>{image.name}</figcaption></figure>)}</div>}
@@ -1245,6 +1360,11 @@ function PanelTitle({ title, subtitle, action }: { title: string; subtitle?: str
 
 function SourceBadge({ source }: { source: RequirementSource }) {
   return <span className="source-badge"><i style={{ background: SOURCE_COLORS[source] }} />{source}</span>;
+}
+
+function ScopeBadge({ scope }: { scope: RequirementScope }) {
+  const tone = scope === "全球" ? "global" : scope === "仅国内" ? "domestic" : "overseas";
+  return <span className={`scope-badge ${tone}`}>{scope}</span>;
 }
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: ReactNode }) {

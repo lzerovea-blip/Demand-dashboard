@@ -1,12 +1,13 @@
-import type { GroupOverride, Requirement, RequirementCategory, RequirementSource } from "./types.js";
+import { REQUIREMENT_SCOPES } from "./types.js";
+import type { GroupOverride, Requirement, RequirementCategory, RequirementScope, RequirementSource } from "./types.js";
 import { roundWorkload } from "./workload.js";
 
 export const LEGACY_OVERSEAS_SOURCE = "海外研究" as const;
 export const LEGACY_AI_SOURCE = "ai" as const;
 
-type LegacyRequirement = Omit<Requirement, "source" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
+type LegacyRequirement = Omit<Requirement, "source" | "scope" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
   { source: RequirementSource | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE } &
-  Partial<Pick<Requirement, "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
+  Partial<Pick<Requirement, "scope" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
 
 export function normalizeRequirement(input: LegacyRequirement): Requirement {
   const hasBreakdown = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "unallocatedWorkloadPm"]
@@ -26,6 +27,7 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
   return {
     ...input,
     source,
+    scope: normalizeRequirementScope(input.scope),
     description: typeof input.description === "string" ? input.description : "",
     images: Array.isArray(input.images) ? input.images : [],
     domainL0Id: typeof input.domainL0Id === "string" ? input.domainL0Id : "",
@@ -37,6 +39,23 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
     unallocatedWorkloadPm,
     workloadPm: roundWorkload(categorized + unallocatedWorkloadPm),
   };
+}
+
+export type RoadmapRegion = "domestic" | "overseas";
+
+export function normalizeRequirementScope(scope: unknown): RequirementScope {
+  return REQUIREMENT_SCOPES.includes(scope as RequirementScope) ? scope as RequirementScope : "全球";
+}
+
+export function requirementVisibleInRegion(
+  requirement: Pick<Requirement, "scope">,
+  region: RoadmapRegion,
+): boolean {
+  return requirement.scope === "全球" || requirement.scope === (region === "domestic" ? "仅国内" : "仅海外");
+}
+
+export function filterRequirementsForRegion(requirements: Requirement[], region: RoadmapRegion): Requirement[] {
+  return requirements.filter((item) => requirementVisibleInRegion(item, region));
 }
 
 export function normalizeLegacyGroupOverride(item: GroupOverride): GroupOverride {

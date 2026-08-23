@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import {
@@ -26,6 +27,7 @@ function workspace(overrides: Partial<WorkspaceData> = {}): WorkspaceData {
       domainL0Id: "l0",
       domainId: "d1",
       source: "健康基础",
+      scope: "全球",
       overseasRegions: [],
       category: "产品专属",
       targetMonth: "2027-03",
@@ -72,11 +74,11 @@ describe("企业协作 Excel", () => {
     await workbook.xlsx.load(bytes as never);
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["填写说明", "领域L0字典", "领域L1字典", "产品字典", "需求清单", "路标卡片"]);
     expect(workbook.getWorksheet("填写说明")?.getCell("B13").value).toBe("health-roadmap-collaboration");
-    expect(workbook.getWorksheet("填写说明")?.getCell("B14").value).toBe("v2");
+    expect(workbook.getWorksheet("填写说明")?.getCell("B14").value).toBe("v3");
     expect(workbook.getWorksheet("需求清单")?.getRow(3).values).not.toContain("海外区域（用、分隔）");
-    expect(workbook.getWorksheet("需求清单")?.getRow(3).values).toEqual(expect.arrayContaining(["领域L0", "领域L1", "匹配产品（单选）"]));
+    expect(workbook.getWorksheet("需求清单")?.getRow(3).values).toEqual(expect.arrayContaining(["领域L0", "领域L1", "适用范围", "匹配产品（单选）"]));
     expect(workbook.getWorksheet("领域L1字典")?.getCell("B4").value).toBe("健康");
-    expect(workbook.getWorksheet("需求清单")?.getCell("N4").value).toMatchObject({ formula: "SUM(J4:M4)", result: 1 });
+    expect(workbook.getWorksheet("需求清单")?.getCell("O4").value).toMatchObject({ formula: "SUM(K4:N4)", result: 1 });
 
     const prepared = await inspectWorkspaceWorkbook(bytes, "协作.xlsx", data);
     expect(prepared.preview.errors).toEqual([]);
@@ -99,6 +101,7 @@ describe("企业协作 Excel", () => {
         领域L0: "健康",
         领域L1: "睡眠",
         来源: "健康进阶",
+        适用范围: "全球",
         分类: "体验优化",
         上线月份: new Date(2027, 4, 1, 12),
         "匹配产品（单选）": "",
@@ -192,6 +195,22 @@ describe("企业协作 Excel", () => {
     expect(applied.requirements[0].overseasRegions).toEqual([]);
   });
 
+  it("兼容 v2 协作表并默认全球且不产生虚假冲突", async () => {
+    const data = workspace({ requirements: [{ ...workspace().requirements[0], scope: "仅国内" }] });
+    const bytes = await createWorkspaceWorkbook(data, "0.7.2");
+    const legacy = await editWorkbook(bytes, (workbook) => {
+      workbook.getWorksheet("填写说明")!.getCell("B14").value = "v2";
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.spliceColumns(headerColumn(sheet, "适用范围"), 1);
+      sheet.getCell(4, headerColumn(sheet, "基线校验（请勿修改）")).value = legacyRequirementHash(data.requirements[0]);
+    });
+    const prepared = await inspectWorkspaceWorkbook(legacy, "旧版协作.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.formatVersion).toBe("v2");
+    expect(prepared.preview.counts).toMatchObject({ unchanged: 1, conflicts: 0 });
+    expect(applyPreparedWorkspaceWorkbook(data, prepared, "local-wins").requirements[0].scope).toBe("仅国内");
+  });
+
   it("三端工作量允许留空或显式填写0", async () => {
     const data = workspace();
     const bytes = await createWorkspaceWorkbook(data, "0.1.0");
@@ -207,6 +226,17 @@ describe("企业协作 Excel", () => {
       sheet.getCell(4, headerColumn(sheet, "云侧工作量（人月）")).value = 0;
     });
     expect((await inspectWorkspaceWorkbook(explicitZero, "零工作量.xlsx", data)).preview.errors).toEqual([]);
+  });
+
+  it("拒绝缺失或非法的适用范围", async () => {
+    const data = workspace();
+    const bytes = await createWorkspaceWorkbook(data, "0.7.2");
+    const invalid = await editWorkbook(bytes, (workbook) => {
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.getCell(4, headerColumn(sheet, "适用范围")).value = "其他";
+    });
+    const prepared = await inspectWorkspaceWorkbook(invalid, "非法范围.xlsx", data);
+    expect(prepared.preview.errors.some((item) => item.message.includes("适用范围"))).toBe(true);
   });
 
   it("产品专属只能匹配一个产品，体验优化不匹配产品", async () => {
@@ -245,3 +275,22 @@ describe("企业协作 Excel", () => {
     expect(prepared.preview.counts).toMatchObject({ added: 0, updated: 0, deleted: 0, unchanged: 0 });
   });
 });
+
+function legacyRequirementHash(item: WorkspaceData["requirements"][number]): string {
+  return createHash("sha256").update(JSON.stringify({
+    id: item.id,
+    title: item.title.trim(),
+    description: item.description.trim(),
+    domainL0Id: item.domainL0Id,
+    domainId: item.domainId,
+    source: item.source,
+    category: item.category,
+    targetMonth: item.targetMonth,
+    productIds: [...new Set(item.productIds)].sort(),
+    overseasRegions: [...new Set(item.overseasRegions)].sort(),
+    deviceWorkloadPm: item.deviceWorkloadPm,
+    appWorkloadPm: item.appWorkloadPm,
+    cloudWorkloadPm: item.cloudWorkloadPm,
+    unallocatedWorkloadPm: item.unallocatedWorkloadPm,
+  })).digest("hex");
+}

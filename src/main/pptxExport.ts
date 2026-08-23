@@ -3,7 +3,7 @@ import { imageSize } from "image-size";
 import { buildPptExportPlan, dynamicRoadmapMonthWidths, type PptDetailPagePlan, type PptExportPlan, type PptRoadmapPagePlan } from "../shared/pptExport.js";
 import { groupMatchesRoadmapLane, roadmapCardLabel, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
 import { ROADMAP_TRACKS, SOURCES } from "../shared/types.js";
-import type { AppSnapshot, Requirement, RequirementCategory, RequirementImage, Track } from "../shared/types.js";
+import type { AppSnapshot, Requirement, RequirementCategory, RequirementImage, RequirementScope, Track } from "../shared/types.js";
 import { sumWorkloadBreakdown, type WorkloadSide } from "../shared/workload.js";
 
 const FONT = "HarmonyOS Sans SC";
@@ -297,6 +297,7 @@ function addRequirementCard(slide: PptxSlide, requirement: Requirement, group: R
   addShape(slide, "ellipse", 0.92, cardY + 0.26, 0.13, 0.13, accent, accent);
   addText(slide, String(index + 1).padStart(2, "0"), 1.18, cardY + 0.17, 0.42, 0.24, 10, C.muted, true);
   addText(slide, requirement.title, 1.68, cardY + 0.12, image ? 4.25 : 6.6, 0.38, count === 1 ? 23 : 18, C.ink, true);
+  addScopePill(slide, requirement.scope, image ? 5.12 : 9.22, cardY + 0.16);
   addCategoryPill(slide, requirement.category, image ? 6.25 : 10.36, cardY + 0.16);
   const products = group.requirementProductNames[requirement.id] ?? [];
   if (products.length) addText(slide, products.join("、"), image ? 6.0 : 9.1, cardY + 0.62, image ? 1.65 : 2.7, 0.22, 9, C.muted, false, "right");
@@ -374,6 +375,12 @@ function addPill(slide: PptxSlide, text: string, x: number, y: number, w: number
 
 function addCategoryPill(slide: PptxSlide, category: RequirementCategory, x: number, y: number): void {
   addPill(slide, category, x, y, 1.18, category === "产品专属" ? C.navy : C.lilac, category === "产品专属" ? C.white : C.violet);
+}
+
+function addScopePill(slide: PptxSlide, scope: RequirementScope, x: number, y: number): void {
+  const fill = scope === "全球" ? "E5ECF2" : scope === "仅国内" ? "DFF5EA" : "ECE8FF";
+  const color = scope === "全球" ? "42556A" : scope === "仅国内" ? "17684F" : "5B43AD";
+  addPill(slide, scope, x, y, 1.0, fill, color);
 }
 
 function addText(

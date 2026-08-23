@@ -61,6 +61,7 @@ function requirement(id: string, domainId: string, productIds: string[], updated
     domainL0Id: "",
     domainId,
     source: "健康基础",
+    scope: "全球",
     overseasRegions: [],
     category: productIds.length ? "产品专属" : "体验优化",
     targetMonth: "2027-03",

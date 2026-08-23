@@ -11,13 +11,14 @@ import type {
   WorkspaceWorkbookImportPreview,
   WorkspaceWorkbookIssue,
 } from "../shared/types.js";
-import { CATEGORIES, SOURCES } from "../shared/types.js";
+import { CATEGORIES, REQUIREMENT_SCOPES, SOURCES } from "../shared/types.js";
 import { normalizeLegacyGroupOverride, normalizeLegacySource } from "../shared/requirements.js";
 import { roundWorkload } from "../shared/workload.js";
 import { validateWorkspaceData } from "./workspacePackage.js";
 
 const FORMAT_KEY = "health-roadmap-collaboration";
-const FORMAT_VERSION = "v2";
+const FORMAT_VERSION = "v3";
+const LEGACY_FORMAT_VERSION = "v2";
 const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 const HEADER_ROW = 3;
 const FIRST_DATA_ROW = HEADER_ROW + 1;
@@ -37,6 +38,7 @@ const REQUIREMENT_HEADERS = [
   "领域L0",
   "领域L1",
   "来源",
+  "适用范围",
   "分类",
   "上线月份",
   "匹配产品（单选）",
@@ -57,6 +59,8 @@ const REQUIREMENT_HEADERS = [
   "基线更新时间（请勿修改）",
   "基线校验（请勿修改）",
 ] as const;
+
+const LEGACY_REQUIREMENT_HEADERS = REQUIREMENT_HEADERS.filter((header) => header !== "适用范围");
 
 const DICTIONARY_HEADERS = ["名称", "状态", "排序", "字典ID（请勿修改）", "基线校验（请勿修改）"] as const;
 const DOMAIN_L1_HEADERS = [
@@ -107,6 +111,7 @@ interface ParsedOverrideRow {
 }
 
 interface ParsedWorkspaceWorkbook {
+  formatVersion: typeof FORMAT_VERSION | typeof LEGACY_FORMAT_VERSION;
   exportedAt: string;
   domains: ParsedDictionaryRow[];
   products: ParsedDictionaryRow[];
@@ -172,7 +177,8 @@ export async function inspectWorkspaceWorkbook(
 
   const guide = workbook.getWorksheet(SHEETS.guide);
   if (!guide) throw new Error(`工作簿缺少“${SHEETS.guide}”工作表`);
-  if (cellText(guide.getCell("B13")) !== FORMAT_KEY || cellText(guide.getCell("B14")) !== FORMAT_VERSION) {
+  const formatVersion = cellText(guide.getCell("B14"));
+  if (cellText(guide.getCell("B13")) !== FORMAT_KEY || ![FORMAT_VERSION, LEGACY_FORMAT_VERSION].includes(formatVersion)) {
     throw new Error("不支持的协作 Excel 格式或版本");
   }
   const exportedAt = cellText(guide.getCell("B15"));
@@ -191,9 +197,9 @@ export async function inspectWorkspaceWorkbook(
   const products = productSheet ? parseDictionarySheet(productSheet, errors) : [];
   validateDictionaryRows(domains, "领域", errors);
   validateDictionaryRows(products, "产品", errors);
-  const requirements = requirementSheet ? parseRequirementSheet(requirementSheet, domainL0s, domainL1s, products, exportedAt, errors) : [];
+  const requirements = requirementSheet ? parseRequirementSheet(requirementSheet, domainL0s, domainL1s, products, exportedAt, formatVersion as ParsedWorkspaceWorkbook["formatVersion"], errors) : [];
   const overrides = overrideSheet ? parseOverrideSheet(overrideSheet, domainL1s, exportedAt, errors) : [];
-  const parsed: ParsedWorkspaceWorkbook = { exportedAt, domains, products, requirements, overrides, errors };
+  const parsed: ParsedWorkspaceWorkbook = { formatVersion: formatVersion as ParsedWorkspaceWorkbook["formatVersion"], exportedAt, domains, products, requirements, overrides, errors };
   const plan = planWorkspaceWorkbookImport(current, parsed, "local-wins", new Date().toISOString());
   try {
     validateWorkspaceData(plan.data);
@@ -204,7 +210,7 @@ export async function inspectWorkspaceWorkbook(
   return {
     parsed,
     preview: {
-      formatVersion: FORMAT_VERSION,
+      formatVersion,
       exportedAt,
       counts: plan.counts,
       errors,
@@ -248,7 +254,7 @@ function createGuideSheet(workbook: ExcelJS.Workbook, data: WorkspaceData, appVe
     ["填写规则", "删除需求", "在“需求清单”的操作列选择“删除”；直接删除整行不会删除应用中的需求。"],
     ["填写规则", "领域层级", "领域 L1 必须关联一个上游 L0；需求中的 L1 必须属于所选 L0。路标卡片只使用领域 L1。"],
     ["填写规则", "匹配产品", "仅产品专属需求填写，且只能选择一个产品。"],
-    ["填写规则", "需求来源", `来源必须从下拉列表选择：${SOURCES.join("、")}。`],
+    ["填写规则", "来源与范围", `来源必须从下拉列表选择：${SOURCES.join("、")}；适用范围必须选择：${REQUIREMENT_SCOPES.join("、")}。`],
   ];
   writeMatrix(sheet, 4, 1, instructions);
   styleHeader(sheet, "A4:C4");
@@ -344,6 +350,7 @@ function createRequirementSheet(workbook: ExcelJS.Workbook, data: WorkspaceData)
       domains.get(item.domainL0Id) ?? item.domainL0Id,
       domains.get(item.domainId) ?? item.domainId,
       item.source,
+      item.scope,
       item.category,
       monthDate(item.targetMonth),
       productNames[0] ?? null,
@@ -351,7 +358,7 @@ function createRequirementSheet(workbook: ExcelJS.Workbook, data: WorkspaceData)
       item.appWorkloadPm,
       item.cloudWorkloadPm,
       item.unallocatedWorkloadPm,
-      { formula: `SUM(J${rowNumber}:M${rowNumber})`, result: item.workloadPm },
+      { formula: `SUM(K${rowNumber}:N${rowNumber})`, result: item.workloadPm },
       item.images.length,
       item.id,
       item.domainL0Id,
@@ -367,15 +374,16 @@ function createRequirementSheet(workbook: ExcelJS.Workbook, data: WorkspaceData)
   });
   addTable(sheet, "RequirementsTable", REQUIREMENT_HEADERS, rows.length ? rows : [blankCells(REQUIREMENT_HEADERS.length)]);
 
-  const widths = [10, 28, 48, 20, 20, 16, 14, 14, 28, 16, 16, 16, 19, 19, 16, 40, 40, 40, 40, 24, 24, 32, 28, 28, 68];
+  const widths = [10, 28, 48, 20, 20, 16, 14, 14, 14, 28, 16, 16, 16, 19, 19, 16, 40, 40, 40, 40, 24, 24, 32, 28, 28, 68];
   sheet.columns = widths.map((width) => ({ width }));
-  sheet.getColumn(8).numFmt = "yyyy-mm";
-  for (const column of [10, 11, 12, 13, 14]) sheet.getColumn(column).numFmt = "0.00";
+  sheet.getColumn(9).numFmt = "yyyy-mm";
+  for (const column of [11, 12, 13, 14, 15]) sheet.getColumn(column).numFmt = "0.00";
   const usedLast = Math.max(FIRST_DATA_ROW, FIRST_DATA_ROW + rows.length - 1);
   const validationLast = Math.max(usedLast + 30, 34);
   applyListValidation(sheet, `A${FIRST_DATA_ROW}:A${validationLast}`, ["保留", "删除"]);
   applyListValidation(sheet, `F${FIRST_DATA_ROW}:F${validationLast}`, [...SOURCES]);
-  applyListValidation(sheet, `G${FIRST_DATA_ROW}:G${validationLast}`, [...CATEGORIES]);
+  applyListValidation(sheet, `G${FIRST_DATA_ROW}:G${validationLast}`, [...REQUIREMENT_SCOPES]);
+  applyListValidation(sheet, `H${FIRST_DATA_ROW}:H${validationLast}`, [...CATEGORIES]);
   const domainL0Count = data.domains.filter((item) => item.level === "L0").length;
   const domainL1Count = data.domains.filter((item) => (item.level ?? "L1") === "L1").length;
   const domainL0Last = Math.max(FIRST_DATA_ROW, FIRST_DATA_ROW + domainL0Count - 1);
@@ -398,7 +406,7 @@ function createRequirementSheet(workbook: ExcelJS.Workbook, data: WorkspaceData)
       errorTitle: "请选择领域 L1",
       error: "领域 L1 必须来自领域 L1 字典。",
     };
-    sheet.getCell(row, 9).dataValidation = {
+    sheet.getCell(row, 10).dataValidation = {
       type: "list",
       allowBlank: true,
       formulae: [`'${SHEETS.products}'!$A$${FIRST_DATA_ROW}:$A$${productLast}`],
@@ -407,9 +415,9 @@ function createRequirementSheet(workbook: ExcelJS.Workbook, data: WorkspaceData)
       error: "匹配产品必须来自产品字典，且只能选择一个。",
     };
   }
-  for (const column of [10, 11, 12]) applyDecimalValidation(sheet, `${columnLetter(column)}${FIRST_DATA_ROW}:${columnLetter(column)}${validationLast}`, 0, true);
-  styleEditable(sheet, `A${FIRST_DATA_ROW}:L${usedLast}`);
-  styleSystem(sheet, `M${FIRST_DATA_ROW}:Y${usedLast}`);
+  for (const column of [11, 12, 13]) applyDecimalValidation(sheet, `${columnLetter(column)}${FIRST_DATA_ROW}:${columnLetter(column)}${validationLast}`, 0, true);
+  styleEditable(sheet, `A${FIRST_DATA_ROW}:M${usedLast}`);
+  styleSystem(sheet, `N${FIRST_DATA_ROW}:Z${usedLast}`);
   sheet.getColumn(3).alignment = { wrapText: true, vertical: "top" };
 }
 
@@ -549,9 +557,11 @@ function parseRequirementSheet(
   domainL1s: ParsedDictionaryRow[],
   products: ParsedDictionaryRow[],
   exportedAt: string,
+  formatVersion: ParsedWorkspaceWorkbook["formatVersion"],
   errors: WorkspaceWorkbookIssue[],
 ): ParsedRequirementRow[] {
-  const columns = headerColumns(sheet, REQUIREMENT_HEADERS, errors);
+  const headers = formatVersion === LEGACY_FORMAT_VERSION ? LEGACY_REQUIREMENT_HEADERS : REQUIREMENT_HEADERS;
+  const columns = headerColumns(sheet, headers, errors) as Map<string, number> | null;
   if (!columns) return [];
   const domainL0ByName = dictionaryByName(domainL0s);
   const domainL0ById = new Map(domainL0s.map((row) => [row.item.id, row.item]));
@@ -563,78 +573,81 @@ function parseRequirementSheet(
   const usedIds = new Set<string>();
 
   for (let row = FIRST_DATA_ROW; row <= sheet.actualRowCount; row += 1) {
-    const values = Object.fromEntries(REQUIREMENT_HEADERS.map((header) => [header, valueAt(sheet, row, columns, header)])) as Record<(typeof REQUIREMENT_HEADERS)[number], string>;
+    const values = Object.fromEntries(headers.map((header) => [header, valueAt(sheet, row, columns, header)])) as Record<string, string>;
     if (!Object.values(values).some(Boolean)) continue;
-    const action = normalizeAction(values[REQUIREMENT_HEADERS[0]], sheet.name, row, columns.get(REQUIREMENT_HEADERS[0])!, errors);
-    const rawId = values[REQUIREMENT_HEADERS[15]];
-    const baselineHash = values[REQUIREMENT_HEADERS[24]];
+    const action = normalizeAction(values["操作"], sheet.name, row, columns.get("操作")!, errors);
+    const rawId = values["需求ID（请勿修改）"];
+    const baselineHash = values["基线校验（请勿修改）"];
     if (action === "删除") {
-      if (!rawId) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[15])!), "新增行不能标记删除");
+      if (!rawId) addIssue(errors, sheet.name, cellAddress(row, columns.get("需求ID（请勿修改）")!), "新增行不能标记删除");
       rows.push({ sheet: sheet.name, row, action, baselineHash, requirement: deletedRequirementPlaceholder(rawId, exportedAt) });
       continue;
     }
 
-    const title = values[REQUIREMENT_HEADERS[1]].trim();
-    const description = values[REQUIREMENT_HEADERS[2]].trim();
-    if (!title) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[1])!), "需求标题不能为空");
-    if (description.length > 5000) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[2])!), "需求描述不能超过5000字");
-    if (!rawId && baselineHash) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[15])!), "系统ID缺失，请不要修改系统字段");
+    const title = values["需求标题"].trim();
+    const description = values["需求描述"].trim();
+    if (!title) addIssue(errors, sheet.name, cellAddress(row, columns.get("需求标题")!), "需求标题不能为空");
+    if (description.length > 5000) addIssue(errors, sheet.name, cellAddress(row, columns.get("需求描述")!), "需求描述不能超过5000字");
+    if (!rawId && baselineHash) addIssue(errors, sheet.name, cellAddress(row, columns.get("需求ID（请勿修改）")!), "系统ID缺失，请不要修改系统字段");
     const id = rawId || crypto.randomUUID();
-    if (usedIds.has(id)) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[15])!), `需求ID重复：${id}`);
+    if (usedIds.has(id)) addIssue(errors, sheet.name, cellAddress(row, columns.get("需求ID（请勿修改）")!), `需求ID重复：${id}`);
     usedIds.add(id);
 
-    const domainL0Name = values[REQUIREMENT_HEADERS[3]].trim();
-    const baselineDomainL0Id = values[REQUIREMENT_HEADERS[16]];
-    const baselineDomainL0Name = values[REQUIREMENT_HEADERS[19]].trim();
+    const domainL0Name = values["领域L0"].trim();
+    const baselineDomainL0Id = values["领域L0 ID（请勿修改）"];
+    const baselineDomainL0Name = values["基线领域L0名称（请勿修改）"].trim();
     const domainL0 = domainL0ByName.get(normalizeName(domainL0Name))
       ?? (domainL0Name === baselineDomainL0Name ? domainL0ById.get(baselineDomainL0Id) : undefined);
-    if (!domainL0) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[3])!), `领域 L0“${domainL0Name || "空"}”不存在于领域 L0 字典`);
+    if (!domainL0) addIssue(errors, sheet.name, cellAddress(row, columns.get("领域L0")!), `领域 L0“${domainL0Name || "空"}”不存在于领域 L0 字典`);
 
-    const domainL1Name = values[REQUIREMENT_HEADERS[4]].trim();
-    const baselineDomainL1Id = values[REQUIREMENT_HEADERS[17]];
-    const baselineDomainL1Name = values[REQUIREMENT_HEADERS[20]].trim();
+    const domainL1Name = values["领域L1"].trim();
+    const baselineDomainL1Id = values["领域L1 ID（请勿修改）"];
+    const baselineDomainL1Name = values["基线领域L1名称（请勿修改）"].trim();
     const domainL1 = domainL1ByName.get(normalizeName(domainL1Name))
       ?? (domainL1Name === baselineDomainL1Name ? domainL1ById.get(baselineDomainL1Id) : undefined);
-    if (!domainL1) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[4])!), `领域 L1“${domainL1Name || "空"}”不存在于领域 L1 字典`);
-    if (domainL0 && domainL1 && domainL1.parentId !== domainL0.id) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[4])!), `领域 L1“${domainL1Name}”不属于领域 L0“${domainL0Name}”`);
+    if (!domainL1) addIssue(errors, sheet.name, cellAddress(row, columns.get("领域L1")!), `领域 L1“${domainL1Name || "空"}”不存在于领域 L1 字典`);
+    if (domainL0 && domainL1 && domainL1.parentId !== domainL0.id) addIssue(errors, sheet.name, cellAddress(row, columns.get("领域L1")!), `领域 L1“${domainL1Name}”不属于领域 L0“${domainL0Name}”`);
 
-    const rawSource = values[REQUIREMENT_HEADERS[5]];
+    const rawSource = values["来源"];
     const source = normalizeLegacySource(rawSource);
-    const category = values[REQUIREMENT_HEADERS[6]];
-    if (!SOURCES.includes(source as (typeof SOURCES)[number])) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[5])!), "来源不在允许范围内");
-    if (!CATEGORIES.includes(category as (typeof CATEGORIES)[number])) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[6])!), "分类不在允许范围内");
-    const targetMonth = parseMonth(sheet.getCell(row, columns.get(REQUIREMENT_HEADERS[7])!).value);
-    if (!targetMonth) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[7])!), "上线月份应为有效年月");
+    const scope = formatVersion === LEGACY_FORMAT_VERSION ? "全球" : values["适用范围"];
+    const category = values["分类"];
+    if (!SOURCES.includes(source as (typeof SOURCES)[number])) addIssue(errors, sheet.name, cellAddress(row, columns.get("来源")!), "来源不在允许范围内");
+    if (!REQUIREMENT_SCOPES.includes(scope as (typeof REQUIREMENT_SCOPES)[number])) addIssue(errors, sheet.name, cellAddress(row, columns.get("适用范围")!), "适用范围必须选择仅国内、仅海外或全球");
+    if (!CATEGORIES.includes(category as (typeof CATEGORIES)[number])) addIssue(errors, sheet.name, cellAddress(row, columns.get("分类")!), "分类不在允许范围内");
+    const targetMonth = parseMonth(sheet.getCell(row, columns.get("上线月份")!).value);
+    if (!targetMonth) addIssue(errors, sheet.name, cellAddress(row, columns.get("上线月份")!), "上线月份应为有效年月");
 
-    const productNames = splitList(values[REQUIREMENT_HEADERS[8]]);
-    const baselineProductIds = splitList(values[REQUIREMENT_HEADERS[18]]);
-    const baselineProductNames = splitList(values[REQUIREMENT_HEADERS[21]]);
+    const productNames = splitList(values["匹配产品（单选）"]);
+    const baselineProductIds = splitList(values["产品ID（请勿修改）"]);
+    const baselineProductNames = splitList(values["基线产品名称（请勿修改）"]);
     const productIds: string[] = [];
-    if (productNames.length > 1) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[8])!), "匹配产品只能选择一个");
+    if (productNames.length > 1) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), "匹配产品只能选择一个");
     productNames.forEach((name) => {
       const direct = productByName.get(normalizeName(name));
       const baselineIndex = baselineProductNames.findIndex((item) => normalizeName(item) === normalizeName(name));
       const fallback = baselineIndex >= 0 ? productById.get(baselineProductIds[baselineIndex] ?? "") : undefined;
       const product = direct ?? fallback;
-      if (!product) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[8])!), `产品“${name}”不存在于产品字典`);
+      if (!product) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), `产品“${name}”不存在于产品字典`);
       else productIds.push(product.id);
     });
-    if (category === "产品专属" && productIds.length !== 1) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[8])!), "产品专属需求必须且只能匹配一个产品");
-    if (category === "体验优化" && productIds.length > 0) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[8])!), "体验优化需求不需要匹配产品");
+    if (category === "产品专属" && productIds.length !== 1) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), "产品专属需求必须且只能匹配一个产品");
+    if (category === "体验优化" && productIds.length > 0) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), "体验优化需求不需要匹配产品");
 
-    const device = parseNonNegativeNumber(values[REQUIREMENT_HEADERS[9]]);
-    const app = parseNonNegativeNumber(values[REQUIREMENT_HEADERS[10]]);
-    const cloud = parseNonNegativeNumber(values[REQUIREMENT_HEADERS[11]]);
-    const unallocated = parseNonNegativeNumber(values[REQUIREMENT_HEADERS[12]]);
+    const workloadHeaders = ["设备工作量（人月）", "App工作量（人月）", "云侧工作量（人月）"] as const;
+    const device = parseNonNegativeNumber(values[workloadHeaders[0]]);
+    const app = parseNonNegativeNumber(values[workloadHeaders[1]]);
+    const cloud = parseNonNegativeNumber(values[workloadHeaders[2]]);
+    const unallocated = parseNonNegativeNumber(values["待拆分工作量（只读）"]);
     [device, app, cloud].forEach((value, index) => {
-      if (value === null) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[9 + index])!), "工作量应留空或输入大于或等于0的数字");
+      if (value === null) addIssue(errors, sheet.name, cellAddress(row, columns.get(workloadHeaders[index])!), "工作量应留空或输入大于或等于0的数字");
     });
-    if (unallocated === null) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[12])!), "待拆分工作量必须是大于或等于0的数字");
+    if (unallocated === null) addIssue(errors, sheet.name, cellAddress(row, columns.get("待拆分工作量（只读）")!), "待拆分工作量必须是大于或等于0的数字");
     const total = roundWorkload((device ?? 0) + (app ?? 0) + (cloud ?? 0) + (unallocated ?? 0));
 
-    const createdAt = values[REQUIREMENT_HEADERS[22]] || exportedAt;
-    const updatedAt = values[REQUIREMENT_HEADERS[23]] || exportedAt;
-    if (!validTimestamp(createdAt) || !validTimestamp(updatedAt)) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[23])!), "系统时间字段无效，请不要修改");
+    const createdAt = values["创建时间（请勿修改）"] || exportedAt;
+    const updatedAt = values["基线更新时间（请勿修改）"] || exportedAt;
+    if (!validTimestamp(createdAt) || !validTimestamp(updatedAt)) addIssue(errors, sheet.name, cellAddress(row, columns.get("基线更新时间（请勿修改）")!), "系统时间字段无效，请不要修改");
     const requirement: Requirement = {
       id,
       title,
@@ -643,6 +656,7 @@ function parseRequirementSheet(
       domainL0Id: domainL0?.id ?? baselineDomainL0Id,
       domainId: domainL1?.id ?? baselineDomainL1Id,
       source: source as Requirement["source"],
+      scope: scope as Requirement["scope"],
       category: category as Requirement["category"],
       targetMonth: targetMonth ?? "",
       productIds: [...new Set(productIds)],
@@ -755,6 +769,7 @@ function planWorkspaceWorkbookImport(
   }));
   const domainL1Merge = mergeDictionaryRows(currentDomainL1s, remappedDomainL1Rows, conflictMode, "领域 L1");
   const productMerge = mergeDictionaryRows(current.products, parsed.products, conflictMode, "产品");
+  const baselineRequirementHash = parsed.formatVersion === LEGACY_FORMAT_VERSION ? requirementHashV2 : requirementHash;
   counts.domainsChanged = domainL0Merge.changed + domainL1Merge.changed;
   counts.productsChanged = productMerge.changed;
   const conflicts = [...domainL0Merge.conflicts, ...domainL1Merge.conflicts, ...productMerge.conflicts];
@@ -767,7 +782,7 @@ function planWorkspaceWorkbookImport(
         counts.unchanged += 1;
         continue;
       }
-      const localChanged = Boolean(row.baselineHash) && requirementHash(existing) !== row.baselineHash;
+      const localChanged = Boolean(row.baselineHash) && baselineRequirementHash(existing) !== row.baselineHash;
       if (localChanged) {
         const issue = conflictIssue(row.sheet, row.row, "本机需求在 Excel 导出后已更新，删除操作发生冲突");
         conflicts.push(issue);
@@ -783,6 +798,7 @@ function planWorkspaceWorkbookImport(
 
     const incoming = {
       ...row.requirement,
+      scope: parsed.formatVersion === LEGACY_FORMAT_VERSION && existing ? existing.scope : row.requirement.scope,
       domainL0Id: domainL0Merge.idMap.get(row.requirement.domainL0Id) ?? row.requirement.domainL0Id,
       domainId: domainL1Merge.idMap.get(row.requirement.domainId) ?? row.requirement.domainId,
       productIds: [...new Set(row.requirement.productIds.map((id) => productMerge.idMap.get(id) ?? id))],
@@ -792,11 +808,11 @@ function planWorkspaceWorkbookImport(
       counts.added += 1;
       continue;
     }
-    if (row.baselineHash && requirementHash(incoming) === row.baselineHash) {
+    if (row.baselineHash && baselineRequirementHash(incoming) === row.baselineHash) {
       counts.unchanged += 1;
       continue;
     }
-    const localChanged = Boolean(row.baselineHash) && requirementHash(existing) !== row.baselineHash;
+    const localChanged = Boolean(row.baselineHash) && baselineRequirementHash(existing) !== row.baselineHash;
     if (localChanged) {
       conflicts.push(conflictIssue(row.sheet, row.row, `需求“${incoming.title}”在本机和 Excel 中都已修改`));
       if (conflictMode === "local-wins") {
@@ -991,6 +1007,7 @@ function deletedRequirementPlaceholder(id: string, timestamp: string): Requireme
     domainL0Id: "",
     domainId: "",
     source: SOURCES[0],
+    scope: "全球",
     overseasRegions: [],
     category: CATEGORIES[0],
     targetMonth: "2000-01",
@@ -1006,6 +1023,26 @@ function deletedRequirementPlaceholder(id: string, timestamp: string): Requireme
 }
 
 function requirementHash(item: Requirement): string {
+  return stableHash({
+    id: item.id,
+    title: item.title.trim(),
+    description: item.description.trim(),
+    domainL0Id: item.domainL0Id,
+    domainId: item.domainId,
+    source: item.source,
+    scope: item.scope,
+    category: item.category,
+    targetMonth: item.targetMonth,
+    productIds: [...new Set(item.productIds)].sort(),
+    overseasRegions: [...new Set(item.overseasRegions)].sort(),
+    deviceWorkloadPm: roundWorkload(item.deviceWorkloadPm),
+    appWorkloadPm: roundWorkload(item.appWorkloadPm),
+    cloudWorkloadPm: roundWorkload(item.cloudWorkloadPm),
+    unallocatedWorkloadPm: roundWorkload(item.unallocatedWorkloadPm),
+  });
+}
+
+function requirementHashV2(item: Requirement): string {
   return stableHash({
     id: item.id,
     title: item.title.trim(),

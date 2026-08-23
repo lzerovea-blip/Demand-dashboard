@@ -21,6 +21,7 @@ const workspace: WorkspaceData = {
     domainL0Id: "l0",
     domainId: "d1",
     source: "健康基础",
+    scope: "全球",
     overseasRegions: [],
     category: "产品专属",
     targetMonth: "2027-03",
@@ -86,7 +87,7 @@ describe(".roadmap 数据包", () => {
   it("兼容旧版 JSON 备份", async () => {
     const legacyData = {
       ...workspace,
-      requirements: workspace.requirements.map(({ domainL0Id: _legacyMissingField, ...item }) => item),
+      requirements: workspace.requirements.map(({ domainL0Id: _legacyMissingField, scope: _legacyMissingScope, ...item }) => item),
       domains: [{ ...workspace.domains.find((item) => item.id === "d1")!, parentId: undefined }],
     };
     const legacy = Buffer.from(JSON.stringify({ schemaVersion: 1, exportedAt: "2026-08-19", data: legacyData }));
@@ -94,6 +95,15 @@ describe(".roadmap 数据包", () => {
     expect(inspected.preview.sourceFormat).toBe("legacy-json");
     expect(inspected.data.requirements[0].images[0].dataUrl).toBe(image.dataUrl);
     expect(inspected.data.requirements[0].domainL0Id).toBe("");
+    expect(inspected.data.requirements[0].scope).toBe("全球");
     expect(inspected.data.domains[0]).toMatchObject({ id: "d1", level: "L1" });
+  });
+
+  it("拒绝包含非法适用范围的数据包", async () => {
+    const invalid = {
+      ...workspace,
+      requirements: [{ ...workspace.requirements[0], scope: "未知" as never }],
+    };
+    await expect(createWorkspacePackage(invalid, "0.7.2")).rejects.toThrow("适用范围无效");
   });
 });

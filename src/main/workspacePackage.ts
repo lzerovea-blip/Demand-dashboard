@@ -8,7 +8,7 @@ import type {
   WorkspaceImportPreview,
   WorkspacePackageCounts,
 } from "../shared/types.js";
-import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, REQUIREMENT_IMAGE_MIME_TYPES, SOURCES } from "../shared/types.js";
+import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, REQUIREMENT_IMAGE_MIME_TYPES, REQUIREMENT_SCOPES, SOURCES } from "../shared/types.js";
 import { normalizeLegacyGroupOverride, normalizeLegacySource, normalizeRequirement } from "../shared/requirements.js";
 import { workspaceCounts } from "../shared/workspace.js";
 
@@ -211,6 +211,10 @@ export function validateWorkspaceData(data: WorkspaceData): void {
 
   for (const raw of data.requirements) {
     validateRawWorkload(raw);
+    const rawScope = (raw as Requirement & { scope?: unknown }).scope;
+    if (rawScope !== undefined && !REQUIREMENT_SCOPES.includes(rawScope as Requirement["scope"])) {
+      throw new Error(`需求“${raw.title}”的适用范围无效`);
+    }
     const item = normalizeRequirement(raw);
     if (!item.id || requirementIds.has(item.id) || !item.title.trim()) throw new Error("数据包包含无效或重复需求");
     requirementIds.add(item.id);

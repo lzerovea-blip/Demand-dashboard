@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterRequirements, listTargetMonths, normalizeLegacyGroupOverride, normalizeRequirement } from "../src/shared/requirements";
+import { filterRequirements, filterRequirementsForRegion, listTargetMonths, normalizeLegacyGroupOverride, normalizeRequirement, requirementVisibleInRegion } from "../src/shared/requirements";
 import { splitTextIntoLines } from "../src/shared/text";
 import type { Requirement } from "../src/shared/types";
 
@@ -28,6 +28,7 @@ describe("历史需求兼容", () => {
     expect(normalized.description).toBe("");
     expect(normalized.images).toEqual([]);
     expect(normalized.overseasRegions).toEqual([]);
+    expect(normalized.scope).toBe("全球");
     expect(normalized).toMatchObject({
       deviceWorkloadPm: 0,
       appWorkloadPm: 0,
@@ -118,6 +119,26 @@ describe("历史需求兼容", () => {
   });
 });
 
+describe("适用范围", () => {
+  const domestic = { ...requirement("domestic", "国内", "d1", "健康基础", "体验优化", "2027-03"), scope: "仅国内" as const };
+  const overseas = { ...requirement("overseas", "海外", "d1", "健康基础", "体验优化", "2027-03"), scope: "仅海外" as const };
+  const global = { ...requirement("global", "全球", "d1", "健康基础", "体验优化", "2027-03"), scope: "全球" as const };
+
+  it("国内和海外视图均包含全球需求", () => {
+    expect(filterRequirementsForRegion([domestic, overseas, global], "domestic").map((item) => item.id)).toEqual(["domestic", "global"]);
+    expect(filterRequirementsForRegion([domestic, overseas, global], "overseas").map((item) => item.id)).toEqual(["overseas", "global"]);
+    expect(requirementVisibleInRegion(global, "domestic")).toBe(true);
+    expect(requirementVisibleInRegion(global, "overseas")).toBe(true);
+  });
+
+  it("保留三种有效范围，缺失或异常历史值迁移为全球", () => {
+    expect(normalizeRequirement(domestic).scope).toBe("仅国内");
+    expect(normalizeRequirement(overseas).scope).toBe("仅海外");
+    expect(normalizeRequirement({ ...global, scope: undefined }).scope).toBe("全球");
+    expect(normalizeRequirement({ ...global, scope: "未知" as never }).scope).toBe("全球");
+  });
+});
+
 describe("需求池筛选", () => {
   const requirements: Requirement[] = [
     requirement("r1", "社交时差", "d1", "健康基础", "体验优化", "2027-03"),
@@ -149,6 +170,7 @@ function requirement(id: string, title: string, domainId: string, source: Requir
     domainL0Id: "l0",
     domainId,
     source,
+    scope: "全球",
     overseasRegions: [],
     category,
     targetMonth,

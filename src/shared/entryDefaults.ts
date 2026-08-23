@@ -4,6 +4,7 @@ export interface RequirementEntrySelections {
   domainL0Id: string;
   domainId: string;
   source: Requirement["source"];
+  scope: Requirement["scope"];
   overseasRegions: Requirement["overseasRegions"];
   category: Requirement["category"];
   targetMonth: string;
@@ -16,6 +17,6 @@ export function latestRequirementSelections(requirements: Requirement[]): Requir
   }, undefined);
 
   return latest
-    ? { domainL0Id: latest.domainL0Id, domainId: latest.domainId, source: latest.source, overseasRegions: latest.overseasRegions, category: latest.category, targetMonth: latest.targetMonth }
+    ? { domainL0Id: latest.domainL0Id, domainId: latest.domainId, source: latest.source, scope: latest.scope, overseasRegions: latest.overseasRegions, category: latest.category, targetMonth: latest.targetMonth }
     : undefined;
 }
