@@ -8,6 +8,7 @@ import {
   halfYearSequence,
   monthsForHalfYear,
   roadmapCardLabel,
+  roadmapCardDisplayParts,
   roadmapCardDisplayLines,
   roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
@@ -198,6 +199,20 @@ describe("路标长条卡片文案", () => {
     expect(roadmapCardDisplayLines(`${mixed.repeat(5)}尾`)).toEqual([
       `${mixed}${mixed}中文AB`,
       `12，。${mixed}中文AB12，…`,
+    ]);
+  });
+
+  it("冒号前后拆分为强调标题和常规需求内容", () => {
+    expect(roadmapCardDisplayParts("健康摘要：早间血压测量", 5)).toEqual([
+      { emphasis: "健康摘要：", content: "早间血压测量" },
+    ]);
+  });
+
+  it("标题跨行时继续保留正确的字重分界", () => {
+    const title = "标".repeat(21);
+    expect(roadmapCardDisplayParts(`${title}：需求A`, 22)).toEqual([
+      { emphasis: "标".repeat(20), content: "" },
+      { emphasis: "标：", content: "需求A" },
     ]);
   });
 });

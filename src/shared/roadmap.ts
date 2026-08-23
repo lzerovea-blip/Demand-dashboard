@@ -261,3 +261,26 @@ export function roadmapCardDisplayLines(text: string, charactersPerLine = 20, ma
     : characters.slice(0, maximumCharacters);
   return splitTextIntoLines(visible.join(""), charactersPerLine);
 }
+
+export interface RoadmapCardLineParts {
+  emphasis: string;
+  content: string;
+}
+
+export function roadmapCardDisplayParts(
+  text: string,
+  emphasizedCharacters: number,
+  charactersPerLine = 20,
+  maximumLines = 2,
+): RoadmapCardLineParts[] {
+  let characterOffset = 0;
+  return roadmapCardDisplayLines(text, charactersPerLine, maximumLines).map((line) => {
+    const characters = Array.from(line);
+    const emphasisLength = Math.max(0, Math.min(characters.length, emphasizedCharacters - characterOffset));
+    characterOffset += characters.length;
+    return {
+      emphasis: characters.slice(0, emphasisLength).join(""),
+      content: characters.slice(emphasisLength).join(""),
+    };
+  });
+}

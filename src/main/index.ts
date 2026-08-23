@@ -11,6 +11,7 @@ import type {
   WorkspaceImportMode,
 } from "../shared/types.js";
 import { buildPptExportPlan } from "../shared/pptExport.js";
+import { windowsSetupDownloadUrl } from "../shared/release.js";
 import { createRoadmapPresentation } from "./pptxExport.js";
 import {
   createWorkspaceWorkbook,
@@ -20,9 +21,8 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-08-21";
+const APP_RELEASED_AT = "2026-08-23";
 const APP_AUTHOR = "林忠维";
-const APP_UPDATE_URL = "https://github.com/lzerovea-blip/Demand-dashboard";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
 let database: LocalDatabase;
@@ -64,15 +64,16 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
+  const windowsInstallerUrl = windowsSetupDownloadUrl(app.getVersion());
   ipcMain.handle("app:info", () => ({
     name: PRODUCT_NAME,
     version: app.getVersion(),
     releasedAt: APP_RELEASED_AT,
     author: APP_AUTHOR,
-    updateUrl: APP_UPDATE_URL,
+    updateUrl: windowsInstallerUrl,
   }));
   ipcMain.handle("app:update:open", async () => {
-    await shell.openExternal(APP_UPDATE_URL);
+    await shell.openExternal(windowsInstallerUrl);
   });
   ipcMain.handle("snapshot:get", () => database.getSnapshot());
   ipcMain.handle("window:fullscreen:get", (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false);

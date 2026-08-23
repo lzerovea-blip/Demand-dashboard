@@ -6,7 +6,7 @@ import {
   halfYearSequence,
   monthsForHalfYear,
   roadmapCardLabel,
-  roadmapCardDisplayLines,
+  roadmapCardDisplayParts,
   roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
   roadmapPrimaryLane,
@@ -17,6 +17,7 @@ import {
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
 import { filterRequirements, listTargetMonths } from "../shared/requirements";
+import { windowsSetupDownloadUrl } from "../shared/release";
 import { splitTextIntoLines } from "../shared/text";
 import {
   CATEGORIES,
@@ -54,10 +55,10 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.0",
-  releasedAt: "2026-08-21",
+  version: "0.7.1",
+  releasedAt: "2026-08-23",
   author: "林忠维",
-  updateUrl: "https://github.com/lzerovea-blip/Demand-dashboard",
+  updateUrl: windowsSetupDownloadUrl("0.7.1"),
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
@@ -432,8 +433,8 @@ function AboutDialog({ info, onClose }: { info: AppInfo; onClose: () => void }) 
           <div><dt>发版时间</dt><dd>{formatReleaseDate(info.releasedAt)}</dd></div>
           <div><dt>制作者</dt><dd>{info.author}</dd></div>
           <div className="about-update-row">
-            <dt>GitHub 更新地址</dt>
-            <dd><code>{info.updateUrl}</code><button type="button" onClick={() => void window.roadmapApi.openUpdatePage()}>打开更新地址 ↗</button></dd>
+            <dt>当前版本 Windows EXE</dt>
+            <dd><code>{info.updateUrl}</code><button type="button" onClick={() => void window.roadmapApi.openUpdatePage()}>下载安装版 EXE ↗</button></dd>
           </div>
         </dl>
         <div className="about-guide">
@@ -776,19 +777,26 @@ function RoadmapLane({ lane, months, groups, onOpenGroup }: { lane: RoadmapLane;
 function RoadmapCard({ group, onClick }: { group: RoadmapGroup; onClick: () => void }) {
   const hasExclusive = group.categories.includes("产品专属");
   const label = roadmapCardLabel(group);
-  const displayLines = roadmapCardDisplayLines(label);
+  const displayLines = roadmapCardDisplayParts(label, Array.from(`${group.cardTitle}：`).length);
   const visibleProducts = group.productNames.slice(0, 2);
   const hiddenProductCount = Math.max(group.productNames.length - visibleProducts.length, 0);
   const productLabel = group.productNames.length ? `涉及产品：${group.productNames.join("、")}` : "";
   const accessibleLabel = [label, productLabel, "点击查看全部需求"].filter(Boolean).join("；");
   return (
-    <button className={`roadmap-card ${hasExclusive ? "has-exclusive" : ""}`} onClick={onClick} title={accessibleLabel} aria-label={accessibleLabel}>
-      <span className="roadmap-card-copy" aria-hidden="true">{displayLines.map((line, index) => <span className="roadmap-card-line" key={`${index}-${line}`}>{line}</span>)}</span>
+    <button className={`roadmap-card ${hasExclusive ? "has-exclusive" : ""}`} onClick={onClick} aria-label={accessibleLabel}>
+      <span className="roadmap-card-copy" aria-hidden="true">
+        {displayLines.map((line, index) => (
+          <span className="roadmap-card-line" key={`${index}-${line.emphasis}-${line.content}`}>
+            {line.emphasis && <strong>{line.emphasis}</strong>}
+            {line.content && <span>{line.content}</span>}
+          </span>
+        ))}
+      </span>
       {visibleProducts.length > 0 && (
         <span className="roadmap-card-products" aria-label={productLabel}>
           <i>涉及产品</i>
           {visibleProducts.map((name) => <b key={name}>{name}</b>)}
-          {hiddenProductCount > 0 && <b title={group.productNames.slice(visibleProducts.length).join("、")}>+{hiddenProductCount}</b>}
+          {hiddenProductCount > 0 && <b>+{hiddenProductCount}</b>}
         </span>
       )}
     </button>
