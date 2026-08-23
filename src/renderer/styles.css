@@ -135,8 +135,8 @@ td strong { color: #1b2832; font-weight: 700; }
 .half-header { min-height: 45px; display: grid; place-items: center; background: #f5f7f9; color: #43505a; font-size: 15px; font-weight: 800; letter-spacing: .04em; }.month-header { min-height: 40px; display: grid; place-items: center; background: #fafbfc; color: #77828b; font-size: 13px; font-weight: 650; }
 .lane-label { position: sticky; left: 0; z-index: 2; min-height: 86px; padding: 16px; background: #f8fafb; display: flex; flex-direction: column; gap: 6px; }.lane-label strong { font-size: 17px; }.lane-label span { color: #929aa0; font-size: 11px; }
 .month-cell { min-height: 86px; padding: 12px 9px; background: repeating-linear-gradient(135deg, #fff, #fff 9px, #fcfdfe 9px, #fcfdfe 18px); display: flex; flex-direction: column; gap: 8px; }
-.roadmap-card { position: relative; width: 100%; min-width: 260px; min-height: 60px; border: 1px solid #dfe5e9; border-left: 3px solid #7464db; border-radius: 9px; background: #fff; padding: 0 14px; display: flex; align-items: center; gap: 12px; overflow: hidden; color: #17232c; text-align: left; white-space: nowrap; box-shadow: 0 5px 14px rgb(25 43 58 / 7%); transition: transform .15s, box-shadow .15s; }.roadmap-card:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgb(25 43 58 / 13%); }.roadmap-card.has-exclusive { border-left-color: #17202a; }
-.roadmap-card-copy { min-width: 0; flex: 1; display: flex; align-items: center; overflow: hidden; }.roadmap-card-copy strong { flex: 0 1 auto; max-width: 42%; overflow: hidden; color: #17232c; font-size: 15px; text-overflow: ellipsis; }.roadmap-card-copy > span { min-width: 0; flex: 1; overflow: hidden; color: #64717a; font-size: 14px; text-overflow: ellipsis; }
+.roadmap-card { position: relative; width: 100%; min-width: 260px; min-height: 76px; border: 1px solid #dfe5e9; border-left: 3px solid #7464db; border-radius: 9px; background: #fff; padding: 10px 14px; display: flex; align-items: center; gap: 12px; overflow: hidden; color: #17232c; text-align: left; box-shadow: 0 5px 14px rgb(25 43 58 / 7%); transition: transform .15s, box-shadow .15s; }.roadmap-card:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgb(25 43 58 / 13%); }.roadmap-card.has-exclusive { border-left-color: #17202a; }
+.roadmap-card-copy { min-width: 0; flex: 1; display: grid; gap: 3px; overflow: hidden; color: #26343e; font-size: 14px; font-weight: 680; line-height: 1.35; }.roadmap-card-line { display: block; min-width: 0; max-width: 20em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .roadmap-card-products { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }.roadmap-card-products i { color: #89939a; font-size: 11px; font-style: normal; font-weight: 700; }.roadmap-card-products b { max-width: 76px; padding: 5px 8px; overflow: hidden; border-radius: 6px; background: #17202a; color: #fff; font-size: 11px; font-weight: 750; line-height: 1; text-overflow: ellipsis; }
 .app-shell.roadmap-focus-mode { grid-template-columns: minmax(0, 1fr); }
 .roadmap-focus-mode .sidebar, .roadmap-focus-mode .topbar { display: none; }
@@ -207,6 +207,12 @@ td strong { color: #1b2832; font-weight: 700; }
 .workload-warning { margin: -4px 0 18px; padding: 11px 14px; border-left: 3px solid #e8a344; border-radius: 6px 10px 10px 6px; background: #fff6e8; color: #805826; font-size: 11px; line-height: 1.55; }
 .workload-cell b, .workload-cell span { display: block; }
 .workload-cell span { margin-top: 5px; color: #87929a; font-size: 9px; font-weight: 500; }
+.requirements-table { min-width: 1080px; }
+.requirement-title-column { width: calc(20em + 28px); max-width: calc(20em + 28px); }
+.requirement-title-cell { width: 20em; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
+.requirement-title-cell > strong { width: 100%; display: grid; gap: 2px; line-height: 1.45; }
+.requirement-title-cell > strong > span { display: block; max-width: 20em; white-space: nowrap; }
+.workload-pending-badge { display: inline-flex; align-items: center; min-height: 23px; padding: 0 8px; border: 1px solid #f0c47d; border-radius: 999px; background: #fff6e7; color: #956020; font-size: 9px; font-weight: 750; white-space: nowrap; }
 .workload-section { display: grid; gap: 9px; margin-bottom: 19px; color: #47545e; font-size: 11px; }
 .workload-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-weight: 700; }
 .workload-section-head span b { color: #d44b43; }

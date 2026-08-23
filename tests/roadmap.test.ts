@@ -8,6 +8,7 @@ import {
   halfYearSequence,
   monthsForHalfYear,
   roadmapCardLabel,
+  roadmapCardDisplayLines,
   roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
   roadmapTrackOrder,
@@ -183,6 +184,21 @@ describe("路标长条卡片文案", () => {
   it("最多显示三条需求，超过时追加等", () => {
     expect(roadmapCardLabel({ cardTitle: "健康摘要", requirements: baseRequirements.slice(0, 3) })).toBe("健康摘要：早间血压测量、午间血压测量、夜间血压测量");
     expect(roadmapCardLabel({ cardTitle: "健康摘要", requirements: baseRequirements })).toBe("健康摘要：早间血压测量、午间血压测量、夜间血压测量等");
+  });
+
+  it("每行最多20个字符并且最多显示两行", () => {
+    expect(roadmapCardDisplayLines("字".repeat(20))).toEqual(["字".repeat(20)]);
+    expect(roadmapCardDisplayLines("字".repeat(21))).toEqual(["字".repeat(20), "字"]);
+    expect(roadmapCardDisplayLines("字".repeat(40))).toEqual(["字".repeat(20), "字".repeat(20)]);
+    expect(roadmapCardDisplayLines("字".repeat(41))).toEqual(["字".repeat(20), `${"字".repeat(19)}…`]);
+  });
+
+  it("中文、英文、数字和标点统一按Unicode字符计数", () => {
+    const mixed = "中文AB12，。";
+    expect(roadmapCardDisplayLines(`${mixed.repeat(5)}尾`)).toEqual([
+      `${mixed}${mixed}中文AB`,
+      `12，。${mixed}中文AB12，…`,
+    ]);
   });
 });
 

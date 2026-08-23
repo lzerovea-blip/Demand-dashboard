@@ -6,6 +6,7 @@ import {
   halfYearSequence,
   monthsForHalfYear,
   roadmapCardLabel,
+  roadmapCardDisplayLines,
   roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
   roadmapPrimaryLane,
@@ -16,6 +17,7 @@ import {
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
 import { filterRequirements, listTargetMonths } from "../shared/requirements";
+import { splitTextIntoLines } from "../shared/text";
 import {
   CATEGORIES,
   MAX_REQUIREMENT_IMAGE_BYTES,
@@ -39,6 +41,7 @@ import {
   type WorkspaceWorkbookImportPreview,
 } from "../shared/types";
 import {
+  isWorkloadPendingEvaluation,
   normalizeWorkloadEdit,
   parseWorkloadPart,
   sumWorkloadBreakdown,
@@ -488,12 +491,12 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
         </div>
         {rows.length ? (
           <div className="table-wrap">
-            <table>
+            <table className="requirements-table">
               <thead><tr><th>需求标题</th><th>领域 L0</th><th>领域 L1</th><th>来源</th><th>分类</th><th>上线月份</th><th>匹配产品</th><th className="numeric">工作量</th><th /></tr></thead>
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
-                    <td><strong>{item.title}</strong></td>
+                    <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={item.title}>{splitTextIntoLines(item.title).map((line, index) => <span key={`${index}-${line}`}>{line}</span>)}</strong>{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></td>
                     <td>{domains.get(item.domainL0Id) ?? "—"}</td>
                     <td>{domains.get(item.domainId) ?? "未命名"}</td>
                     <td><SourceBadge source={item.source} /></td>
@@ -769,14 +772,14 @@ function RoadmapLane({ lane, months, groups, onOpenGroup }: { lane: RoadmapLane;
 function RoadmapCard({ group, onClick }: { group: RoadmapGroup; onClick: () => void }) {
   const hasExclusive = group.categories.includes("产品专属");
   const label = roadmapCardLabel(group);
-  const requirementText = `${group.requirements.slice(0, 3).map((item) => item.title).join("、")}${group.requirements.length > 3 ? "等" : ""}`;
+  const displayLines = roadmapCardDisplayLines(label);
   const visibleProducts = group.productNames.slice(0, 2);
   const hiddenProductCount = Math.max(group.productNames.length - visibleProducts.length, 0);
   const productLabel = group.productNames.length ? `涉及产品：${group.productNames.join("、")}` : "";
   const accessibleLabel = [label, productLabel, "点击查看全部需求"].filter(Boolean).join("；");
   return (
     <button className={`roadmap-card ${hasExclusive ? "has-exclusive" : ""}`} onClick={onClick} title={accessibleLabel} aria-label={accessibleLabel}>
-      <span className="roadmap-card-copy"><strong>{group.cardTitle}：</strong><span>{requirementText}</span></span>
+      <span className="roadmap-card-copy" aria-hidden="true">{displayLines.map((line, index) => <span className="roadmap-card-line" key={`${index}-${line}`}>{line}</span>)}</span>
       {visibleProducts.length > 0 && (
         <span className="roadmap-card-products" aria-label={productLabel}>
           <i>涉及产品</i>
@@ -860,11 +863,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
     event.preventDefault();
     const parsed = [draftParts.device, draftParts.app, draftParts.cloud];
     if (parsed.some((item) => item === null)) {
-      setWorkloadError("设备、App、云侧三项工作量均为必填；暂无投入请填写 0");
-      return;
-    }
-    if ((draftTotal ?? 0) <= 0) {
-      setWorkloadError("设备、App、云侧工作量至少填写一项");
+      setWorkloadError("工作量只能填写大于或等于 0 的整数或小数，也可以留空");
       return;
     }
     setSaving(true);
@@ -958,16 +957,16 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
               : <div className="product-not-required"><span>匹配产品</span><b>体验优化无需选择产品</b></div>}
           </div>
           <div className="workload-section">
-            <div className="workload-section-head"><span>工作量（人月） <b>*</b></span><strong>合计 {draftTotal === null ? "—" : formatNumber(draftTotal)} 人月</strong></div>
+            <div className="workload-section-head"><span>工作量（人月）</span><strong>合计 {draftTotal === null ? "—" : formatNumber(draftTotal)} 人月</strong></div>
             {Boolean(value?.unallocatedWorkloadPm) && <div className="legacy-workload-warning">这条历史需求有 {formatNumber(value?.unallocatedWorkloadPm ?? 0)} 人月尚未拆分，请分配到下方三项后保存。</div>}
             <div className="workload-input-grid">
-              <label><span>设备工作量 <b>*</b></span><input required type="text" inputMode="decimal" value={workloadTexts.device} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="请输入，暂无填 0" onChange={(event) => updateWorkloadText("device", event.target.value)} /></label>
-              <label><span>App 工作量 <b>*</b></span><input required type="text" inputMode="decimal" value={workloadTexts.app} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="请输入，暂无填 0" onChange={(event) => updateWorkloadText("app", event.target.value)} /></label>
-              <label><span>云侧工作量 <b>*</b></span><input required type="text" inputMode="decimal" value={workloadTexts.cloud} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="请输入，暂无填 0" onChange={(event) => updateWorkloadText("cloud", event.target.value)} /></label>
+              <label><span>设备工作量</span><input type="text" inputMode="decimal" value={workloadTexts.device} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="可留空，默认 0" onChange={(event) => updateWorkloadText("device", event.target.value)} /></label>
+              <label><span>App 工作量</span><input type="text" inputMode="decimal" value={workloadTexts.app} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="可留空，默认 0" onChange={(event) => updateWorkloadText("app", event.target.value)} /></label>
+              <label><span>云侧工作量</span><input type="text" inputMode="decimal" value={workloadTexts.cloud} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="可留空，默认 0" onChange={(event) => updateWorkloadText("cloud", event.target.value)} /></label>
             </div>
             {workloadError
               ? <small className="input-error">{workloadError}</small>
-              : <small>三项均为必填；暂无投入可填 0，系统自动合计，工作量不展示在路标轴卡片上。</small>}
+              : <small>三项均可留空或填写 0；若三项合计为 0，需求池会标记“工作量待评估”。</small>}
           </div>
           <div className="merge-hint"><b>自动合并规则</b><span>同领域 L1、同来源、同上线年月的需求会合并为一张路标卡片；路标卡片只显示领域 L1。</span></div>
         </div>

@@ -192,7 +192,7 @@ describe("企业协作 Excel", () => {
     expect(applied.requirements[0].overseasRegions).toEqual([]);
   });
 
-  it("三端工作量均为必填并允许显式填写0", async () => {
+  it("三端工作量允许留空或显式填写0", async () => {
     const data = workspace();
     const bytes = await createWorkspaceWorkbook(data, "0.1.0");
     const missing = await editWorkbook(bytes, (workbook) => {
@@ -200,7 +200,7 @@ describe("企业协作 Excel", () => {
       sheet.getCell(4, headerColumn(sheet, "云侧工作量（人月）")).value = null;
     });
     const missingPrepared = await inspectWorkspaceWorkbook(missing, "缺少工作量.xlsx", data);
-    expect(missingPrepared.preview.errors.some((item) => item.message.includes("三端工作量均为必填"))).toBe(true);
+    expect(missingPrepared.preview.errors).toEqual([]);
 
     const explicitZero = await editWorkbook(bytes, (workbook) => {
       const sheet = workbook.getWorksheet("需求清单")!;

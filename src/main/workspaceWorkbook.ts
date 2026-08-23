@@ -331,7 +331,7 @@ function createDomainL1Sheet(workbook: ExcelJS.Workbook, data: WorkspaceData): v
 
 function createRequirementSheet(workbook: ExcelJS.Workbook, data: WorkspaceData): void {
   const sheet = workbook.addWorksheet(SHEETS.requirements, { properties: { tabColor: { argb: "FFED6A5A" } } });
-  prepareDataSheet(sheet, "需求清单 · 黄色字段可协作编辑，灰色系统字段请勿修改", REQUIREMENT_HEADERS.length, 2);
+  prepareDataSheet(sheet, "需求清单 · 三端工作量可留空；合计为 0 时回到需求池标记为待评估", REQUIREMENT_HEADERS.length, 2);
   const domains = new Map(data.domains.map((item) => [item.id, item.name]));
   const products = new Map(data.products.map((item) => [item.id, item.name]));
   const rows = data.requirements.map((item, index) => {
@@ -407,7 +407,7 @@ function createRequirementSheet(workbook: ExcelJS.Workbook, data: WorkspaceData)
       error: "匹配产品必须来自产品字典，且只能选择一个。",
     };
   }
-  for (const column of [10, 11, 12]) applyDecimalValidation(sheet, `${columnLetter(column)}${FIRST_DATA_ROW}:${columnLetter(column)}${validationLast}`, 0, false);
+  for (const column of [10, 11, 12]) applyDecimalValidation(sheet, `${columnLetter(column)}${FIRST_DATA_ROW}:${columnLetter(column)}${validationLast}`, 0, true);
   styleEditable(sheet, `A${FIRST_DATA_ROW}:L${usedLast}`);
   styleSystem(sheet, `M${FIRST_DATA_ROW}:Y${usedLast}`);
   sheet.getColumn(3).alignment = { wrapText: true, vertical: "top" };
@@ -622,16 +622,15 @@ function parseRequirementSheet(
     if (category === "产品专属" && productIds.length !== 1) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[8])!), "产品专属需求必须且只能匹配一个产品");
     if (category === "体验优化" && productIds.length > 0) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[8])!), "体验优化需求不需要匹配产品");
 
-    const device = parseRequiredNonNegativeNumber(values[REQUIREMENT_HEADERS[9]]);
-    const app = parseRequiredNonNegativeNumber(values[REQUIREMENT_HEADERS[10]]);
-    const cloud = parseRequiredNonNegativeNumber(values[REQUIREMENT_HEADERS[11]]);
+    const device = parseNonNegativeNumber(values[REQUIREMENT_HEADERS[9]]);
+    const app = parseNonNegativeNumber(values[REQUIREMENT_HEADERS[10]]);
+    const cloud = parseNonNegativeNumber(values[REQUIREMENT_HEADERS[11]]);
     const unallocated = parseNonNegativeNumber(values[REQUIREMENT_HEADERS[12]]);
     [device, app, cloud].forEach((value, index) => {
-      if (value === null) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[9 + index])!), "三端工作量均为必填，请输入大于或等于0的数字");
+      if (value === null) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[9 + index])!), "工作量应留空或输入大于或等于0的数字");
     });
     if (unallocated === null) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[12])!), "待拆分工作量必须是大于或等于0的数字");
     const total = roundWorkload((device ?? 0) + (app ?? 0) + (cloud ?? 0) + (unallocated ?? 0));
-    if (total <= 0) addIssue(errors, sheet.name, cellAddress(row, columns.get(REQUIREMENT_HEADERS[9])!), "设备、App、云侧和待拆分工作量合计必须大于0");
 
     const createdAt = values[REQUIREMENT_HEADERS[22]] || exportedAt;
     const updatedAt = values[REQUIREMENT_HEADERS[23]] || exportedAt;
@@ -968,11 +967,6 @@ function parseNonNegativeNumber(value: string): number | null {
   if (!value.trim()) return 0;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-}
-
-function parseRequiredNonNegativeNumber(value: string): number | null {
-  if (!value.trim()) return null;
-  return parseNonNegativeNumber(value);
 }
 
 function parseNonNegativeInteger(value: string): number | null {

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { filterRequirements, listTargetMonths, normalizeLegacyGroupOverride, normalizeRequirement } from "../src/shared/requirements";
+import { splitTextIntoLines } from "../src/shared/text";
 import type { Requirement } from "../src/shared/types";
+
+describe("需求池标题分行", () => {
+  it("每20个Unicode字符换行且不限制行数", () => {
+    expect(splitTextIntoLines("字".repeat(20))).toEqual(["字".repeat(20)]);
+    expect(splitTextIntoLines("字".repeat(21))).toEqual(["字".repeat(20), "字"]);
+    expect(splitTextIntoLines("字".repeat(41))).toEqual(["字".repeat(20), "字".repeat(20), "字"]);
+  });
+});
 
 describe("历史需求兼容", () => {
   it("为旧数据补齐描述和图片字段", () => {

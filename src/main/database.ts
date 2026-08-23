@@ -336,7 +336,6 @@ function validateRequirement(input: SaveRequirementInput): void {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetMonth)) throw new Error("上线年月格式应为 YYYY-MM");
   const workloadParts = [input.deviceWorkloadPm, input.appWorkloadPm, input.cloudWorkloadPm];
   if (workloadParts.some((value) => !Number.isFinite(value) || value < 0)) throw new Error("各侧工作量必须是大于或等于0的人月数");
-  if (workloadParts.reduce((sum, value) => sum + value, 0) <= 0) throw new Error("设备、App、云侧工作量至少填写一项");
   if (input.description.length > 5000) throw new Error("需求描述不能超过5000字");
   if (input.images.length > MAX_REQUIREMENT_IMAGES) throw new Error(`每条需求最多添加${MAX_REQUIREMENT_IMAGES}张图片`);
   for (const image of input.images) {

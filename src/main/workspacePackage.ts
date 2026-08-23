@@ -219,7 +219,7 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (item.domainL0Id && domainsById.get(item.domainId)?.parentId !== item.domainL0Id) throw new Error(`需求“${item.title}”的领域 L1 不属于所选领域 L0`);
     if (!SOURCES.includes(item.source) || !CATEGORIES.includes(item.category)) throw new Error(`需求“${item.title}”的来源或分类无效`);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(item.targetMonth)) throw new Error(`需求“${item.title}”的上线年月无效`);
-    if (!Number.isFinite(item.workloadPm) || item.workloadPm <= 0) throw new Error(`需求“${item.title}”的工作量无效`);
+    if (!Number.isFinite(item.workloadPm) || item.workloadPm < 0) throw new Error(`需求“${item.title}”的工作量无效`);
     if (item.description.length > 5000 || !validTimestamp(item.createdAt) || !validTimestamp(item.updatedAt)) throw new Error(`需求“${item.title}”的文本或时间信息无效`);
     if (item.productIds.some((id) => !productIds.has(id))) throw new Error(`需求“${item.title}”引用了不存在的产品`);
     if (item.category === "产品专属" && item.productIds.length !== 1) throw new Error(`产品专属需求“${item.title}”必须且只能匹配一个产品`);
@@ -243,7 +243,7 @@ function validateRawWorkload(raw: Requirement): void {
   const keys = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "unallocatedWorkloadPm"] as const;
   const hasBreakdown = keys.some((key) => Object.prototype.hasOwnProperty.call(raw, key));
   if (!hasBreakdown) {
-    if (!Number.isFinite(raw.workloadPm) || raw.workloadPm <= 0) throw new Error(`需求“${raw.title}”的工作量无效`);
+    if (!Number.isFinite(raw.workloadPm) || raw.workloadPm < 0) throw new Error(`需求“${raw.title}”的工作量无效`);
     return;
   }
   for (const key of keys) {
@@ -251,7 +251,7 @@ function validateRawWorkload(raw: Requirement): void {
     if (!Number.isFinite(value) || value < 0) throw new Error(`需求“${raw.title}”的${key === "deviceWorkloadPm" ? "设备" : key === "appWorkloadPm" ? "App" : key === "cloudWorkloadPm" ? "云侧" : "待拆分"}工作量无效`);
   }
   const total = raw.deviceWorkloadPm + raw.appWorkloadPm + raw.cloudWorkloadPm + raw.unallocatedWorkloadPm;
-  if (total <= 0 || !Number.isFinite(raw.workloadPm) || Math.abs(total - raw.workloadPm) > 0.001) {
+  if (!Number.isFinite(raw.workloadPm) || Math.abs(total - raw.workloadPm) > 0.001) {
     throw new Error(`需求“${raw.title}”的工作量合计不一致`);
   }
 }

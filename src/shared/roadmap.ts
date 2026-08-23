@@ -9,6 +9,7 @@ import type {
   Track,
 } from "./types.js";
 import { sumWorkloadBreakdown, type WorkloadBreakdown, type WorkloadSide } from "./workload.js";
+import { splitTextIntoLines } from "./text.js";
 
 export interface RoadmapGroup {
   key: string;
@@ -248,4 +249,15 @@ export function roadmapCardLabel(group: Pick<RoadmapGroup, "cardTitle" | "requir
   const titles = group.requirements.slice(0, 3).map((item) => item.title.trim()).filter(Boolean);
   const suffix = group.requirements.length > 3 ? "等" : "";
   return `${group.cardTitle}：${titles.join("、")}${suffix}`;
+}
+
+export function roadmapCardDisplayLines(text: string, charactersPerLine = 20, maximumLines = 2): string[] {
+  if (charactersPerLine <= 0 || maximumLines <= 0) return [];
+  const characters = Array.from(text);
+  const maximumCharacters = charactersPerLine * maximumLines;
+  const truncated = characters.length > maximumCharacters;
+  const visible = truncated
+    ? [...characters.slice(0, Math.max(0, maximumCharacters - 1)), "…"]
+    : characters.slice(0, maximumCharacters);
+  return splitTextIntoLines(visible.join(""), charactersPerLine);
 }

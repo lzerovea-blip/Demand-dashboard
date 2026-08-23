@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeWorkloadEdit, parseWorkloadPart, parseWorkloadPm, sumWorkloadBreakdown } from "../src/shared/workload";
+import { isWorkloadPendingEvaluation, normalizeWorkloadEdit, parseWorkloadPart, parseWorkloadPm, sumWorkloadBreakdown } from "../src/shared/workload";
 
 describe("工作量输入", () => {
   it("同时接受正整数和小数", () => {
@@ -33,5 +33,10 @@ describe("工作量输入", () => {
       cloudWorkloadPm: 0.25,
       unallocatedWorkloadPm: 0,
     }])).toEqual({ device: 0.5, app: 1, cloud: 0.25, unallocated: 0, total: 1.75 });
+  });
+
+  it("三端都为零时标记为工作量待评估", () => {
+    expect(isWorkloadPendingEvaluation({ deviceWorkloadPm: 0, appWorkloadPm: 0, cloudWorkloadPm: 0 })).toBe(true);
+    expect(isWorkloadPendingEvaluation({ deviceWorkloadPm: 0, appWorkloadPm: 0.01, cloudWorkloadPm: 0 })).toBe(false);
   });
 });

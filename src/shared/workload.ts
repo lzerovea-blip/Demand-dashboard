@@ -11,6 +11,16 @@ export interface WorkloadBreakdown {
 
 export type WorkloadSide = "device" | "app" | "cloud";
 
+export function isWorkloadPendingEvaluation(value: {
+  deviceWorkloadPm: number;
+  appWorkloadPm: number;
+  cloudWorkloadPm: number;
+}): boolean {
+  return roundWorkload(value.deviceWorkloadPm)
+    + roundWorkload(value.appWorkloadPm)
+    + roundWorkload(value.cloudWorkloadPm) === 0;
+}
+
 export function normalizeWorkloadEdit(raw: string): string | null {
   const normalized = raw.replace(/[。．，,]/g, ".");
   return EDITABLE_WORKLOAD.test(normalized) ? normalized : null;

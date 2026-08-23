@@ -53,6 +53,28 @@ describe(".roadmap 数据包", () => {
     });
   });
 
+  it("允许三端工作量全部为零的数据完整往返", async () => {
+    const zeroWorkload = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({
+        ...item,
+        deviceWorkloadPm: 0,
+        appWorkloadPm: 0,
+        cloudWorkloadPm: 0,
+        unallocatedWorkloadPm: 0,
+        workloadPm: 0,
+      })),
+    };
+    const archive = await createWorkspacePackage(zeroWorkload, "0.7.0");
+    const inspected = await inspectWorkspacePackage(archive, "待评估需求.roadmap");
+    expect(inspected.data.requirements[0]).toMatchObject({
+      deviceWorkloadPm: 0,
+      appWorkloadPm: 0,
+      cloudWorkloadPm: 0,
+      workloadPm: 0,
+    });
+  });
+
   it("文件被修改后拒绝导入", async () => {
     const archive = await createWorkspacePackage(workspace, "0.1.0");
     const zip = await JSZip.loadAsync(archive);
