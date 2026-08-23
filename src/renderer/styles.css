@@ -143,11 +143,16 @@ td strong { color: #1b2832; font-weight: 700; }
 .roadmap-focus-mode .main-panel { grid-column: 1; }
 .roadmap-focus-mode .content { height: 100vh; padding: 14px 16px; overflow: hidden; }
 .roadmap-focus-mode .roadmap-stack { height: 100%; display: grid; grid-template-rows: 48px minmax(0, 1fr); gap: 12px; }
-.roadmap-focus-mode .roadmap-focus-slide { display: none; min-height: 0; grid-row: 2; overflow-y: auto; scrollbar-gutter: stable; }
+.roadmap-focus-mode .roadmap-focus-slide { display: none; min-height: 0; grid-row: 2; overflow: hidden; }
 .roadmap-focus-mode .roadmap-focus-slide.is-active { display: block; }
-.roadmap-focus-mode .roadmap-board { min-height: 100%; }
+.roadmap-focus-mode .roadmap-board { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .roadmap-focus-mode .roadmap-board .panel-title { min-height: 62px; padding: 18px 22px 14px; }
 .roadmap-focus-mode .roadmap-board .panel-title p, .roadmap-focus-mode .roadmap-locate, .roadmap-focus-mode .roadmap-empty-count { display: none; }
+.roadmap-focus-mode .roadmap-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.roadmap-focus-mode .half-header { position: sticky; top: 0; z-index: 5; box-shadow: 0 1px 0 #e3e8eb; }
+.roadmap-focus-mode .month-header { position: sticky; top: 45px; z-index: 5; box-shadow: 0 1px 0 #e3e8eb; }
+.roadmap-focus-mode .lane-corner { top: 0; z-index: 7; box-shadow: 1px 1px 0 #e3e8eb; }
+.roadmap-focus-mode .lane-corner.muted { top: 45px; }
 .roadmap-focus-tabs { width: min(1120px, 100%); margin: 0 auto; padding: 4px; grid-row: 1; display: flex; gap: 5px; overflow-x: auto; border: 1px solid #dfe5e9; border-radius: 12px; background: rgb(255 255 255 / 94%); box-shadow: 0 8px 24px rgb(20 34 46 / 9%); }
 .roadmap-focus-tabs button { min-width: 112px; flex: 1 0 112px; border: 0; border-radius: 8px; background: transparent; color: #65727b; font-size: 14px; font-weight: 750; transition: background .15s, color .15s, box-shadow .15s; }.roadmap-focus-tabs button:hover { background: #f0f3f5; color: #26333d; }.roadmap-focus-tabs button.active { color: #fff; box-shadow: 0 4px 12px rgb(20 34 46 / 14%); }
 

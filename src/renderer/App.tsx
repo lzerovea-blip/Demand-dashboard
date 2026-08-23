@@ -682,7 +682,7 @@ function RoadmapPage({ groups, start, end, focusMode, onOpenGroup }: { groups: R
           aria-hidden={focusMode && index !== focusIndex}
           aria-labelledby={focusMode ? `roadmap-focus-tab-${index}` : undefined}
         >
-          <RoadmapBoard title={`${track}路标`} track={track} groups={groups} start={start} end={end} onOpenGroup={onOpenGroup} />
+          <RoadmapBoard title={`${track}路标`} track={track} groups={groups} start={start} end={end} focusActive={focusMode && index === focusIndex} onOpenGroup={onOpenGroup} />
         </div>
       ))}
       {focusMode && (
@@ -708,7 +708,7 @@ function RoadmapPage({ groups, start, end, focusMode, onOpenGroup }: { groups: R
   );
 }
 
-function RoadmapBoard({ title, track, groups, start, end, onOpenGroup }: { title: string; track: Track; groups: RoadmapGroup[]; start: string; end: string; onOpenGroup: (group: RoadmapGroup) => void }) {
+function RoadmapBoard({ title, track, groups, start, end, focusActive, onOpenGroup }: { title: string; track: Track; groups: RoadmapGroup[]; start: string; end: string; focusActive: boolean; onOpenGroup: (group: RoadmapGroup) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const halves = halfYearSequence(start, end);
   const months = halves.flatMap(monthsForHalfYear);
@@ -732,6 +732,10 @@ function RoadmapBoard({ title, track, groups, start, end, onOpenGroup }: { title
     const frame = window.requestAnimationFrame(() => locateFirstGroup());
     return () => window.cancelAnimationFrame(frame);
   }, [firstGroup?.key, firstLane, start, end]);
+
+  useEffect(() => {
+    if (focusActive) scrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [focusActive]);
 
   return (
     <div className="panel roadmap-board" style={{ borderTopColor: TRACK_COLORS[track] }}>
