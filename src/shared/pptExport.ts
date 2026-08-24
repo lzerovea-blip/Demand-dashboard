@@ -50,14 +50,16 @@ export function buildPptExportPlan(snapshot: AppSnapshot, start: string, end: st
   const roadmapPages = halfYears.flatMap((halfYear) => {
     const months = monthsForHalfYear(halfYear);
     const halfGroups = groups.filter((group) => months.includes(group.targetMonth));
-    const occupiedMonths = [...new Set(halfGroups.map((group) => group.targetMonth))];
-    return ROADMAP_TRACKS.map((track) => ({
-      halfYear,
-      track,
-      months,
-      groups: halfGroups.filter((group) => group.track === track),
-      occupiedMonths,
-    }));
+    return ROADMAP_TRACKS.map((track) => {
+      const trackGroups = halfGroups.filter((group) => group.track === track);
+      return {
+        halfYear,
+        track,
+        months,
+        groups: trackGroups,
+        occupiedMonths: [...new Set(trackGroups.map((group) => group.targetMonth))],
+      };
+    });
   });
 
   const detailStartSlide = FIXED_OPENING_SLIDES + roadmapPages.length + 1;

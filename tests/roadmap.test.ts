@@ -13,6 +13,7 @@ import {
   roadmapCardDisplayLines,
   roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
+  roadmapMonthColumnTemplateForTrack,
   roadmapPrimaryLane,
   roadmapTrackOrder,
 } from "../src/shared/roadmap";
@@ -127,6 +128,17 @@ describe("工作量汇总", () => {
     expect(summary.categoryBySide.平台演进).toEqual({ device: 0.25, app: 0.75, cloud: 0 });
   });
 
+  it("把 NMPA送检和 CE送检合并计入医疗送检路标投入", () => {
+    const medical = [
+      requirement("nmpa", "NMPA需求", "d1", "NMPA送检", "平台演进", "2026-05", [], 1, { device: 1 }),
+      requirement("ce", "CE需求", "d1", "CE送检", "体验优化", "2026-05", [], 2, { app: 2 }),
+    ];
+    const [summary] = buildHalfYearSummaries(medical, "2026H1", "2026H1");
+    expect(summary.bySource.NMPA送检).toBe(1);
+    expect(summary.bySource.CE送检).toBe(2);
+    expect(summary.byTrack.医疗送检).toBe(3);
+  });
+
   it("历史待拆分工作量不混入三端投入与占比", () => {
     const legacy = {
       ...requirement("legacy", "历史需求", "d1", "健康基础", "体验优化", "2026-05", [], 1),
@@ -184,18 +196,38 @@ describe("路标首屏排序", () => {
     expect(roadmapTrackOrder(groups)).toEqual(["健康", "运动", "行业", "全场景", "health平台", "AI", "医疗送检"]);
   });
 
+  it("运动和健康泳道按高阶、进阶、基础自上而下排列", () => {
+    expect(roadmapLanesForTrack("运动")).toEqual(["高阶", "进阶", "基础"]);
+    expect(roadmapLanesForTrack("健康")).toEqual(["高阶", "进阶", "基础"]);
+  });
+
   it("存在运动需求时保持运动路标在前", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
     expect(roadmapTrackOrder(groups)).toEqual(["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"]);
   });
 
-  it("行业、全场景、health平台和医疗送检各自成为单泳道路标", () => {
-    for (const source of ["行业", "全场景", "health平台", "医疗送检"] as const) {
+  it("行业、全场景和health平台各自成为单泳道路标", () => {
+    for (const source of ["行业", "全场景", "health平台"] as const) {
       const item = requirement(`r-${source}`, `${source}需求`, "d1", source, "体验优化", "2026-05", [], 1);
       const [group] = buildRoadmapGroups({ ...snapshot, requirements: [item] }, "2026H1", "2026H1");
       expect(group).toMatchObject({ track: source, level: null });
       expect(roadmapLanesForTrack(source)).toEqual(["需求"]);
       expect(groupMatchesRoadmapLane(group, "需求")).toBe(true);
+    }
+  });
+
+  it("医疗送检路标按 NMPA送检、CE送检两条来源泳道匹配", () => {
+    const sources = ["NMPA送检", "CE送检"] as const;
+    const groups = buildRoadmapGroups({
+      ...snapshot,
+      requirements: sources.map((source, index) => requirement(`medical-${index}`, `${source}需求`, "d1", source, "平台演进", "2026-05", [], 1)),
+    }, "2026H1", "2026H1");
+    expect(roadmapLanesForTrack("医疗送检")).toEqual(sources);
+    for (const source of sources) {
+      const group = groups.find((item) => item.source === source)!;
+      expect(group).toMatchObject({ track: "医疗送检", level: null });
+      expect(groupMatchesRoadmapLane(group, source)).toBe(true);
+      expect(roadmapPrimaryLane(group)).toBe(source);
     }
   });
 
@@ -223,11 +255,22 @@ describe("路标月份列宽", () => {
     );
   });
 
-  it("按传入的运动健康全局卡片统一判断月份占用", () => {
+  it("按传入卡片判断月份占用", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
     const months = ["2026-05", "2026-06", "2026-07", "2026-08"];
     expect(roadmapMonthColumnTemplate(months, groups)).toBe(
       "minmax(280px, 1fr) minmax(280px, 1fr) minmax(280px, 1fr) 72px",
+    );
+  });
+
+  it("每张路标独立判断月份占用，不被其他路标的同月卡片撑宽", () => {
+    const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
+    const months = ["2026-05", "2026-06", "2026-07", "2026-08"];
+    expect(roadmapMonthColumnTemplateForTrack(months, groups, "运动")).toBe(
+      "72px 72px minmax(280px, 1fr) 72px",
+    );
+    expect(roadmapMonthColumnTemplateForTrack(months, groups, "健康")).toBe(
+      "minmax(280px, 1fr) minmax(280px, 1fr) 72px 72px",
     );
   });
 

@@ -11,7 +11,8 @@ export const SOURCES = [
   "AI运动",
   "AI健康",
   "AI综合",
-  "医疗送检",
+  "NMPA送检",
+  "CE送检",
 ] as const;
 
 export const CATEGORIES = ["体验优化", "平台演进", "产品专属"] as const;

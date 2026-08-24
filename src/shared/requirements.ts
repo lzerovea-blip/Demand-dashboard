@@ -5,9 +5,10 @@ import { roundWorkload } from "./workload.js";
 export const LEGACY_OVERSEAS_SOURCE = "海外研究" as const;
 export const LEGACY_AI_SOURCE = "ai" as const;
 export const LEGACY_UPPERCASE_AI_SOURCE = "AI" as const;
+export const LEGACY_MEDICAL_SUBMISSION_SOURCE = "医疗送检" as const;
 
 type LegacyRequirement = Omit<Requirement, "source" | "scope" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
-  { source: RequirementSource | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE } &
+  { source: RequirementSource | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE } &
   Partial<Pick<Requirement, "scope" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
 
 export function normalizeRequirement(input: LegacyRequirement): Requirement {
@@ -19,7 +20,7 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
   const categorized = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm);
   const legacyTotal = nonNegative(input.workloadPm);
   const source = normalizeLegacySource(input.source) as RequirementSource;
-  const productIds = input.category === "产品专属" && Array.isArray(input.productIds)
+  const productIds = Array.isArray(input.productIds)
     ? [...new Set(input.productIds.filter((id): id is string => typeof id === "string" && Boolean(id)))].slice(0, 1)
     : [];
   const unallocatedWorkloadPm = hasBreakdown
@@ -69,6 +70,7 @@ export function normalizeLegacyGroupOverride(item: GroupOverride): GroupOverride
 export function normalizeLegacySource(source: string): string {
   if (source === LEGACY_OVERSEAS_SOURCE) return "行业";
   if (source === LEGACY_AI_SOURCE || source === LEGACY_UPPERCASE_AI_SOURCE) return "AI综合";
+  if (source === LEGACY_MEDICAL_SUBMISSION_SOURCE) return "NMPA送检";
   return source;
 }
 

@@ -1,7 +1,7 @@
 import PptxGenJSImport from "pptxgenjs";
 import { imageSize } from "image-size";
 import { buildPptExportPlan, dynamicRoadmapMonthWidths, type PptDetailPagePlan, type PptExportPlan, type PptRoadmapPagePlan } from "../shared/pptExport.js";
-import { groupMatchesRoadmapLane, roadmapCardLabel, roadmapLanesForTrack, type AiRoadmapLane, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
+import { groupMatchesRoadmapLane, roadmapCardLabel, roadmapLanesForTrack, type AiRoadmapLane, type HalfYearSummary, type MedicalSubmissionRoadmapLane, type RoadmapGroup } from "../shared/roadmap.js";
 import { CATEGORIES, ROADMAP_TRACKS, SOURCES } from "../shared/types.js";
 import type { AppSnapshot, Requirement, RequirementCategory, RequirementImage, RequirementScope, Track } from "../shared/types.js";
 import { sumWorkloadBreakdown, type WorkloadSide } from "../shared/workload.js";
@@ -49,6 +49,11 @@ const AI_LANE_COLORS: Record<AiRoadmapLane, string> = {
   AI运动: "5B6EE1",
   AI健康: "8B5CF6",
   AI综合: "B14AC4",
+};
+
+const MEDICAL_SUBMISSION_LANE_COLORS: Record<MedicalSubmissionRoadmapLane, string> = {
+  NMPA送检: "D64D85",
+  CE送检: "287EF0",
 };
 
 const CATEGORY_COLORS: Record<RequirementCategory, string> = {
@@ -265,9 +270,11 @@ function addRoadmapGrid(slide: PptxSlide, page: PptRoadmapPagePlan, detailLinks:
       ? (row === 0 ? C.orange : row === 1 ? C.blue : C.violet)
       : page.track === "AI"
         ? AI_LANE_COLORS[lane as AiRoadmapLane]
-        : trackColor(page.track);
+        : page.track === "医疗送检"
+          ? MEDICAL_SUBMISSION_LANE_COLORS[lane as MedicalSubmissionRoadmapLane]
+          : trackColor(page.track);
     addShape(slide, "ellipse", 0.76, gridY + row * rowHeight + 0.43, 0.1, 0.1, accent, accent);
-    addText(slide, lane, 0.91, gridY + row * rowHeight + 0.32, 0.68, 0.3, page.track === "AI" ? 10 : 12, C.ink, true);
+    addText(slide, lane, 0.91, gridY + row * rowHeight + 0.32, 0.68, 0.3, page.track === "AI" || page.track === "医疗送检" ? 10 : 12, C.ink, true);
     page.months.forEach((month, col) => {
       const x = monthX[col];
       const w = monthWidths[col];

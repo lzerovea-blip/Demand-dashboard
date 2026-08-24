@@ -54,6 +54,12 @@ describe("PPT导出计划", () => {
     expect(widths.reduce((sum, value) => sum + value, 0)).toBeCloseTo(10.04);
   });
 
+  it("每张 PPT 路标独立记录占用月份", () => {
+    const plan = buildPptExportPlan(snapshot, "2027H1", "2027H1");
+    expect(plan.roadmapPages.find((page) => page.track === "健康")?.occupiedMonths).toEqual(["2027-03"]);
+    expect(plan.roadmapPages.find((page) => page.track === "运动")?.occupiedMonths).toEqual([]);
+  });
+
   it("PPT 路标页沿用已保存的同月卡片顺序", () => {
     const second = { ...requirements[0], id: "r-second", title: "心率需求", domainId: "d2" };
     const orderedSnapshot: AppSnapshot = {
@@ -85,5 +91,11 @@ describe("PPT导出计划", () => {
     expect(aiRoadmapXml).toContain("AI运动");
     expect(aiRoadmapXml).toContain("AI健康");
     expect(aiRoadmapXml).toContain("AI综合");
+    const healthRoadmapXml = await zip.file("ppt/slides/slide5.xml")!.async("string");
+    expect(healthRoadmapXml.indexOf("高阶")).toBeLessThan(healthRoadmapXml.indexOf("进阶"));
+    expect(healthRoadmapXml.indexOf("进阶")).toBeLessThan(healthRoadmapXml.indexOf("基础"));
+    const medicalRoadmapXml = await zip.file("ppt/slides/slide10.xml")!.async("string");
+    expect(medicalRoadmapXml).toContain("NMPA送检");
+    expect(medicalRoadmapXml).toContain("CE送检");
   }, 20_000);
 });

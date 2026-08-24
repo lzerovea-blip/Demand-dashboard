@@ -208,6 +208,18 @@ describe("企业协作 Excel", () => {
     expect(prepared.parsed.requirements[0].requirement.source).toBe("AI综合");
   });
 
+  it("旧版医疗送检来源回导时迁移为 NMPA送检", async () => {
+    const data = workspace();
+    const bytes = await createWorkspaceWorkbook(data, "0.7.8");
+    const legacyMedical = await editWorkbook(bytes, (workbook) => {
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.getCell(4, headerColumn(sheet, "来源")).value = "医疗送检";
+    });
+    const prepared = await inspectWorkspaceWorkbook(legacyMedical, "旧医疗送检协作.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.parsed.requirements[0].requirement.source).toBe("NMPA送检");
+  });
+
   it("兼容 v2 协作表并默认全球且不产生虚假冲突", async () => {
     const data = workspace({ requirements: [{ ...workspace().requirements[0], scope: "仅国内" }] });
     const bytes = await createWorkspaceWorkbook(data, "0.7.2");
@@ -270,7 +282,7 @@ describe("企业协作 Excel", () => {
     expect(prepared.preview.errors.some((item) => item.message.includes("适用范围"))).toBe(true);
   });
 
-  it("产品专属只能匹配一个产品，体验优化不匹配产品", async () => {
+  it("三类需求都只能匹配一个产品", async () => {
     const data = workspace({ products: [
       { id: "p1", name: "手表", sortOrder: 0, active: true },
       { id: "p2", name: "手环", sortOrder: 1, active: true },
@@ -282,9 +294,16 @@ describe("企业协作 Excel", () => {
     });
     const prepared = await inspectWorkspaceWorkbook(edited, "多产品.xlsx", data);
     expect(prepared.preview.errors.some((item) => item.message.includes("只能选择一个"))).toBe(true);
+
+    const missing = await editWorkbook(bytes, (workbook) => {
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.getCell(4, headerColumn(sheet, "匹配产品（单选）")).value = "";
+    });
+    const missingPrepared = await inspectWorkspaceWorkbook(missing, "产品专属缺少产品.xlsx", data);
+    expect(missingPrepared.preview.errors.some((item) => item.message.includes("必须且只能匹配一个产品"))).toBe(true);
   });
 
-  it("平台演进可通过 Excel 往返且不能匹配产品", async () => {
+  it("平台演进可通过 Excel 往返并可选择一个产品", async () => {
     const data = workspace();
     const bytes = await createWorkspaceWorkbook(data, "0.7.3");
     const valid = await editWorkbook(bytes, (workbook) => {
@@ -297,12 +316,13 @@ describe("企业协作 Excel", () => {
     expect(prepared.parsed.requirements[0].requirement.category).toBe("平台演进");
     expect(prepared.parsed.requirements[0].requirement.productIds).toEqual([]);
 
-    const invalid = await editWorkbook(valid, (workbook) => {
+    const withProduct = await editWorkbook(valid, (workbook) => {
       const sheet = workbook.getWorksheet("需求清单")!;
       sheet.getCell(4, headerColumn(sheet, "匹配产品（单选）")).value = "手表";
     });
-    const rejected = await inspectWorkspaceWorkbook(invalid, "平台演进错误产品.xlsx", data);
-    expect(rejected.preview.errors.some((item) => item.message.includes("平台演进需求不需要匹配产品"))).toBe(true);
+    const accepted = await inspectWorkspaceWorkbook(withProduct, "平台演进产品.xlsx", data);
+    expect(accepted.preview.errors).toEqual([]);
+    expect(accepted.parsed.requirements[0].requirement.productIds).toEqual(["p1"]);
   });
 
   it("领域L1必须关联L0，需求中的两级领域必须匹配", async () => {

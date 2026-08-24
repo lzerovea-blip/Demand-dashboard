@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode, type RefObject } from "react";
 import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
@@ -9,7 +9,7 @@ import {
   roadmapCardDisplayParts,
   roadmapLanesForTrack,
   moveRoadmapGroupKey,
-  roadmapMonthColumnTemplate,
+  roadmapMonthColumnTemplateForTrack,
   roadmapPrimaryLane,
   roadmapTrackOrder,
   type HalfYearSummary,
@@ -21,6 +21,7 @@ import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type
 import { windowsSetupDownloadUrl } from "../shared/release";
 import { splitTextIntoLines } from "../shared/text";
 import { moveImageViewerIndex } from "./imageViewer";
+import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
 import {
   CATEGORY_META,
   CATEGORIES,
@@ -60,7 +61,7 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.8",
+  version: "0.7.10",
   releasedAt: "2026-08-24",
   author: "林忠维",
   updateUrl: windowsSetupDownloadUrl("0.7.8"),
@@ -95,7 +96,8 @@ const SOURCE_COLORS: Record<RequirementSource, string> = {
   AI运动: "#5b6ee1",
   AI健康: "#8b5cf6",
   AI综合: "#b14ac4",
-  医疗送检: "#d64d85",
+  NMPA送检: "#d64d85",
+  CE送检: "#287ef0",
 };
 
 const TRACK_COLORS: Record<Track, string> = {
@@ -821,13 +823,16 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
   onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pendingMonthAnchorRef = useRef<RoadmapMonthAnchor | null>(null);
+  const skipAutoLocateRef = useRef(false);
+  const [highlightedDomainId, setHighlightedDomainId] = useState<string | null>(null);
   const halves = halfYearSequence(start, end);
   const months = halves.flatMap(monthsForHalfYear);
   const scoped = groups.filter((item) => item.track === track);
   const firstGroup = scoped[0];
   const lanes = roadmapLanesForTrack(track);
   const firstLane = firstGroup ? roadmapPrimaryLane(firstGroup) : undefined;
-  const monthColumnTemplate = roadmapMonthColumnTemplate(months, groups);
+  const monthColumnTemplate = roadmapMonthColumnTemplateForTrack(months, groups, track);
 
   function locateFirstGroup(behavior: ScrollBehavior = "auto") {
     if (!firstGroup || !firstLane || !scrollRef.current) return;
@@ -840,13 +845,43 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
   }
 
   useEffect(() => {
+    if (skipAutoLocateRef.current) {
+      skipAutoLocateRef.current = false;
+      return;
+    }
     const frame = window.requestAnimationFrame(() => locateFirstGroup());
     return () => window.cancelAnimationFrame(frame);
-  }, [firstGroup?.key, firstLane, start, end]);
+  }, [firstGroup?.key, firstLane, start, end, region]);
+
+  useLayoutEffect(() => {
+    const anchor = pendingMonthAnchorRef.current;
+    const scroller = scrollRef.current;
+    if (!anchor || !scroller) return;
+    const columns = roadmapMonthColumns(scroller);
+    scroller.scrollLeft = roadmapScrollLeftForAnchor(
+      anchor,
+      columns,
+      Math.max(0, scroller.scrollWidth - scroller.clientWidth),
+    );
+    pendingMonthAnchorRef.current = null;
+  }, [region, monthColumnTemplate]);
 
   useEffect(() => {
     if (focusActive) scrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
   }, [focusActive]);
+
+  useEffect(() => {
+    if (!focusMode || !focusActive) setHighlightedDomainId(null);
+  }, [focusMode, focusActive]);
+
+  function changeRegion(nextRegion: RoadmapRegion) {
+    const scroller = scrollRef.current;
+    if (scroller) {
+      pendingMonthAnchorRef.current = captureRoadmapMonthAnchor(scroller.scrollLeft, 116, roadmapMonthColumns(scroller)) ?? null;
+      skipAutoLocateRef.current = true;
+    }
+    onRegionChange(nextRegion);
+  }
 
   return (
     <div className="panel roadmap-board" style={{ borderTopColor: TRACK_COLORS[track] }}>
@@ -864,13 +899,13 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
                 type="button"
                 className="roadmap-region-toggle"
                 aria-label={`当前${region === "domestic" ? "国内" : "海外"}路标，${region === "domestic" ? "切换海外" : "切换国内"}`}
-                onClick={() => onRegionChange(region === "domestic" ? "overseas" : "domestic")}
+                onClick={() => changeRegion(region === "domestic" ? "overseas" : "domestic")}
               >{region === "domestic" ? "切换海外" : "切换国内"}</button>
               : "来源泳道"}
           </div>
           {halves.map((half) => <div key={half} className="half-header" style={{ gridColumn: "span 6" }}>{shortHalf(half)}</div>)}
           <div className="lane-corner muted">上线月份</div>
-          {months.map((month) => <div key={month} className="month-header">{Number(month.slice(5))}月</div>)}
+          {months.map((month) => <div key={month} className="month-header" data-roadmap-month-header={month}>{Number(month.slice(5))}月</div>)}
           {lanes.map((lane) => (
             <RoadmapLane
               key={lane}
@@ -878,6 +913,9 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
               months={months}
               groups={scoped.filter((item) => groupMatchesRoadmapLane(item, lane))}
               reorderEnabled={!focusMode}
+              highlightEnabled={focusMode && focusActive}
+              highlightedDomainId={highlightedDomainId}
+              onHighlightDomain={setHighlightedDomainId}
               onOpenGroup={onOpenGroup}
               onReorderGroups={onReorderGroups}
             />
@@ -890,15 +928,20 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
 
 type RoadmapDropIndicator = { month: string; targetKey?: string; position: "before" | "after" | "end" };
 
-function RoadmapLane({ lane, months, groups, reorderEnabled, onOpenGroup, onReorderGroups }: {
+function RoadmapLane({ lane, months, groups, reorderEnabled, highlightEnabled, highlightedDomainId, onHighlightDomain, onOpenGroup, onReorderGroups }: {
   lane: RoadmapLane;
   months: string[];
   groups: RoadmapGroup[];
   reorderEnabled: boolean;
+  highlightEnabled: boolean;
+  highlightedDomainId: string | null;
+  onHighlightDomain: (domainId: string | null) => void;
   onOpenGroup: (group: RoadmapGroup) => void;
   onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
 }) {
-  const laneAccent = lane.startsWith("AI") ? SOURCE_COLORS[lane as RequirementSource] : undefined;
+  const laneAccent = lane.startsWith("AI") || lane.endsWith("送检")
+    ? SOURCE_COLORS[lane as RequirementSource]
+    : undefined;
   const draggedKeyRef = useRef<string | null>(null);
   const suppressOpenKeyRef = useRef<string | null>(null);
   const [draggedKey, setDraggedKey] = useState<string | null>(null);
@@ -1002,6 +1045,8 @@ function RoadmapLane({ lane, months, groups, reorderEnabled, onOpenGroup, onReor
                 group={group}
                 draggable={draggable}
                 dragging={draggedKey === group.key}
+                related={roadmapCardIsL1Related(group.domainId, highlightedDomainId, highlightEnabled)}
+                onRelatedChange={(active) => highlightEnabled && onHighlightDomain(active ? group.domainId : null)}
                 dropPosition={dropIndicator?.targetKey === group.key ? dropIndicator.position : undefined}
                 onClick={() => openGroup(group)}
                 onDragStart={(event) => beginDrag(event, group)}
@@ -1022,11 +1067,13 @@ function RoadmapLane({ lane, months, groups, reorderEnabled, onOpenGroup, onReor
   );
 }
 
-function RoadmapCard({ group, draggable, dragging, dropPosition, onClick, onDragStart, onDragEnd, onDragOver, onDrop }: {
+function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRelatedChange, onClick, onDragStart, onDragEnd, onDragOver, onDrop }: {
   group: RoadmapGroup;
   draggable: boolean;
   dragging: boolean;
+  related: boolean;
   dropPosition?: "before" | "after" | "end";
+  onRelatedChange: (active: boolean) => void;
   onClick: () => void;
   onDragStart: (event: ReactDragEvent<HTMLButtonElement>) => void;
   onDragEnd: () => void;
@@ -1042,8 +1089,12 @@ function RoadmapCard({ group, draggable, dragging, dropPosition, onClick, onDrag
   const accessibleLabel = [label, productLabel, draggable ? "可上下拖动排序，点击查看全部需求" : "点击查看全部需求"].filter(Boolean).join("；");
   return (
     <button
-      className={`roadmap-card${hasExclusive ? " has-exclusive" : ""}${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
+      className={`roadmap-card${hasExclusive ? " has-exclusive" : ""}${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${related ? " is-l1-related" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
       draggable={draggable}
+      onMouseEnter={() => onRelatedChange(true)}
+      onMouseLeave={() => onRelatedChange(false)}
+      onFocus={() => onRelatedChange(true)}
+      onBlur={() => onRelatedChange(false)}
       onClick={onClick}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -1068,6 +1119,16 @@ function RoadmapCard({ group, draggable, dragging, dropPosition, onClick, onDrag
       )}
     </button>
   );
+}
+
+function roadmapMonthColumns(scroller: HTMLElement): RoadmapMonthColumnMetrics[] {
+  return Array.from(scroller.querySelectorAll<HTMLElement>("[data-roadmap-month-header]"))
+    .map((element) => ({
+      month: element.dataset.roadmapMonthHeader ?? "",
+      offsetLeft: element.offsetLeft,
+      width: element.offsetWidth,
+    }))
+    .filter((item) => Boolean(item.month));
 }
 
 type WorkloadTexts = { device: string; app: string; cloud: string };
@@ -1242,14 +1303,12 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
             </div>
           </Field>
           <div className="form-row-pair category-product-row">
-            <Field label="分类" required><div className="segmented category-segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "产品专属" ? form.productIds.slice(0, 1) : [] })}>{item}</button>)}</div></Field>
-            {form.category === "产品专属"
-              ? <Field label="匹配产品" required>
-                {snapshot.products.some((item) => item.active)
-                  ? <select className="product-wheel-select" value={form.productIds[0] ?? ""} onChange={(event) => setForm({ ...form, productIds: event.target.value ? [event.target.value] : [] })}><option value="">请选择一个产品</option>{snapshot.products.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-                  : <div className="inline-empty">暂无产品，请先到字典设置新增产品。</div>}
-              </Field>
-              : <div className="product-not-required"><span>匹配产品</span><b>{form.category}无需选择产品</b></div>}
+            <Field label="分类" required><div className="segmented category-segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: form.productIds.slice(0, 1) })}>{item}</button>)}</div></Field>
+            <Field label="匹配产品" required={form.category === "产品专属"}>
+              {snapshot.products.some((item) => item.active)
+                ? <select className="product-wheel-select" value={form.productIds[0] ?? ""} onChange={(event) => setForm({ ...form, productIds: event.target.value ? [event.target.value] : [] })}><option value="">{form.category === "产品专属" ? "请选择一个产品" : "可选：请选择一个产品"}</option>{snapshot.products.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+                : <div className="inline-empty">暂无产品，请先到字典设置新增产品。</div>}
+            </Field>
           </div>
           <div className="workload-section">
             <div className="workload-section-head"><span>工作量（人月）</span><strong>合计 {draftTotal === null ? "—" : formatNumber(draftTotal)} 人月</strong></div>
@@ -1438,7 +1497,7 @@ function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDe
     <div className="dictionary-grid">
       <DictionaryPanel title="领域 L0 字典" subtitle="上游领域；一个 L0 可以关联多个 L1" items={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L0", parentId: undefined })} onDelete={onDeleteDomain} />
       <DictionaryPanel title="领域 L1 字典" subtitle="新增或调整 L1 时必须指定所属 L0；路标仅显示 L1" items={domainL1s} parentOptions={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L1" })} onDelete={onDeleteDomain} />
-      <DictionaryPanel title="产品字典" subtitle="产品专属需求必须且只能选择一个产品" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} />
+      <DictionaryPanel title="产品字典" subtitle="三类需求均可匹配一个产品，产品专属必须选择" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} />
     </div>
   );
 }

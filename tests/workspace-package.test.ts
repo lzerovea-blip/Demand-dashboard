@@ -76,14 +76,22 @@ describe(".roadmap 数据包", () => {
     });
   });
 
-  it("完整往返平台演进分类且不携带产品", async () => {
+  it("完整往返平台演进分类及其可选产品", async () => {
     const platformWorkspace = {
       ...workspace,
-      requirements: workspace.requirements.map((item) => ({ ...item, category: "平台演进" as const, productIds: [] })),
+      requirements: workspace.requirements.map((item) => ({ ...item, category: "平台演进" as const, productIds: ["p1"] })),
     };
     const archive = await createWorkspacePackage(platformWorkspace, "0.7.3");
     const inspected = await inspectWorkspacePackage(archive, "平台演进.roadmap");
-    expect(inspected.data.requirements[0]).toMatchObject({ category: "平台演进", productIds: [] });
+    expect(inspected.data.requirements[0]).toMatchObject({ category: "平台演进", productIds: ["p1"] });
+  });
+
+  it("产品专属在完整数据包中仍必须匹配一个产品", async () => {
+    const invalid = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({ ...item, productIds: [] })),
+    };
+    await expect(createWorkspacePackage(invalid, "0.7.10")).rejects.toThrow("必须且只能匹配一个产品");
   });
 
   it("文件被修改后拒绝导入", async () => {
@@ -119,6 +127,18 @@ describe(".roadmap 数据包", () => {
     const inspected = await inspectWorkspacePackage(legacy, "旧AI备份.json");
     expect(inspected.data.requirements[0].source).toBe("AI综合");
     expect(inspected.data.groupOverrides[0].groupKey).toBe("d1::AI综合::2027-03");
+  });
+
+  it("旧数据包中的医疗送检来源和卡片键迁移为 NMPA送检", async () => {
+    const legacyMedicalData = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({ ...item, source: "医疗送检" })),
+      groupOverrides: workspace.groupOverrides.map((item) => ({ ...item, groupKey: "d1::医疗送检::2027-03" })),
+    };
+    const legacy = Buffer.from(JSON.stringify({ schemaVersion: 1, exportedAt: "2026-08-24", data: legacyMedicalData }));
+    const inspected = await inspectWorkspacePackage(legacy, "旧医疗送检备份.json");
+    expect(inspected.data.requirements[0].source).toBe("NMPA送检");
+    expect(inspected.data.groupOverrides[0].groupKey).toBe("d1::NMPA送检::2027-03");
   });
 
   it("拒绝包含非法适用范围的数据包", async () => {

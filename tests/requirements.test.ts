@@ -127,7 +127,31 @@ describe("历史需求兼容", () => {
     }).groupKey).toBe("d1::AI综合::2027-05");
   });
 
-  it("把旧版产品匹配收敛为产品专属单选，其他分类不保留产品", () => {
+  it("把旧版医疗送检来源和卡片键迁移为 NMPA送检", () => {
+    const normalized = normalizeRequirement({
+      id: "legacy-medical",
+      title: "旧医疗送检需求",
+      description: "",
+      images: [],
+      domainId: "d1",
+      source: "医疗送检",
+      category: "平台演进",
+      targetMonth: "2027-06",
+      productIds: [],
+      workloadPm: 1,
+      createdAt: "2026-08-19",
+      updatedAt: "2026-08-19",
+    });
+    expect(normalized.source).toBe("NMPA送检");
+    expect(normalizeLegacyGroupOverride({
+      groupKey: "d1::医疗送检::2027-06",
+      cardTitle: "送检",
+      cardSummary: "",
+      updatedAt: "2026-08-19",
+    }).groupKey).toBe("d1::NMPA送检::2027-06");
+  });
+
+  it("把旧版产品匹配收敛为三类均可单选且不丢失合法产品", () => {
     const exclusive = normalizeRequirement({
       ...requirement("legacy-exclusive", "旧多产品", "d1", "健康基础", "产品专属", "2027-05"),
       productIds: ["p1", "p2", "p1"],
@@ -141,8 +165,8 @@ describe("历史需求兼容", () => {
       productIds: ["p1"],
     });
     expect(exclusive.productIds).toEqual(["p1"]);
-    expect(experience.productIds).toEqual([]);
-    expect(platform.productIds).toEqual([]);
+    expect(experience.productIds).toEqual(["p1"]);
+    expect(platform.productIds).toEqual(["p1"]);
   });
 });
 

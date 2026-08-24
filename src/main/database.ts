@@ -25,7 +25,7 @@ import {
   REQUIREMENT_IMAGE_MIME_TYPES,
   SOURCES,
 } from "../shared/types.js";
-import { LEGACY_AI_SOURCE, LEGACY_OVERSEAS_SOURCE, LEGACY_UPPERCASE_AI_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement } from "../shared/requirements.js";
+import { LEGACY_AI_SOURCE, LEGACY_MEDICAL_SUBMISSION_SOURCE, LEGACY_OVERSEAS_SOURCE, LEGACY_UPPERCASE_AI_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement } from "../shared/requirements.js";
 import { groupKeyFor } from "../shared/roadmap.js";
 import { mergeWorkspaceData } from "../shared/workspace.js";
 import { roundWorkload } from "../shared/workload.js";
@@ -88,7 +88,7 @@ export class LocalDatabase {
       description: input.description.trim(),
       images: input.images.map((image) => ({ ...image, name: image.name.trim() || "需求图片" })),
       overseasRegions: [],
-      productIds: input.category === "产品专属" ? [...new Set(input.productIds)].slice(0, 1) : [],
+      productIds: [...new Set(input.productIds)].slice(0, 1),
       deviceWorkloadPm,
       appWorkloadPm,
       cloudWorkloadPm,
@@ -334,9 +334,12 @@ export class LocalDatabase {
   private migrateLegacySources(): void {
     for (const row of this.all<{ id: string; payload: string }>("SELECT id, payload FROM requirements")) {
       const raw = JSON.parse(row.payload) as Omit<Requirement, "source"> & {
-        source: Requirement["source"] | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE;
+        source: Requirement["source"] | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE;
       };
-      if (raw.source !== LEGACY_OVERSEAS_SOURCE && raw.source !== LEGACY_AI_SOURCE && raw.source !== LEGACY_UPPERCASE_AI_SOURCE) continue;
+      if (raw.source !== LEGACY_OVERSEAS_SOURCE
+        && raw.source !== LEGACY_AI_SOURCE
+        && raw.source !== LEGACY_UPPERCASE_AI_SOURCE
+        && raw.source !== LEGACY_MEDICAL_SUBMISSION_SOURCE) continue;
       const normalized = normalizeRequirement(raw);
       this.run("UPDATE requirements SET payload = ? WHERE id = ?", [JSON.stringify(normalized), row.id]);
     }
@@ -410,5 +413,5 @@ function validateRequirement(input: SaveRequirementInput): void {
     if (!image.dataUrl.startsWith(`data:${image.mimeType};base64,`)) throw new Error(`图片“${image.name}”数据无效`);
   }
   if (input.category === "产品专属" && input.productIds.length !== 1) throw new Error("产品专属需求必须且只能选择一个产品");
-  if (input.category !== "产品专属" && input.productIds.length > 0) throw new Error(`${input.category}需求不需要匹配产品`);
+  if (input.category !== "产品专属" && input.productIds.length > 1) throw new Error(`${input.category}需求最多匹配一个产品`);
 }

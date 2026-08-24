@@ -54,6 +54,7 @@ export function trackOf(source: RequirementSource): Track {
   if (source.startsWith("运动")) return "运动";
   if (source.startsWith("健康")) return "健康";
   if (source.startsWith("AI")) return "AI";
+  if (source === "NMPA送检" || source === "CE送检") return "医疗送检";
   return source as Track;
 }
 
@@ -194,23 +195,27 @@ export function roadmapTrackOrder(groups: Pick<RoadmapGroup, "track">[]): Track[
 }
 
 export type AiRoadmapLane = "AI运动" | "AI健康" | "AI综合";
-export type RoadmapLane = Level | AiRoadmapLane | "需求";
+export type MedicalSubmissionRoadmapLane = "NMPA送检" | "CE送检";
+export type RoadmapLane = Level | AiRoadmapLane | MedicalSubmissionRoadmapLane | "需求";
 
 export function roadmapLanesForTrack(track: Track): readonly RoadmapLane[] {
-  if (track === "运动" || track === "健康") return ["基础", "进阶", "高阶"];
+  if (track === "运动" || track === "健康") return ["高阶", "进阶", "基础"];
   if (track === "AI") return ["AI运动", "AI健康", "AI综合"];
+  if (track === "医疗送检") return ["NMPA送检", "CE送检"];
   return ["需求"];
 }
 
 export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level" | "source">, lane: RoadmapLane): boolean {
   if (group.track === "运动" || group.track === "健康") return group.level === lane;
   if (group.track === "AI") return group.source === lane;
+  if (group.track === "医疗送检") return group.source === lane;
   return lane === "需求";
 }
 
 export function roadmapPrimaryLane(group: Pick<RoadmapGroup, "track" | "level" | "source">): RoadmapLane {
   if (group.track === "运动" || group.track === "健康") return group.level ?? "基础";
   if (group.track === "AI") return group.source as AiRoadmapLane;
+  if (group.track === "医疗送检") return group.source as MedicalSubmissionRoadmapLane;
   return "需求";
 }
 
@@ -222,6 +227,14 @@ export function roadmapMonthColumnTemplate(
   return months
     .map((month) => occupiedMonths.has(month) ? "minmax(280px, 1fr)" : "72px")
     .join(" ");
+}
+
+export function roadmapMonthColumnTemplateForTrack(
+  months: string[],
+  groups: Array<Pick<RoadmapGroup, "targetMonth" | "track">>,
+  track: Track,
+): string {
+  return roadmapMonthColumnTemplate(months, groups.filter((item) => item.track === track));
 }
 
 export function buildHalfYearSummaries(requirements: Requirement[], start: string, end: string): HalfYearSummary[] {
