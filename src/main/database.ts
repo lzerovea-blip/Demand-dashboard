@@ -356,5 +356,5 @@ function validateRequirement(input: SaveRequirementInput): void {
     if (!image.dataUrl.startsWith(`data:${image.mimeType};base64,`)) throw new Error(`图片“${image.name}”数据无效`);
   }
   if (input.category === "产品专属" && input.productIds.length !== 1) throw new Error("产品专属需求必须且只能选择一个产品");
-  if (input.category === "体验优化" && input.productIds.length > 0) throw new Error("体验优化需求不需要匹配产品");
+  if (input.category !== "产品专属" && input.productIds.length > 0) throw new Error(`${input.category}需求不需要匹配产品`);
 }

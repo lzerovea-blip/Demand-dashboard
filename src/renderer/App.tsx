@@ -20,6 +20,7 @@ import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type
 import { windowsSetupDownloadUrl } from "../shared/release";
 import { splitTextIntoLines } from "../shared/text";
 import {
+  CATEGORY_META,
   CATEGORIES,
   MAX_REQUIREMENT_IMAGE_BYTES,
   MAX_REQUIREMENT_IMAGES,
@@ -57,10 +58,10 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.2",
-  releasedAt: "2026-08-23",
+  version: "0.7.3",
+  releasedAt: "2026-08-24",
   author: "林忠维",
-  updateUrl: windowsSetupDownloadUrl("0.7.1"),
+  updateUrl: windowsSetupDownloadUrl("0.7.3"),
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
@@ -553,7 +554,7 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
                     <td>{domains.get(item.domainId) ?? "未命名"}</td>
                     <td><SourceBadge source={item.source} /></td>
                     <td><ScopeBadge scope={item.scope} /></td>
-                    <td><span className={`category ${item.category === "产品专属" ? "exclusive" : "experience"}`}>{item.category}</span></td>
+                    <td><span className={`category ${CATEGORY_META[item.category].className}`}>{item.category}</span></td>
                     <td>{formatMonth(item.targetMonth)}</td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
                     <td className="numeric workload-cell"><b>{formatNumber(item.workloadPm)} PM</b><span>{formatWorkloadBreakdown(workloadBreakdownOf(item))}</span></td>
@@ -571,6 +572,7 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
 
 function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
   const [selectedSide, setSelectedSide] = useState<WorkloadSide>("device");
+  const [selectedCategory, setSelectedCategory] = useState<RequirementCategory>("体验优化");
   const device = summaries.reduce((sum, item) => sum + item.deviceWorkload, 0);
   const app = summaries.reduce((sum, item) => sum + item.appWorkload, 0);
   const cloud = summaries.reduce((sum, item) => sum + item.cloudWorkload, 0);
@@ -579,8 +581,10 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
     track,
     summaries.reduce((sum, item) => sum + item.byTrack[track], 0),
   ])) as Record<Track, number>;
-  const experience = summaries.reduce((sum, item) => sum + item.experienceWorkload, 0);
-  const exclusive = summaries.reduce((sum, item) => sum + item.exclusiveWorkload, 0);
+  const categoryWorkload = Object.fromEntries(CATEGORIES.map((category) => [
+    category,
+    summaries.reduce((sum, item) => sum + item.byCategory[category], 0),
+  ])) as Record<RequirementCategory, number>;
   const unallocated = summaries.reduce((sum, item) => sum + item.unallocatedWorkload, 0);
   return (
     <>
@@ -602,10 +606,11 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
           value: trackWorkload[track],
           color: TRACK_COLORS[track],
         }))} />
-        <DonutChart title="体验优化 / 产品专属" subtitle="按需求分类归属" items={[
-          { label: "体验优化", value: experience, color: "#7357d9" },
-          { label: "产品专属", value: exclusive, color: "#17202a" },
-        ]} />
+        <DonutChart title="需求分类投入占比" subtitle="体验优化 / 平台演进 / 产品专属" items={CATEGORIES.map((category) => ({
+          label: category,
+          value: categoryWorkload[category],
+          color: CATEGORY_META[category].color,
+        }))} />
       </div>
       <div className="summary-charts">
         <div className="panel summary-chart-panel">
@@ -615,12 +620,12 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
         </div>
         <div className="panel summary-chart-panel">
           <PanelTitle
-            title="所选端投入与体验优化占比"
-            subtitle="曲线：工作量（左轴） · 柱：体验优化占比（右轴）"
-            action={<div className="side-tabs">{(["device", "app", "cloud"] as WorkloadSide[]).map((side) => <button key={side} className={selectedSide === side ? "active" : ""} onClick={() => setSelectedSide(side)}>{WORKLOAD_SIDE_META[side].label}</button>)}</div>}
+            title={`所选端投入与${selectedCategory}占比`}
+            subtitle={`曲线：工作量（左轴） · 柱：${selectedCategory}占比（右轴）`}
+            action={<div className="summary-chart-tabs"><div className="side-tabs">{(["device", "app", "cloud"] as WorkloadSide[]).map((side) => <button key={side} className={selectedSide === side ? "active" : ""} onClick={() => setSelectedSide(side)}>{WORKLOAD_SIDE_META[side].label}</button>)}</div><div className="side-tabs category-tabs">{CATEGORIES.map((category) => <button key={category} className={selectedCategory === category ? "active" : ""} onClick={() => setSelectedCategory(category)}>{category}</button>)}</div></div>}
           />
-          <SideExperienceChart summaries={summaries} side={selectedSide} />
-          <div className="chart-legend"><span><i style={{ background: WORKLOAD_SIDE_META[selectedSide].color }} />{WORKLOAD_SIDE_META[selectedSide].label}投入曲线</span><span><i className="experience-legend" />体验优化占比柱</span></div>
+          <SideCategoryChart summaries={summaries} side={selectedSide} category={selectedCategory} />
+          <div className="chart-legend"><span><i style={{ background: WORKLOAD_SIDE_META[selectedSide].color }} />{WORKLOAD_SIDE_META[selectedSide].label}投入曲线</span><span><i className="category-legend" style={{ background: CATEGORY_META[selectedCategory].background, borderColor: CATEGORY_META[selectedCategory].color }} />{selectedCategory}占比柱</span></div>
         </div>
       </div>
     </>
@@ -685,7 +690,7 @@ function ThreeSideBarChart({ summaries }: { summaries: HalfYearSummary[] }) {
   );
 }
 
-function SideExperienceChart({ summaries, side }: { summaries: HalfYearSummary[]; side: WorkloadSide }) {
+function SideCategoryChart({ summaries, side, category }: { summaries: HalfYearSummary[]; side: WorkloadSide; category: RequirementCategory }) {
   const width = 760;
   const height = 330;
   const left = 55;
@@ -698,14 +703,14 @@ function SideExperienceChart({ summaries, side }: { summaries: HalfYearSummary[]
   const groupWidth = chartWidth / Math.max(1, summaries.length);
   const x = (index: number) => left + groupWidth * (index + 0.5);
   const workloadY = (value: number) => top + chartHeight - (value / maxWorkload) * chartHeight;
-  const percentOf = (item: HalfYearSummary) => item.bySide[side] ? (item.experienceBySide[side] / item.bySide[side]) * 100 : 0;
+  const percentOf = (item: HalfYearSummary) => item.bySide[side] ? (item.categoryBySide[category][side] / item.bySide[side]) * 100 : 0;
   const percentY = (value: number) => top + chartHeight - (value / 100) * chartHeight;
   const barWidth = Math.min(45, groupWidth * 0.42);
   const points = summaries.map((item, index) => `${x(index)},${workloadY(item.bySide[side])}`).join(" ");
   return (
-    <svg className="summary-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${WORKLOAD_SIDE_META[side].label}投入曲线和体验优化占比柱状图`}>
+    <svg className="summary-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${WORKLOAD_SIDE_META[side].label}投入曲线和${category}占比柱状图`}>
       {[0, 0.25, 0.5, 0.75, 1].map((ratio) => { const tickY = top + chartHeight * (1 - ratio); return <g key={ratio}><line x1={left} x2={width - right} y1={tickY} y2={tickY} stroke="#e8edef" /><text x={left - 10} y={tickY + 4} textAnchor="end">{formatNumber(maxWorkload * ratio)}</text><text x={width - right + 10} y={tickY + 4}>{Math.round(ratio * 100)}%</text></g>; })}
-      {summaries.map((item, index) => { const percentage = percentOf(item); return <g key={item.halfYear}><rect x={x(index) - barWidth / 2} y={percentY(percentage)} width={barWidth} height={Math.max(0, top + chartHeight - percentY(percentage))} rx="4" fill="#dcd5ff"><title>{shortHalf(item.halfYear)} · 体验优化占比：{Math.round(percentage)}%</title></rect><text x={x(index)} y={height - 17} textAnchor="middle">{shortHalf(item.halfYear)}</text></g>; })}
+      {summaries.map((item, index) => { const percentage = percentOf(item); return <g key={item.halfYear}><rect x={x(index) - barWidth / 2} y={percentY(percentage)} width={barWidth} height={Math.max(0, top + chartHeight - percentY(percentage))} rx="4" fill={CATEGORY_META[category].background} stroke={CATEGORY_META[category].color} strokeWidth="1"><title>{shortHalf(item.halfYear)} · {category}占比：{Math.round(percentage)}%</title></rect><text x={x(index)} y={height - 17} textAnchor="middle">{shortHalf(item.halfYear)}</text></g>; })}
       <polyline points={points} fill="none" stroke={WORKLOAD_SIDE_META[side].color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
       {summaries.map((item, index) => <circle key={item.halfYear} cx={x(index)} cy={workloadY(item.bySide[side])} r="4" fill="#fff" stroke={WORKLOAD_SIDE_META[side].color} strokeWidth="3"><title>{shortHalf(item.halfYear)} · {WORKLOAD_SIDE_META[side].label}：{formatNumber(item.bySide[side])} 人月</title></circle>)}
     </svg>
@@ -1068,14 +1073,14 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
             </div>
           </Field>
           <div className="form-row-pair category-product-row">
-            <Field label="分类" required><div className="segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "体验优化" ? [] : form.productIds.slice(0, 1) })}>{item}</button>)}</div></Field>
+            <Field label="分类" required><div className="segmented category-segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "产品专属" ? form.productIds.slice(0, 1) : [] })}>{item}</button>)}</div></Field>
             {form.category === "产品专属"
               ? <Field label="匹配产品" required>
                 {snapshot.products.some((item) => item.active)
                   ? <select className="product-wheel-select" value={form.productIds[0] ?? ""} onChange={(event) => setForm({ ...form, productIds: event.target.value ? [event.target.value] : [] })}><option value="">请选择一个产品</option>{snapshot.products.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
                   : <div className="inline-empty">暂无产品，请先到字典设置新增产品。</div>}
               </Field>
-              : <div className="product-not-required"><span>匹配产品</span><b>体验优化无需选择产品</b></div>}
+              : <div className="product-not-required"><span>匹配产品</span><b>{form.category}无需选择产品</b></div>}
           </div>
           <div className="workload-section">
             <div className="workload-section-head"><span>工作量（人月）</span><strong>合计 {draftTotal === null ? "—" : formatNumber(draftTotal)} 人月</strong></div>
@@ -1380,7 +1385,7 @@ function pageTitle(page: Page): string {
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与体验优化趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", dictionaries: "维护领域与产品的统一口径", template: "导出需求路标、协作表格与完整需求包" })[page];
+  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", dictionaries: "维护领域与产品的统一口径", template: "导出需求路标、协作表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {

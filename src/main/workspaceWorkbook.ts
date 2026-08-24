@@ -632,7 +632,7 @@ function parseRequirementSheet(
       else productIds.push(product.id);
     });
     if (category === "产品专属" && productIds.length !== 1) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), "产品专属需求必须且只能匹配一个产品");
-    if (category === "体验优化" && productIds.length > 0) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), "体验优化需求不需要匹配产品");
+    if (category !== "产品专属" && productIds.length > 0) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), `${category}需求不需要匹配产品`);
 
     const workloadHeaders = ["设备工作量（人月）", "App工作量（人月）", "云侧工作量（人月）"] as const;
     const device = parseNonNegativeNumber(values[workloadHeaders[0]]);

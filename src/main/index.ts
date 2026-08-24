@@ -21,9 +21,9 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-08-23";
+const APP_RELEASED_AT = "2026-08-24";
 const APP_AUTHOR = "林忠维";
-const LATEST_PUBLIC_WINDOWS_VERSION = "0.7.1";
+const LATEST_PUBLIC_WINDOWS_VERSION = "0.7.3";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
 let database: LocalDatabase;

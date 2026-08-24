@@ -2,7 +2,7 @@ import PptxGenJSImport from "pptxgenjs";
 import { imageSize } from "image-size";
 import { buildPptExportPlan, dynamicRoadmapMonthWidths, type PptDetailPagePlan, type PptExportPlan, type PptRoadmapPagePlan } from "../shared/pptExport.js";
 import { groupMatchesRoadmapLane, roadmapCardLabel, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
-import { ROADMAP_TRACKS, SOURCES } from "../shared/types.js";
+import { CATEGORIES, ROADMAP_TRACKS, SOURCES } from "../shared/types.js";
 import type { AppSnapshot, Requirement, RequirementCategory, RequirementImage, RequirementScope, Track } from "../shared/types.js";
 import { sumWorkloadBreakdown, type WorkloadSide } from "../shared/workload.js";
 
@@ -25,6 +25,8 @@ const C = {
   paleMint: "E9FAF2",
   paleBlue: "EAF2FF",
   paleOrange: "FFF0EC",
+  amber: "C96A08",
+  paleAmber: "FFF0D8",
 } as const;
 
 const SIDE_META: Record<WorkloadSide, { label: string; color: string }> = {
@@ -41,6 +43,12 @@ const TRACK_COLORS: Record<Track, string> = {
   health平台: "11A8C7",
   AI: "8B5CF6",
   医疗送检: "D64D85",
+};
+
+const CATEGORY_COLORS: Record<RequirementCategory, string> = {
+  体验优化: C.violet,
+  平台演进: C.amber,
+  产品专属: C.ink,
 };
 
 type PptxPresentation = any;
@@ -157,10 +165,11 @@ function addSummaryOverviewSlide(pptx: PptxPresentation, plan: PptExportPlan): v
     value: totals.byTrack[track],
     color: trackColor(track),
   })));
-  addDonut(slide, "体验优化 / 产品专属", 9.0, 3.7, 3.65, 2.65, [
-    { label: "体验优化", value: totals.experience, color: C.violet },
-    { label: "产品专属", value: totals.exclusive, color: C.ink },
-  ]);
+  addDonut(slide, "需求分类投入占比", 9.0, 3.7, 3.65, 2.65, CATEGORIES.map((category) => ({
+    label: category,
+    value: totals.byCategory[category],
+    color: CATEGORY_COLORS[category],
+  })));
   if (totals.unallocated > 0) addText(slide, `另有 ${formatNumber(totals.unallocated)} 人月历史工作量待拆分，未计入三端。`, 0.72, 6.77, 7.8, 0.25, 10, C.orange, true);
   addNotes(slide, "指标按设备侧、App 侧、云侧工作量累加；业务与分类占比使用同一工作量口径。");
 }
@@ -168,7 +177,7 @@ function addSummaryOverviewSlide(pptx: PptxPresentation, plan: PptExportPlan): v
 function addSummaryTrendSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
   const slide = pptx.addSlide({ masterName: "ROADMAP_LIGHT" });
   addTopBar(slide, "投入趋势");
-  addTitle(slide, "WORKLOAD TREND", "三端投入节奏与体验优化占比", "柱状图显示各端工作量；右侧折线显示各端体验优化工作量占比。");
+  addTitle(slide, "WORKLOAD TREND", "三端投入节奏与分类占比", "柱状图显示各端工作量；右侧折线显示三类需求工作量占比。");
   const categories = plan.summaries.map((item) => formatHalfYear(item.halfYear));
   const safeCategories = categories.length ? categories : ["暂无数据"];
   const summaries = plan.summaries.length ? plan.summaries : [emptySummary("暂无数据")];
@@ -194,14 +203,14 @@ function addSummaryTrendSlide(pptx: PptxPresentation, plan: PptExportPlan): void
     showBorder: false,
   });
 
-  addText(slide, "体验优化占比（按端）", 7.28, 2.42, 4.8, 0.3, 15, C.ink, true);
-  slide.addChart("line", (["device", "app", "cloud"] as WorkloadSide[]).map((side) => ({
-    name: SIDE_META[side].label,
+  addText(slide, "需求分类投入占比（三端合计）", 7.28, 2.42, 4.8, 0.3, 15, C.ink, true);
+  slide.addChart("line", CATEGORIES.map((category) => ({
+    name: category,
     labels: safeCategories,
-    values: summaries.map((item) => item.bySide[side] ? Math.round((item.experienceBySide[side] / item.bySide[side]) * 100) : 0),
+    values: summaries.map((item) => item.totalWorkload ? Math.round((item.byCategory[category] / item.totalWorkload) * 100) : 0),
   })), {
     x: 7.25, y: 2.78, w: 5.35, h: 3.55,
-    chartColors: [C.cyan, C.blue, C.violet],
+    chartColors: CATEGORIES.map((category) => CATEGORY_COLORS[category]),
     showLegend: true, legendPos: "b", legendFontFace: FONT, legendFontSize: 10,
     catAxisLabelFontFace: FONT, catAxisLabelFontSize: 10,
     valAxisLabelFontFace: FONT, valAxisLabelFontSize: 9,
@@ -211,7 +220,7 @@ function addSummaryTrendSlide(pptx: PptxPresentation, plan: PptExportPlan): void
     valGridLine: { color: C.faint, width: 1 },
     showBorder: false,
   });
-  addNotes(slide, "体验优化占比 = 该端体验优化工作量 / 该端总工作量；无投入时按 0% 处理。");
+  addNotes(slide, "分类占比 = 对应分类三端工作量 / 三端总工作量；无投入时按 0% 处理。");
 }
 
 function addRoadmapSlide(pptx: PptxPresentation, plan: PptExportPlan, page: PptRoadmapPagePlan): void {
@@ -374,7 +383,12 @@ function addPill(slide: PptxSlide, text: string, x: number, y: number, w: number
 }
 
 function addCategoryPill(slide: PptxSlide, category: RequirementCategory, x: number, y: number): void {
-  addPill(slide, category, x, y, 1.18, category === "产品专属" ? C.navy : C.lilac, category === "产品专属" ? C.white : C.violet);
+  const style = category === "产品专属"
+    ? { fill: C.navy, color: C.white }
+    : category === "平台演进"
+      ? { fill: C.paleAmber, color: C.amber }
+      : { fill: C.lilac, color: C.violet };
+  addPill(slide, category, x, y, 1.18, style.fill, style.color);
 }
 
 function addScopePill(slide: PptxSlide, scope: RequirementScope, x: number, y: number): void {
@@ -438,8 +452,10 @@ function summaryTotals(summaries: HalfYearSummary[]) {
     cloud,
     total: device + app + cloud,
     byTrack: Object.fromEntries(ROADMAP_TRACKS.map((track) => [track, summaries.reduce((sum, item) => sum + item.byTrack[track], 0)])) as Record<Track, number>,
-    experience: summaries.reduce((sum, item) => sum + item.experienceWorkload, 0),
-    exclusive: summaries.reduce((sum, item) => sum + item.exclusiveWorkload, 0),
+    byCategory: Object.fromEntries(CATEGORIES.map((category) => [
+      category,
+      summaries.reduce((sum, item) => sum + item.byCategory[category], 0),
+    ])) as Record<RequirementCategory, number>,
     unallocated: summaries.reduce((sum, item) => sum + item.unallocatedWorkload, 0),
   };
 }
@@ -453,10 +469,11 @@ function emptySummary(halfYear: string): HalfYearSummary {
     halfYear,
     bySource: Object.fromEntries(SOURCES.map((source) => [source, 0])) as HalfYearSummary["bySource"],
     byTrack: Object.fromEntries(ROADMAP_TRACKS.map((track) => [track, 0])) as HalfYearSummary["byTrack"],
-    sportsWorkload: 0, healthWorkload: 0, experienceWorkload: 0, exclusiveWorkload: 0,
+    sportsWorkload: 0, healthWorkload: 0,
+    byCategory: Object.fromEntries(CATEGORIES.map((category) => [category, 0])) as HalfYearSummary["byCategory"],
     totalWorkload: 0, deviceWorkload: 0, appWorkload: 0, cloudWorkload: 0, unallocatedWorkload: 0,
     bySide: { device: 0, app: 0, cloud: 0 },
-    experienceBySide: { device: 0, app: 0, cloud: 0 },
+    categoryBySide: Object.fromEntries(CATEGORIES.map((category) => [category, { device: 0, app: 0, cloud: 0 }])) as HalfYearSummary["categoryBySide"],
     requirementCount: 0,
   };
 }

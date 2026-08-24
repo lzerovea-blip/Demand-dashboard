@@ -76,6 +76,16 @@ describe(".roadmap 数据包", () => {
     });
   });
 
+  it("完整往返平台演进分类且不携带产品", async () => {
+    const platformWorkspace = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({ ...item, category: "平台演进" as const, productIds: [] })),
+    };
+    const archive = await createWorkspacePackage(platformWorkspace, "0.7.3");
+    const inspected = await inspectWorkspacePackage(archive, "平台演进.roadmap");
+    expect(inspected.data.requirements[0]).toMatchObject({ category: "平台演进", productIds: [] });
+  });
+
   it("文件被修改后拒绝导入", async () => {
     const archive = await createWorkspacePackage(workspace, "0.1.0");
     const zip = await JSZip.loadAsync(archive);

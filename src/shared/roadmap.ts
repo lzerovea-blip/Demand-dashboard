@@ -1,4 +1,4 @@
-import { ROADMAP_TRACKS, SOURCES } from "./types.js";
+import { CATEGORIES, ROADMAP_TRACKS, SOURCES } from "./types.js";
 import type {
   AppSnapshot,
   GroupOverride,
@@ -37,15 +37,14 @@ export interface HalfYearSummary {
   byTrack: Record<Track, number>;
   sportsWorkload: number;
   healthWorkload: number;
-  experienceWorkload: number;
-  exclusiveWorkload: number;
+  byCategory: Record<RequirementCategory, number>;
   totalWorkload: number;
   deviceWorkload: number;
   appWorkload: number;
   cloudWorkload: number;
   unallocatedWorkload: number;
   bySide: Record<WorkloadSide, number>;
-  experienceBySide: Record<WorkloadSide, number>;
+  categoryBySide: Record<RequirementCategory, Record<WorkloadSide, number>>;
   requirementCount: number;
 }
 
@@ -202,36 +201,34 @@ export function buildHalfYearSummaries(requirements: Requirement[], start: strin
     ) as Record<Track, number>;
     const sportsWorkload = byTrack.运动;
     const healthWorkload = byTrack.健康;
-    const experienceItems = items.filter((item) => item.category === "体验优化");
-    const experienceWorkload = round(experienceItems.reduce((sum, item) => sum + threeSideTotal(item), 0));
-    const exclusiveWorkload = round(items.filter((item) => item.category === "产品专属").reduce((sum, item) => sum + threeSideTotal(item), 0));
+    const byCategory = Object.fromEntries(CATEGORIES.map((category) => [
+      category,
+      round(items.filter((item) => item.category === category).reduce((sum, item) => sum + threeSideTotal(item), 0)),
+    ])) as Record<RequirementCategory, number>;
     const workloadBreakdown = sumWorkloadBreakdown(items);
     const bySide: Record<WorkloadSide, number> = {
       device: workloadBreakdown.device,
       app: workloadBreakdown.app,
       cloud: workloadBreakdown.cloud,
     };
-    const experienceBreakdown = sumWorkloadBreakdown(experienceItems);
-    const experienceBySide: Record<WorkloadSide, number> = {
-      device: experienceBreakdown.device,
-      app: experienceBreakdown.app,
-      cloud: experienceBreakdown.cloud,
-    };
+    const categoryBySide = Object.fromEntries(CATEGORIES.map((category) => {
+      const breakdown = sumWorkloadBreakdown(items.filter((item) => item.category === category));
+      return [category, { device: breakdown.device, app: breakdown.app, cloud: breakdown.cloud }];
+    })) as Record<RequirementCategory, Record<WorkloadSide, number>>;
     return {
       halfYear,
       bySource,
       byTrack,
       sportsWorkload,
       healthWorkload,
-      experienceWorkload,
-      exclusiveWorkload,
+      byCategory,
       totalWorkload: round(workloadBreakdown.device + workloadBreakdown.app + workloadBreakdown.cloud),
       deviceWorkload: workloadBreakdown.device,
       appWorkload: workloadBreakdown.app,
       cloudWorkload: workloadBreakdown.cloud,
       unallocatedWorkload: workloadBreakdown.unallocated,
       bySide,
-      experienceBySide,
+      categoryBySide,
       requirementCount: items.length,
     };
   });

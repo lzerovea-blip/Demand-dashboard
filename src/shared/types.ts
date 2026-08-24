@@ -12,7 +12,7 @@ export const SOURCES = [
   "医疗送检",
 ] as const;
 
-export const CATEGORIES = ["体验优化", "产品专属"] as const;
+export const CATEGORIES = ["体验优化", "平台演进", "产品专属"] as const;
 export const REQUIREMENT_SCOPES = ["仅国内", "仅海外", "全球"] as const;
 /** 仅用于兼容旧版“海外研究”数据包，当前界面不再提供该字段。 */
 export const OVERSEAS_REGIONS = ["欧州", "亚非拉", "欧亚"] as const;
@@ -20,6 +20,16 @@ export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "healt
 
 export type RequirementSource = (typeof SOURCES)[number];
 export type RequirementCategory = (typeof CATEGORIES)[number];
+export const CATEGORY_META: Record<RequirementCategory, {
+  color: string;
+  background: string;
+  className: string;
+  requiresProduct: boolean;
+}> = {
+  体验优化: { color: "#7357d9", background: "#efecff", className: "experience", requiresProduct: false },
+  平台演进: { color: "#c96a08", background: "#fff0d8", className: "platform", requiresProduct: false },
+  产品专属: { color: "#17202a", background: "#e9edef", className: "exclusive", requiresProduct: true },
+};
 export type RequirementScope = (typeof REQUIREMENT_SCOPES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
 export type Track = (typeof ROADMAP_TRACKS)[number];

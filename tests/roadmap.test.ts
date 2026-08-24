@@ -96,15 +96,18 @@ describe("工作量汇总", () => {
       byTrack: { 运动: 0, 健康: 6, 行业: 0, 全场景: 0, health平台: 0, AI: 0, 医疗送检: 0 },
       healthWorkload: 6,
       sportsWorkload: 0,
-      experienceWorkload: 1.5,
-      exclusiveWorkload: 4.5,
+      byCategory: { 体验优化: 1.5, 平台演进: 0, 产品专属: 4.5 },
       totalWorkload: 6,
       deviceWorkload: 1.5,
       appWorkload: 2,
       cloudWorkload: 2.5,
       unallocatedWorkload: 0,
       bySide: { device: 1.5, app: 2, cloud: 2.5 },
-      experienceBySide: { device: 1.5, app: 0, cloud: 0 },
+      categoryBySide: {
+        体验优化: { device: 1.5, app: 0, cloud: 0 },
+        平台演进: { device: 0, app: 0, cloud: 0 },
+        产品专属: { device: 0, app: 2, cloud: 2.5 },
+      },
       requirementCount: 3,
     });
     expect(summaries[1]).toMatchObject({
@@ -113,6 +116,13 @@ describe("工作量汇总", () => {
       totalWorkload: 3,
       requirementCount: 1,
     });
+  });
+
+  it("按三端统计平台演进分类投入", () => {
+    const platform = requirement("platform", "端云能力演进", "d1", "健康基础", "平台演进", "2026-05", [], 1, { device: 0.25, app: 0.75 });
+    const [summary] = buildHalfYearSummaries([...baseRequirements, platform], "2026H1", "2026H1");
+    expect(summary.byCategory).toEqual({ 体验优化: 1.5, 平台演进: 1, 产品专属: 4.5 });
+    expect(summary.categoryBySide.平台演进).toEqual({ device: 0.25, app: 0.75, cloud: 0 });
   });
 
   it("历史待拆分工作量不混入三端投入与占比", () => {

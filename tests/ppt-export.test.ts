@@ -14,7 +14,7 @@ const requirements: Requirement[] = ["需求A", "需求B", "需求C"].map((title
   source: "健康基础",
   scope: "全球",
   overseasRegions: [],
-  category: index === 2 ? "产品专属" : "体验优化",
+  category: index === 2 ? "产品专属" : index === 1 ? "平台演进" : "体验优化",
   targetMonth: "2027-03",
   productIds: index === 2 ? ["p1"] : [],
   deviceWorkloadPm: 1,
@@ -60,5 +60,7 @@ describe("PPT导出计划", () => {
     expect(zip.file("ppt/slides/slide1.xml")).toBeTruthy();
     expect(zip.file("ppt/slides/slide12.xml")).toBeTruthy();
     expect(zip.file("ppt/presentation.xml")).toBeTruthy();
+    const summaryChartXml = await zip.file("ppt/charts/chart3.xml")!.async("string");
+    expect(summaryChartXml).toContain("平台演进");
   }, 20_000);
 });
