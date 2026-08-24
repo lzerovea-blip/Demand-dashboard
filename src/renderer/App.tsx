@@ -22,6 +22,7 @@ import {
 import { latestRequirementSelections } from "../shared/entryDefaults";
 import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type RoadmapRegion } from "../shared/requirements";
 import { splitTextIntoLines } from "../shared/text";
+import { restoreFocusAfterConfirmation } from "./confirmation";
 import { moveImageViewerIndex } from "./imageViewer";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
 import {
@@ -61,9 +62,24 @@ import {
 
 type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template";
 
+interface ConfirmationRequest {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  action: () => Promise<void>;
+  trigger: HTMLElement | null;
+  fallback: HTMLElement | null;
+}
+
+type RequestConfirmation = (
+  request: Omit<ConfirmationRequest, "trigger" | "fallback">,
+  trigger?: HTMLElement | null,
+  fallback?: HTMLElement | null,
+) => void;
+
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.15",
+  version: "0.7.16",
   releasedAt: "2026-08-24",
   author: "林忠维",
 };
@@ -136,6 +152,8 @@ export default function App() {
   const [roadmapFocusRequested, setRoadmapFocusRequested] = useState(false);
   const [roadmapRegion, setRoadmapRegion] = useState<RoadmapRegion>("domestic");
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
+  const [confirmationBusy, setConfirmationBusy] = useState(false);
 
   useEffect(() => {
     window.roadmapApi.getAppInfo().then(setAppInfo).catch(() => undefined);
@@ -271,6 +289,40 @@ export default function App() {
     }
   }
 
+  function requestConfirmation(
+    request: Omit<ConfirmationRequest, "trigger" | "fallback">,
+    trigger: HTMLElement | null = null,
+    fallback: HTMLElement | null = null,
+  ) {
+    setConfirmation({ ...request, trigger, fallback });
+  }
+
+  function closeConfirmation(request: ConfirmationRequest) {
+    setConfirmation(null);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => restoreFocusAfterConfirmation(request.trigger, request.fallback));
+    });
+  }
+
+  async function confirmPendingAction() {
+    const request = confirmation;
+    if (!request || confirmationBusy) return;
+    setConfirmationBusy(true);
+    try {
+      await request.action();
+    } catch {
+      // The shared update helper already exposes the failure in the application toast.
+    } finally {
+      setConfirmationBusy(false);
+      closeConfirmation(request);
+    }
+  }
+
+  function cancelPendingAction() {
+    if (!confirmation || confirmationBusy) return;
+    closeConfirmation(confirmation);
+  }
+
   if (loading) return <div className="boot">正在打开离线需求库…</div>;
 
   return (
@@ -324,10 +376,8 @@ export default function App() {
             <RequirementsPage
               snapshot={snapshot}
               onEdit={setEditor}
-              onDelete={async (id) => {
-                if (!window.confirm("确定删除这条需求？此操作可通过备份恢复。")) return;
-                await update(() => window.roadmapApi.deleteRequirement(id), "需求已删除");
-              }}
+              onDelete={(id) => update(() => window.roadmapApi.deleteRequirement(id), "需求已删除").then(() => undefined)}
+              requestConfirmation={requestConfirmation}
             />
           )}
           {page === "summary" && <SummaryPage summaries={summaries} />}
@@ -357,6 +407,7 @@ export default function App() {
               onSaveProduct={async (input) => { await update(() => window.roadmapApi.saveProduct(input), "产品已保存"); }}
               onDeleteDomain={async (id) => { await update(() => window.roadmapApi.deleteDomain(id), "领域已删除"); }}
               onDeleteProduct={async (id) => { await update(() => window.roadmapApi.deleteProduct(id), "产品已删除"); }}
+              requestConfirmation={requestConfirmation}
             />
           )}
           {page === "template" && (
@@ -484,7 +535,45 @@ export default function App() {
         />
       )}
       {aboutOpen && <AboutDialog info={appInfo} onClose={() => setAboutOpen(false)} />}
+      {confirmation && (
+        <ConfirmationDialog
+          title={confirmation.title}
+          message={confirmation.message}
+          confirmLabel={confirmation.confirmLabel}
+          busy={confirmationBusy}
+          onConfirm={() => void confirmPendingAction()}
+          onCancel={cancelPendingAction}
+        />
+      )}
       {(notice || error) && <div className={`toast ${error ? "error" : "success"}`}>{error || notice}</div>}
+    </div>
+  );
+}
+
+function ConfirmationDialog({ title, message, confirmLabel, busy, onConfirm, onCancel }: { title: string; message: string; confirmLabel: string; busy: boolean; onConfirm: () => void; onCancel: () => void }) {
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    cancelButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || busy) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onCancel();
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [busy, onCancel]);
+  return (
+    <div className="overlay confirmation-overlay" onMouseDown={(event) => event.currentTarget === event.target && !busy && onCancel()}>
+      <div className="confirmation-dialog panel" role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-message">
+        <div className="confirmation-mark" aria-hidden="true">!</div>
+        <h2 id="confirmation-title">{title}</h2>
+        <p id="confirmation-message">{message}</p>
+        <div className="confirmation-actions">
+          <button ref={cancelButtonRef} type="button" className="button ghost" onClick={onCancel} disabled={busy}>取消</button>
+          <button type="button" className="button danger" onClick={onConfirm} disabled={busy}>{busy ? "删除中…" : confirmLabel}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -536,11 +625,12 @@ function PeriodSelector({ start, end, onStart, onEnd }: { start: string; end: st
   );
 }
 
-function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapshot; onEdit: (value: Requirement) => void; onDelete: (id: string) => void }) {
+function RequirementsPage({ snapshot, onEdit, onDelete, requestConfirmation }: { snapshot: AppSnapshot; onEdit: (value: Requirement) => void; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<RequirementSource | "">("");
   const [category, setCategory] = useState<RequirementCategory | "">("");
   const [targetMonth, setTargetMonth] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const domains = new Map(snapshot.domains.map((item) => [item.id, item.name]));
   const products = new Map(snapshot.products.map((item) => [item.id, item.name]));
   const targetMonths = listTargetMonths(snapshot.requirements);
@@ -553,7 +643,7 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
     <>
       <div className="panel table-panel">
         <div className="toolbar">
-          <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题或领域" /></label>
+          <label className="search"><span>⌕</span><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题或领域" /></label>
           <select value={source} onChange={(event) => setSource(event.target.value as RequirementSource | "")}><option value="">全部来源</option>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={category} onChange={(event) => setCategory(event.target.value as RequirementCategory | "")}><option value="">全部分类</option>{CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={targetMonth} onChange={(event) => setTargetMonth(event.target.value)}><option value="">全部月份</option>{targetMonths.map((item) => <option key={item} value={item}>{formatMonth(item)}</option>)}</select>
@@ -575,7 +665,7 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
                     <td>{formatMonth(item.targetMonth)}</td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
                     <td className="numeric workload-cell"><b>{formatNumber(item.workloadPm)} PM</b><span>{formatWorkloadBreakdown(workloadBreakdownOf(item))}</span></td>
-                    <td className="row-actions"><button onClick={() => onEdit(item)}>编辑</button><button className="danger-text" onClick={() => onDelete(item.id)}>删除</button></td>
+                    <td className="row-actions"><button onClick={() => onEdit(item)}>编辑</button><button className="danger-text" onClick={(event) => requestConfirmation({ title: "删除需求", message: "确定删除这条需求？此操作可通过完整需求包恢复。", confirmLabel: "确认删除", action: () => onDelete(item.id) }, event.currentTarget, searchInputRef.current)}>删除</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -1500,21 +1590,22 @@ function ImageViewer({ images, index, closeButtonRef, onSelect, onClose }: {
   );
 }
 
-function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDeleteDomain, onDeleteProduct }: { domains: DictionaryItem[]; products: DictionaryItem[]; onSaveDomain: (input: SaveDictionaryInput) => Promise<void>; onSaveProduct: (input: SaveDictionaryInput) => Promise<void>; onDeleteDomain: (id: string) => Promise<void>; onDeleteProduct: (id: string) => Promise<void> }) {
+function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDeleteDomain, onDeleteProduct, requestConfirmation }: { domains: DictionaryItem[]; products: DictionaryItem[]; onSaveDomain: (input: SaveDictionaryInput) => Promise<void>; onSaveProduct: (input: SaveDictionaryInput) => Promise<void>; onDeleteDomain: (id: string) => Promise<void>; onDeleteProduct: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const domainL0s = domains.filter((item) => item.level === "L0");
   const domainL1s = domains.filter((item) => (item.level ?? "L1") === "L1");
   return (
     <div className="dictionary-grid">
-      <DictionaryPanel title="领域 L0 字典" subtitle="上游领域；一个 L0 可以关联多个 L1" items={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L0", parentId: undefined })} onDelete={onDeleteDomain} />
-      <DictionaryPanel title="领域 L1 字典" subtitle="新增或调整 L1 时必须指定所属 L0；路标仅显示 L1" items={domainL1s} parentOptions={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L1" })} onDelete={onDeleteDomain} />
-      <DictionaryPanel title="产品字典" subtitle="三类需求均可匹配一个产品，产品专属必须选择" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} />
+      <DictionaryPanel title="领域 L0 字典" subtitle="上游领域；一个 L0 可以关联多个 L1" items={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L0", parentId: undefined })} onDelete={onDeleteDomain} requestConfirmation={requestConfirmation} />
+      <DictionaryPanel title="领域 L1 字典" subtitle="新增或调整 L1 时必须指定所属 L0；路标仅显示 L1" items={domainL1s} parentOptions={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L1" })} onDelete={onDeleteDomain} requestConfirmation={requestConfirmation} />
+      <DictionaryPanel title="产品字典" subtitle="三类需求均可匹配一个产品，产品专属必须选择" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} requestConfirmation={requestConfirmation} />
     </div>
   );
 }
 
-function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDelete }: { title: string; subtitle: string; items: DictionaryItem[]; parentOptions?: DictionaryItem[]; onSave: (input: SaveDictionaryInput) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
+function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDelete, requestConfirmation }: { title: string; subtitle: string; items: DictionaryItem[]; parentOptions?: DictionaryItem[]; onSave: (input: SaveDictionaryInput) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const [name, setName] = useState("");
   const [parentId, setParentId] = useState(parentOptions?.[0]?.id ?? "");
+  const nameInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (parentOptions && !parentOptions.some((item) => item.id === parentId)) setParentId(parentOptions[0]?.id ?? "");
   }, [parentId, parentOptions]);
@@ -1528,7 +1619,7 @@ function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDele
     <div className="panel dictionary-panel">
       <PanelTitle title={title} subtitle={subtitle} />
       <form className={`dictionary-add ${parentOptions ? "with-parent" : ""}`} onSubmit={submit}>
-        <input value={name} onChange={(event) => setName(event.target.value)} placeholder={`新增${title.replace("字典", "")}`} />
+        <input ref={nameInputRef} value={name} onChange={(event) => setName(event.target.value)} placeholder={`新增${title.replace("字典", "")}`} />
         {parentOptions && <select aria-label="所属领域 L0" value={parentId} onChange={(event) => setParentId(event.target.value)}><option value="" disabled>选择所属 L0</option>{parentOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
         <button className="button primary" disabled={Boolean(parentOptions && !parentId)}>添加</button>
       </form>
@@ -1536,7 +1627,7 @@ function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDele
         {items.map((item, index) => <div key={item.id} className={parentOptions ? "dictionary-item hierarchical" : "dictionary-item"}>
           <span><em>{String(index + 1).padStart(2, "0")}</em><b>{item.name}</b></span>
           {parentOptions && <select aria-label={`${item.name}所属领域 L0`} value={item.parentId ?? ""} onChange={(event) => void onSave({ id: item.id, name: item.name, sortOrder: item.sortOrder, active: item.active, parentId: event.target.value })}><option value="" disabled>未关联 L0</option>{parentOptions.map((parent) => <option key={parent.id} value={parent.id}>{parent.name}</option>)}</select>}
-          <button className="danger-text" onClick={() => window.confirm(`确定删除“${item.name}”？`) && onDelete(item.id)}>删除</button>
+          <button type="button" className="danger-text" onClick={(event) => requestConfirmation({ title: `删除${title.replace("字典", "")}`, message: `确定删除“${item.name}”？删除后无法直接撤销。`, confirmLabel: "确认删除", action: () => onDelete(item.id) }, event.currentTarget, nameInputRef.current)}>删除</button>
         </div>)}
         {!items.length && <Empty title="字典为空" body="添加后即可在需求表单中选择。" />}
       </div>

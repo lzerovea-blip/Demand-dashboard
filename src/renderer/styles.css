@@ -188,6 +188,13 @@ td strong { color: #1b2832; font-weight: 700; }
 
 .overlay { position: fixed; inset: 0; z-index: 30; background: rgb(9 16 22 / 42%); backdrop-filter: blur(2px); display: flex; justify-content: flex-end; }
 .about-overlay { align-items: center; justify-content: center; padding: 24px; }
+.confirmation-overlay { z-index: 80; align-items: center; justify-content: center; padding: 24px; }
+.confirmation-dialog { width: min(430px, calc(100vw - 48px)); padding: 28px; text-align: center; }
+.confirmation-mark { width: 44px; height: 44px; margin: 0 auto 16px; border-radius: 50%; display: grid; place-items: center; color: #b8423d; background: #fff0ee; font-size: 24px; font-weight: 850; }
+.confirmation-dialog h2 { margin: 0; color: #17212a; font-size: 20px; }
+.confirmation-dialog p { margin: 12px 0 0; color: #6e7a83; font-size: 11px; line-height: 1.7; }
+.confirmation-actions { margin-top: 24px; display: flex; justify-content: center; gap: 10px; }
+.confirmation-actions .button { min-width: 112px; }
 .about-dialog { width: min(720px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow-y: auto; }
 .about-head { padding: 28px 30px 22px; border-bottom: 1px solid #e6ebee; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .about-head h2 { margin: 7px 0 0; font-size: 25px; }.about-head p { margin: 8px 0 0; color: #7c878f; font-size: 11px; }
