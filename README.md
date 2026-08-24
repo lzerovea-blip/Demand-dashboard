@@ -10,10 +10,10 @@
 
 ## Windows 版本
 
-仓库 `release` 目录提供 64 位 Windows 版本：
+GitHub Release 页面提供 64 位 Windows 版本：
 
-- `Solution-Requirements-Manager-Setup-0.7.8-x64.exe`：安装版，可选择安装目录。
-- `Solution-Requirements-Manager-Portable-0.7.8-x64.exe`：便携版，无需安装即可运行。
+- `Solution-Requirements-Manager-Setup-0.7.11-x64.exe`：安装版，可选择安装目录。
+- `Solution-Requirements-Manager-Portable-0.7.11-x64.exe`：便携版，无需安装即可运行。
 
 两个版本均包含离线数据库、PPT 共创模板和工作区数据包能力，运行时不依赖网络。当前构建未使用商业代码签名证书，Windows 首次运行时可能显示“未知发布者”或 SmartScreen 提示；应在可信来源下载并核对发布文件。
 

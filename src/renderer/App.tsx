@@ -61,10 +61,10 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.10",
+  version: "0.7.11",
   releasedAt: "2026-08-24",
   author: "林忠维",
-  updateUrl: windowsSetupDownloadUrl("0.7.8"),
+  updateUrl: windowsSetupDownloadUrl("0.7.11"),
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
