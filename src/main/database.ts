@@ -23,7 +23,7 @@ import {
   REQUIREMENT_SCOPES,
   REQUIREMENT_IMAGE_MIME_TYPES,
 } from "../shared/types.js";
-import { LEGACY_AI_SOURCE, LEGACY_OVERSEAS_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement } from "../shared/requirements.js";
+import { LEGACY_AI_SOURCE, LEGACY_OVERSEAS_SOURCE, LEGACY_UPPERCASE_AI_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement } from "../shared/requirements.js";
 import { mergeWorkspaceData } from "../shared/workspace.js";
 import { roundWorkload } from "../shared/workload.js";
 import { applyPreparedWorkspaceWorkbook, type PreparedWorkspaceWorkbookImport } from "./workspaceWorkbook.js";
@@ -280,9 +280,9 @@ export class LocalDatabase {
   private migrateLegacySources(): void {
     for (const row of this.all<{ id: string; payload: string }>("SELECT id, payload FROM requirements")) {
       const raw = JSON.parse(row.payload) as Omit<Requirement, "source"> & {
-        source: Requirement["source"] | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE;
+        source: Requirement["source"] | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE;
       };
-      if (raw.source !== LEGACY_OVERSEAS_SOURCE && raw.source !== LEGACY_AI_SOURCE) continue;
+      if (raw.source !== LEGACY_OVERSEAS_SOURCE && raw.source !== LEGACY_AI_SOURCE && raw.source !== LEGACY_UPPERCASE_AI_SOURCE) continue;
       const normalized = normalizeRequirement(raw);
       this.run("UPDATE requirements SET payload = ? WHERE id = ?", [JSON.stringify(normalized), row.id]);
     }

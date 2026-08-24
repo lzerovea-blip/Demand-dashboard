@@ -51,6 +51,7 @@ export interface HalfYearSummary {
 export function trackOf(source: RequirementSource): Track {
   if (source.startsWith("运动")) return "运动";
   if (source.startsWith("健康")) return "健康";
+  if (source.startsWith("AI")) return "AI";
   return source as Track;
 }
 
@@ -159,18 +160,25 @@ export function roadmapTrackOrder(groups: Pick<RoadmapGroup, "track">[]): Track[
   return [...core, ...ROADMAP_TRACKS.filter((track) => track !== "运动" && track !== "健康")];
 }
 
-export type RoadmapLane = Level | "需求";
+export type AiRoadmapLane = "AI运动" | "AI健康" | "AI综合";
+export type RoadmapLane = Level | AiRoadmapLane | "需求";
 
 export function roadmapLanesForTrack(track: Track): readonly RoadmapLane[] {
-  return track === "运动" || track === "健康" ? ["基础", "进阶", "高阶"] : ["需求"];
+  if (track === "运动" || track === "健康") return ["基础", "进阶", "高阶"];
+  if (track === "AI") return ["AI运动", "AI健康", "AI综合"];
+  return ["需求"];
 }
 
-export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level">, lane: RoadmapLane): boolean {
-  return group.track === "运动" || group.track === "健康" ? group.level === lane : lane === "需求";
+export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level" | "source">, lane: RoadmapLane): boolean {
+  if (group.track === "运动" || group.track === "健康") return group.level === lane;
+  if (group.track === "AI") return group.source === lane;
+  return lane === "需求";
 }
 
-export function roadmapPrimaryLane(group: Pick<RoadmapGroup, "track" | "level">): RoadmapLane {
-  return group.track === "运动" || group.track === "健康" ? group.level ?? "基础" : "需求";
+export function roadmapPrimaryLane(group: Pick<RoadmapGroup, "track" | "level" | "source">): RoadmapLane {
+  if (group.track === "运动" || group.track === "健康") return group.level ?? "基础";
+  if (group.track === "AI") return group.source as AiRoadmapLane;
+  return "需求";
 }
 
 export function roadmapMonthColumnTemplate(

@@ -109,6 +109,18 @@ describe(".roadmap 数据包", () => {
     expect(inspected.data.domains[0]).toMatchObject({ id: "d1", level: "L1" });
   });
 
+  it("旧数据包中的 AI 来源和卡片键迁移为 AI综合", async () => {
+    const legacyAiData = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({ ...item, source: "AI" })),
+      groupOverrides: workspace.groupOverrides.map((item) => ({ ...item, groupKey: "d1::AI::2027-03" })),
+    };
+    const legacy = Buffer.from(JSON.stringify({ schemaVersion: 1, exportedAt: "2026-08-24", data: legacyAiData }));
+    const inspected = await inspectWorkspacePackage(legacy, "旧AI备份.json");
+    expect(inspected.data.requirements[0].source).toBe("AI综合");
+    expect(inspected.data.groupOverrides[0].groupKey).toBe("d1::AI综合::2027-03");
+  });
+
   it("拒绝包含非法适用范围的数据包", async () => {
     const invalid = {
       ...workspace,

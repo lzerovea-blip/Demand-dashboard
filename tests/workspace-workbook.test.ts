@@ -195,6 +195,18 @@ describe("企业协作 Excel", () => {
     expect(applied.requirements[0].overseasRegions).toEqual([]);
   });
 
+  it("旧版 AI 来源回导时迁移为 AI综合", async () => {
+    const data = workspace();
+    const bytes = await createWorkspaceWorkbook(data, "0.7.3");
+    const legacyAi = await editWorkbook(bytes, (workbook) => {
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.getCell(4, headerColumn(sheet, "来源")).value = "AI";
+    });
+    const prepared = await inspectWorkspaceWorkbook(legacyAi, "旧AI协作.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.parsed.requirements[0].requirement.source).toBe("AI综合");
+  });
+
   it("兼容 v2 协作表并默认全球且不产生虚假冲突", async () => {
     const data = workspace({ requirements: [{ ...workspace().requirements[0], scope: "仅国内" }] });
     const bytes = await createWorkspaceWorkbook(data, "0.7.2");

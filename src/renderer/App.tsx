@@ -58,10 +58,10 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.3",
+  version: "0.7.4",
   releasedAt: "2026-08-24",
   author: "林忠维",
-  updateUrl: windowsSetupDownloadUrl("0.7.3"),
+  updateUrl: windowsSetupDownloadUrl("0.7.4"),
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
@@ -87,7 +87,9 @@ const SOURCE_COLORS: Record<RequirementSource, string> = {
   行业: "#14927f",
   全场景: "#5b6ee1",
   health平台: "#11a8c7",
-  AI: "#8b5cf6",
+  AI运动: "#5b6ee1",
+  AI健康: "#8b5cf6",
+  AI综合: "#b14ac4",
   医疗送检: "#d64d85",
 };
 
@@ -860,9 +862,10 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
 }
 
 function RoadmapLane({ lane, months, groups, onOpenGroup }: { lane: RoadmapLane; months: string[]; groups: RoadmapGroup[]; onOpenGroup: (group: RoadmapGroup) => void }) {
+  const laneAccent = lane.startsWith("AI") ? SOURCE_COLORS[lane as RequirementSource] : undefined;
   return (
     <>
-      <div className="lane-label"><strong>{lane}</strong><span>{groups.length} 卡片</span></div>
+      <div className="lane-label" style={laneAccent ? { borderLeft: `4px solid ${laneAccent}` } : undefined}><strong>{lane}</strong><span>{groups.length} 卡片</span></div>
       {months.map((month) => (
         <div key={`${lane}-${month}`} className="month-cell" data-roadmap-month={month} data-roadmap-lane={lane}>
           {groups.filter((item) => item.targetMonth === month).map((group) => <RoadmapCard key={group.key} group={group} onClick={() => onOpenGroup(group)} />)}

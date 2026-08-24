@@ -12,6 +12,7 @@ import {
   roadmapCardDisplayLines,
   roadmapLanesForTrack,
   roadmapMonthColumnTemplate,
+  roadmapPrimaryLane,
   roadmapTrackOrder,
 } from "../src/shared/roadmap";
 import type { AppSnapshot, Requirement } from "../src/shared/types";
@@ -155,13 +156,28 @@ describe("路标首屏排序", () => {
     expect(roadmapTrackOrder(groups)).toEqual(["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"]);
   });
 
-  it("五类新增来源各自成为单泳道路标", () => {
-    for (const source of ["行业", "全场景", "health平台", "AI", "医疗送检"] as const) {
+  it("行业、全场景、health平台和医疗送检各自成为单泳道路标", () => {
+    for (const source of ["行业", "全场景", "health平台", "医疗送检"] as const) {
       const item = requirement(`r-${source}`, `${source}需求`, "d1", source, "体验优化", "2026-05", [], 1);
       const [group] = buildRoadmapGroups({ ...snapshot, requirements: [item] }, "2026H1", "2026H1");
       expect(group).toMatchObject({ track: source, level: null });
       expect(roadmapLanesForTrack(source)).toEqual(["需求"]);
       expect(groupMatchesRoadmapLane(group, "需求")).toBe(true);
+    }
+  });
+
+  it("AI路标按AI运动、AI健康、AI综合三条来源泳道匹配", () => {
+    const sources = ["AI运动", "AI健康", "AI综合"] as const;
+    const groups = buildRoadmapGroups({
+      ...snapshot,
+      requirements: sources.map((source, index) => requirement(`ai-${index}`, `${source}需求`, "d1", source, "平台演进", "2026-05", [], 1)),
+    }, "2026H1", "2026H1");
+    expect(roadmapLanesForTrack("AI")).toEqual(sources);
+    for (const source of sources) {
+      const group = groups.find((item) => item.source === source)!;
+      expect(group).toMatchObject({ track: "AI", level: null });
+      expect(groupMatchesRoadmapLane(group, source)).toBe(true);
+      expect(roadmapPrimaryLane(group)).toBe(source);
     }
   });
 });

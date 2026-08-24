@@ -80,8 +80,8 @@ describe("历史需求兼容", () => {
     expect(normalized.overseasRegions).toEqual([]);
   });
 
-  it("把旧版小写 ai 来源迁移为大写 AI", () => {
-    const normalized = normalizeRequirement({
+  it("把旧版 AI 和小写 ai 来源迁移为 AI综合", () => {
+    const normalizedLowercase = normalizeRequirement({
       id: "legacy-ai",
       title: "AI 健康助手",
       description: "",
@@ -96,13 +96,35 @@ describe("历史需求兼容", () => {
       createdAt: "2026-08-19",
       updatedAt: "2026-08-19",
     });
-    expect(normalized.source).toBe("AI");
+    const normalizedUppercase = normalizeRequirement({
+      id: "legacy-AI",
+      title: "AI 综合助手",
+      description: "",
+      images: [],
+      domainId: "d1",
+      source: "AI",
+      overseasRegions: [],
+      category: "平台演进",
+      targetMonth: "2027-05",
+      productIds: [],
+      workloadPm: 1,
+      createdAt: "2026-08-19",
+      updatedAt: "2026-08-19",
+    });
+    expect(normalizedLowercase.source).toBe("AI综合");
+    expect(normalizedUppercase.source).toBe("AI综合");
     expect(normalizeLegacyGroupOverride({
       groupKey: "d1::ai::2027-05",
       cardTitle: "AI 健康助手",
       cardSummary: "",
       updatedAt: "2026-08-19",
-    }).groupKey).toBe("d1::AI::2027-05");
+    }).groupKey).toBe("d1::AI综合::2027-05");
+    expect(normalizeLegacyGroupOverride({
+      groupKey: "d1::AI::2027-05",
+      cardTitle: "AI 综合助手",
+      cardSummary: "",
+      updatedAt: "2026-08-19",
+    }).groupKey).toBe("d1::AI综合::2027-05");
   });
 
   it("把旧版产品匹配收敛为产品专属单选，其他分类不保留产品", () => {

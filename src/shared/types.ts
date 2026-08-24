@@ -8,7 +8,9 @@ export const SOURCES = [
   "行业",
   "全场景",
   "health平台",
-  "AI",
+  "AI运动",
+  "AI健康",
+  "AI综合",
   "医疗送检",
 ] as const;
 

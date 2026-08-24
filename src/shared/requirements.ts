@@ -4,9 +4,10 @@ import { roundWorkload } from "./workload.js";
 
 export const LEGACY_OVERSEAS_SOURCE = "海外研究" as const;
 export const LEGACY_AI_SOURCE = "ai" as const;
+export const LEGACY_UPPERCASE_AI_SOURCE = "AI" as const;
 
 type LegacyRequirement = Omit<Requirement, "source" | "scope" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
-  { source: RequirementSource | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE } &
+  { source: RequirementSource | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE } &
   Partial<Pick<Requirement, "scope" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
 
 export function normalizeRequirement(input: LegacyRequirement): Requirement {
@@ -67,7 +68,7 @@ export function normalizeLegacyGroupOverride(item: GroupOverride): GroupOverride
 
 export function normalizeLegacySource(source: string): string {
   if (source === LEGACY_OVERSEAS_SOURCE) return "行业";
-  if (source === LEGACY_AI_SOURCE) return "AI";
+  if (source === LEGACY_AI_SOURCE || source === LEGACY_UPPERCASE_AI_SOURCE) return "AI综合";
   return source;
 }
 

@@ -62,5 +62,9 @@ describe("PPT导出计划", () => {
     expect(zip.file("ppt/presentation.xml")).toBeTruthy();
     const summaryChartXml = await zip.file("ppt/charts/chart3.xml")!.async("string");
     expect(summaryChartXml).toContain("平台演进");
+    const aiRoadmapXml = await zip.file("ppt/slides/slide9.xml")!.async("string");
+    expect(aiRoadmapXml).toContain("AI运动");
+    expect(aiRoadmapXml).toContain("AI健康");
+    expect(aiRoadmapXml).toContain("AI综合");
   }, 20_000);
 });
