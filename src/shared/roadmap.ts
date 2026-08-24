@@ -288,6 +288,27 @@ export function buildHalfYearSummaries(requirements: Requirement[], start: strin
   });
 }
 
+export function summarizeCategoryWorkloadForSide(
+  summaries: Array<Pick<HalfYearSummary, "categoryBySide">>,
+  side: WorkloadSide,
+): Record<RequirementCategory, number> {
+  return Object.fromEntries(CATEGORIES.map((category) => [
+    category,
+    round(summaries.reduce((sum, item) => sum + item.categoryBySide[category][side], 0)),
+  ])) as Record<RequirementCategory, number>;
+}
+
+export function categoryPercentagesForSide(
+  summary: Pick<HalfYearSummary, "bySide" | "categoryBySide">,
+  side: WorkloadSide,
+): Record<RequirementCategory, number> {
+  const sideTotal = summary.bySide[side];
+  return Object.fromEntries(CATEGORIES.map((category) => [
+    category,
+    sideTotal ? round((summary.categoryBySide[category][side] / sideTotal) * 100) : 0,
+  ])) as Record<RequirementCategory, number>;
+}
+
 function round(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }

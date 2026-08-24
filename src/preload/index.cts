@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   ElectronApi,
+  HalfYearRange,
   SaveDictionaryInput,
   SaveGroupOrderInput,
   SaveGroupOverrideInput,
@@ -31,7 +32,7 @@ const api: ElectronApi = {
   exportWorkspacePackage: () => ipcRenderer.invoke("workspace:export"),
   inspectWorkspacePackage: () => ipcRenderer.invoke("workspace:inspect"),
   applyWorkspacePackage: (input: { token: string; mode: WorkspaceImportMode }) => ipcRenderer.invoke("workspace:apply", input),
-  exportWorkspaceWorkbook: () => ipcRenderer.invoke("workbook:export"),
+  exportWorkspaceWorkbook: (input: HalfYearRange) => ipcRenderer.invoke("workbook:export", input),
   inspectWorkspaceWorkbook: () => ipcRenderer.invoke("workbook:inspect"),
   applyWorkspaceWorkbook: (input: { token: string; conflictMode: WorkspaceWorkbookConflictMode }) => ipcRenderer.invoke("workbook:apply", input),
   exportTemplateDraft: () => ipcRenderer.invoke("template:draft-export"),

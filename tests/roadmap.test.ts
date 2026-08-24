@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
+  categoryPercentagesForSide,
   groupKeyFor,
   groupMatchesRoadmapLane,
   halfYearOf,
@@ -16,6 +17,7 @@ import {
   roadmapMonthColumnTemplateForTrack,
   roadmapPrimaryLane,
   roadmapTrackOrder,
+  summarizeCategoryWorkloadForSide,
 } from "../src/shared/roadmap";
 import type { AppSnapshot, Requirement } from "../src/shared/types";
 
@@ -126,6 +128,31 @@ describe("工作量汇总", () => {
     const [summary] = buildHalfYearSummaries([...baseRequirements, platform], "2026H1", "2026H1");
     expect(summary.byCategory).toEqual({ 体验优化: 1.5, 平台演进: 1, 产品专属: 4.5 });
     expect(summary.categoryBySide.平台演进).toEqual({ device: 0.25, app: 0.75, cloud: 0 });
+  });
+
+  it("按所选端跨半年汇总三分类工作量", () => {
+    const items = [
+      requirement("device-experience", "设备体验", "d1", "健康基础", "体验优化", "2026-05", [], 0.1, { device: 0.1 }),
+      requirement("device-platform", "设备平台", "d1", "健康基础", "平台演进", "2026-07", [], 0.2, { device: 0.2 }),
+      requirement("app-exclusive", "App产品", "d1", "健康基础", "产品专属", "2026-07", ["p1"], 0.4, { app: 0.4 }),
+    ];
+    const summaries = buildHalfYearSummaries(items, "2026H1", "2026H2");
+
+    expect(summarizeCategoryWorkloadForSide(summaries, "device")).toEqual({ 体验优化: 0.1, 平台演进: 0.2, 产品专属: 0 });
+    expect(summarizeCategoryWorkloadForSide(summaries, "app")).toEqual({ 体验优化: 0, 平台演进: 0, 产品专属: 0.4 });
+    expect(summarizeCategoryWorkloadForSide(summaries, "cloud")).toEqual({ 体验优化: 0, 平台演进: 0, 产品专属: 0 });
+  });
+
+  it("按所选端计算每个半年的三分类投入占比", () => {
+    const summaries = buildHalfYearSummaries([
+      requirement("experience", "体验", "d1", "健康基础", "体验优化", "2026-05", [], 0.1, { device: 0.1 }),
+      requirement("platform", "平台", "d1", "健康基础", "平台演进", "2026-05", [], 0.2, { device: 0.2 }),
+      requirement("exclusive", "产品", "d1", "健康基础", "产品专属", "2026-05", ["p1"], 0.7, { device: 0.7 }),
+    ], "2026H1", "2026H2");
+
+    expect(categoryPercentagesForSide(summaries[0], "device")).toEqual({ 体验优化: 10, 平台演进: 20, 产品专属: 70 });
+    expect(categoryPercentagesForSide(summaries[1], "device")).toEqual({ 体验优化: 0, 平台演进: 0, 产品专属: 0 });
+    expect(categoryPercentagesForSide(summaries[0], "app")).toEqual({ 体验优化: 0, 平台演进: 0, 产品专属: 0 });
   });
 
   it("把 NMPA送检和 CE送检合并计入医疗送检路标投入", () => {

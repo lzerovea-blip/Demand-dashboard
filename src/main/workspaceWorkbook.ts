@@ -4,6 +4,7 @@ import type {
   DictionaryItem,
   DomainLevel,
   GroupOverride,
+  HalfYearRange,
   Requirement,
   WorkspaceData,
   WorkspaceWorkbookConflictMode,
@@ -13,6 +14,7 @@ import type {
 } from "../shared/types.js";
 import { CATEGORIES, REQUIREMENT_SCOPES, SOURCES } from "../shared/types.js";
 import { normalizeLegacyGroupOverride, normalizeLegacySource } from "../shared/requirements.js";
+import { halfYearSequence, monthsForHalfYear, requirementsInRange } from "../shared/roadmap.js";
 import { roundWorkload } from "../shared/workload.js";
 import { validateWorkspaceData } from "./workspacePackage.js";
 
@@ -155,23 +157,35 @@ export async function createWorkspaceWorkbook(
   data: WorkspaceData,
   appVersion: string,
   exportedAt = new Date().toISOString(),
+  range?: HalfYearRange,
 ): Promise<Buffer> {
-  validateWorkspaceData(data);
+  const exportedData = range ? workspaceDataForWorkbookRange(data, range.start, range.end) : data;
+  validateWorkspaceData(exportedData);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "解决方案需求管理";
   workbook.created = new Date(exportedAt);
   workbook.modified = new Date(exportedAt);
   workbook.calcProperties.fullCalcOnLoad = true;
 
-  createGuideSheet(workbook, data, appVersion, exportedAt);
-  createDictionarySheet(workbook, SHEETS.domainL0s, "DomainL0Table", data.domains.filter((item) => item.level === "L0"));
-  createDomainL1Sheet(workbook, data);
-  createDictionarySheet(workbook, SHEETS.products, "ProductsTable", data.products);
-  createRequirementSheet(workbook, data);
-  createOverrideSheet(workbook, data);
+  createGuideSheet(workbook, exportedData, appVersion, exportedAt, range);
+  createDictionarySheet(workbook, SHEETS.domainL0s, "DomainL0Table", exportedData.domains.filter((item) => item.level === "L0"));
+  createDomainL1Sheet(workbook, exportedData);
+  createDictionarySheet(workbook, SHEETS.products, "ProductsTable", exportedData.products);
+  createRequirementSheet(workbook, exportedData);
+  createOverrideSheet(workbook, exportedData);
 
   const bytes = await workbook.xlsx.writeBuffer();
   return Buffer.from(bytes);
+}
+
+export function workspaceDataForWorkbookRange(data: WorkspaceData, start: string, end: string): WorkspaceData {
+  const months = new Set(halfYearSequence(start, end).flatMap(monthsForHalfYear));
+  return {
+    requirements: requirementsInRange(data.requirements, start, end),
+    domains: data.domains,
+    products: data.products,
+    groupOverrides: data.groupOverrides.filter((item) => months.has(item.groupKey.split("::")[2] ?? "")),
+  };
 }
 
 export async function inspectWorkspaceWorkbook(
@@ -245,7 +259,7 @@ export function applyPreparedWorkspaceWorkbook(
   return plan.data;
 }
 
-function createGuideSheet(workbook: ExcelJS.Workbook, data: WorkspaceData, appVersion: string, exportedAt: string): void {
+function createGuideSheet(workbook: ExcelJS.Workbook, data: WorkspaceData, appVersion: string, exportedAt: string, range?: HalfYearRange): void {
   const sheet = workbook.addWorksheet(SHEETS.guide, { properties: { tabColor: { argb: "FF6B5CDA" } } });
   sheet.views = [{ state: "frozen", ySplit: 2, showGridLines: false }];
   sheet.mergeCells("A1:D1");
@@ -261,7 +275,7 @@ function createGuideSheet(workbook: ExcelJS.Workbook, data: WorkspaceData, appVe
 
   const instructions = [
     ["步骤", "操作", "说明"],
-    [1, "导出", "工作台导出全部结构化数据，不受当前筛选和半年区间影响。"],
+    [1, "导出", range ? `工作台仅导出 ${range.start} 至 ${range.end} 区间内的需求和路标卡片；领域与产品字典完整保留。` : "工作台导出全部结构化数据。"],
     [2, "协作", "将本文件上传到企业已有在线协作平台，多人共同编辑同一份文件。"],
     [3, "下载", "协作完成后下载为标准 .xlsx 文件，不要转换成 CSV。"],
     [4, "导入", "工作台先检查新增、修改、删除、冲突和错误，确认后再合并。"],
@@ -290,12 +304,14 @@ function createGuideSheet(workbook: ExcelJS.Workbook, data: WorkspaceData, appVe
   sheet.getCell("B16").value = appVersion;
   sheet.getCell("A17").value = "数据摘要";
   sheet.getCell("B17").value = `${data.requirements.length} 条需求 · L0 ${domainL0Count} 个 / L1 ${domainL1Count} 个 · ${data.products.length} 个产品 · ${data.groupOverrides.length} 项卡片编辑`;
-  forEachCell(sheet, "A13:B17", (cell) => {
+  sheet.getCell("A18").value = "导出区间";
+  sheet.getCell("B18").value = range ? `${range.start} – ${range.end}` : "完整工作区";
+  forEachCell(sheet, "A13:B18", (cell) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF2F4F6" } };
     cell.border = lightBorders();
   });
-  forEachCell(sheet, "A13:A17", (cell) => { cell.font = { name: "Microsoft YaHei", size: 9, bold: true, color: { argb: "FF66717B" } }; });
-  forEachCell(sheet, "B13:B17", (cell) => { cell.font = { name: "Consolas", size: 9, color: { argb: "FF36414A" } }; });
+  forEachCell(sheet, "A13:A18", (cell) => { cell.font = { name: "Microsoft YaHei", size: 9, bold: true, color: { argb: "FF66717B" } }; });
+  forEachCell(sheet, "B13:B18", (cell) => { cell.font = { name: "Consolas", size: 9, color: { argb: "FF36414A" } }; });
   sheet.columns = [{ width: 20 }, { width: 36 }, { width: 82 }, { width: 4 }];
 }
 

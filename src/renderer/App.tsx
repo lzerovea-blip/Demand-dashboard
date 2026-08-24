@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent a
 import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
+  categoryPercentagesForSide,
   groupMatchesRoadmapLane,
   halfYearSequence,
   monthsForHalfYear,
@@ -12,6 +13,8 @@ import {
   roadmapMonthColumnTemplateForTrack,
   roadmapPrimaryLane,
   roadmapTrackOrder,
+  requirementsInRange,
+  summarizeCategoryWorkloadForSide,
   type HalfYearSummary,
   type RoadmapLane,
   type RoadmapGroup,
@@ -61,10 +64,10 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.11",
+  version: "0.7.14",
   releasedAt: "2026-08-24",
   author: "林忠维",
-  updateUrl: windowsSetupDownloadUrl("0.7.11"),
+  updateUrl: windowsSetupDownloadUrl("0.7.14"),
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
@@ -409,7 +412,7 @@ export default function App() {
               }}
               onExportWorkbook={async () => {
                 try {
-                  const result = await window.roadmapApi.exportWorkspaceWorkbook();
+                  const result = await window.roadmapApi.exportWorkspaceWorkbook({ start: exportStartHalf, end: exportEndHalf });
                   if (!result.canceled) setNotice(`协作 Excel 已导出：${result.path}`);
                 } catch (reason) {
                   setError(messageOf(reason));
@@ -592,7 +595,6 @@ function RequirementsPage({ snapshot, onEdit, onDelete }: { snapshot: AppSnapsho
 
 function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
   const [selectedSide, setSelectedSide] = useState<WorkloadSide>("device");
-  const [selectedCategory, setSelectedCategory] = useState<RequirementCategory>("体验优化");
   const device = summaries.reduce((sum, item) => sum + item.deviceWorkload, 0);
   const app = summaries.reduce((sum, item) => sum + item.appWorkload, 0);
   const cloud = summaries.reduce((sum, item) => sum + item.cloudWorkload, 0);
@@ -601,10 +603,21 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
     track,
     summaries.reduce((sum, item) => sum + item.byTrack[track], 0),
   ])) as Record<Track, number>;
-  const categoryWorkload = Object.fromEntries(CATEGORIES.map((category) => [
-    category,
-    summaries.reduce((sum, item) => sum + item.byCategory[category], 0),
-  ])) as Record<RequirementCategory, number>;
+  const categoryWorkload = summarizeCategoryWorkloadForSide(summaries, selectedSide);
+  const sideSelector = (className = "") => (
+    <div className={`side-tabs${className ? ` ${className}` : ""}`} role="tablist" aria-label="选择工作量端侧">
+      {(["device", "app", "cloud"] as WorkloadSide[]).map((side) => (
+        <button
+          key={side}
+          type="button"
+          role="tab"
+          aria-selected={selectedSide === side}
+          className={selectedSide === side ? "active" : ""}
+          onClick={() => setSelectedSide(side)}
+        >{WORKLOAD_SIDE_META[side].label}</button>
+      ))}
+    </div>
+  );
   const unallocated = summaries.reduce((sum, item) => sum + item.unallocatedWorkload, 0);
   return (
     <>
@@ -626,7 +639,7 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
           value: trackWorkload[track],
           color: TRACK_COLORS[track],
         }))} />
-        <DonutChart title="需求分类投入占比" subtitle="体验优化 / 平台演进 / 产品专属" items={CATEGORIES.map((category) => ({
+        <DonutChart title="需求分类投入占比" subtitle={`${WORKLOAD_SIDE_META[selectedSide].label} · 体验优化 / 平台演进 / 产品专属`} action={sideSelector("donut-side-tabs")} items={CATEGORIES.map((category) => ({
           label: category,
           value: categoryWorkload[category],
           color: CATEGORY_META[category].color,
@@ -640,12 +653,12 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
         </div>
         <div className="panel summary-chart-panel">
           <PanelTitle
-            title={`所选端投入与${selectedCategory}占比`}
-            subtitle={`曲线：工作量（左轴） · 柱：${selectedCategory}占比（右轴）`}
-            action={<div className="summary-chart-tabs"><div className="side-tabs">{(["device", "app", "cloud"] as WorkloadSide[]).map((side) => <button key={side} className={selectedSide === side ? "active" : ""} onClick={() => setSelectedSide(side)}>{WORKLOAD_SIDE_META[side].label}</button>)}</div><div className="side-tabs category-tabs">{CATEGORIES.map((category) => <button key={category} className={selectedCategory === category ? "active" : ""} onClick={() => setSelectedCategory(category)}>{category}</button>)}</div></div>}
+            title="所选端三类需求占比"
+            subtitle="柱：体验优化 / 平台演进 / 产品专属 · 纵轴：占比"
+            action={<div className="summary-chart-tabs">{sideSelector()}</div>}
           />
-          <SideCategoryChart summaries={summaries} side={selectedSide} category={selectedCategory} />
-          <div className="chart-legend"><span><i style={{ background: WORKLOAD_SIDE_META[selectedSide].color }} />{WORKLOAD_SIDE_META[selectedSide].label}投入曲线</span><span><i className="category-legend" style={{ background: CATEGORY_META[selectedCategory].background, borderColor: CATEGORY_META[selectedCategory].color }} />{selectedCategory}占比柱</span></div>
+          <SideCategoryChart summaries={summaries} side={selectedSide} />
+          <div className="chart-legend">{CATEGORIES.map((category) => <span key={category}><i className="category-legend" style={{ background: CATEGORY_META[category].background, borderColor: CATEGORY_META[category].color }} />{category}占比柱</span>)}</div>
         </div>
       </div>
     </>
@@ -658,12 +671,12 @@ interface DonutItem {
   color: string;
 }
 
-function DonutChart({ title, subtitle, items }: { title: string; subtitle: string; items: DonutItem[] }) {
+function DonutChart({ title, subtitle, items, action }: { title: string; subtitle: string; items: DonutItem[]; action?: ReactNode }) {
   const total = items.reduce((sum, item) => sum + item.value, 0);
   let offset = 0;
   return (
     <div className="panel donut-panel">
-      <PanelTitle title={title} subtitle={subtitle} />
+      <PanelTitle title={title} subtitle={subtitle} action={action} />
       <div className="donut-content">
         <svg className="donut-chart" viewBox="0 0 42 42" role="img" aria-label={`${title}，合计${formatNumber(total)}人月`}>
           <circle cx="21" cy="21" r="15.9155" fill="none" stroke="#edf1f3" strokeWidth="7" />
@@ -710,7 +723,7 @@ function ThreeSideBarChart({ summaries }: { summaries: HalfYearSummary[] }) {
   );
 }
 
-function SideCategoryChart({ summaries, side, category }: { summaries: HalfYearSummary[]; side: WorkloadSide; category: RequirementCategory }) {
+function SideCategoryChart({ summaries, side }: { summaries: HalfYearSummary[]; side: WorkloadSide }) {
   const width = 760;
   const height = 330;
   const left = 55;
@@ -719,20 +732,23 @@ function SideCategoryChart({ summaries, side, category }: { summaries: HalfYearS
   const bottom = 46;
   const chartWidth = width - left - right;
   const chartHeight = height - top - bottom;
-  const maxWorkload = Math.max(1, ...summaries.map((item) => item.bySide[side]));
   const groupWidth = chartWidth / Math.max(1, summaries.length);
   const x = (index: number) => left + groupWidth * (index + 0.5);
-  const workloadY = (value: number) => top + chartHeight - (value / maxWorkload) * chartHeight;
-  const percentOf = (item: HalfYearSummary) => item.bySide[side] ? (item.categoryBySide[category][side] / item.bySide[side]) * 100 : 0;
   const percentY = (value: number) => top + chartHeight - (value / 100) * chartHeight;
-  const barWidth = Math.min(45, groupWidth * 0.42);
-  const points = summaries.map((item, index) => `${x(index)},${workloadY(item.bySide[side])}`).join(" ");
+  const barGap = 4;
+  const barWidth = Math.min(22, Math.max(5, (groupWidth - 18) / CATEGORIES.length));
+  const groupBarsWidth = barWidth * CATEGORIES.length + barGap * (CATEGORIES.length - 1);
   return (
-    <svg className="summary-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${WORKLOAD_SIDE_META[side].label}投入曲线和${category}占比柱状图`}>
-      {[0, 0.25, 0.5, 0.75, 1].map((ratio) => { const tickY = top + chartHeight * (1 - ratio); return <g key={ratio}><line x1={left} x2={width - right} y1={tickY} y2={tickY} stroke="#e8edef" /><text x={left - 10} y={tickY + 4} textAnchor="end">{formatNumber(maxWorkload * ratio)}</text><text x={width - right + 10} y={tickY + 4}>{Math.round(ratio * 100)}%</text></g>; })}
-      {summaries.map((item, index) => { const percentage = percentOf(item); return <g key={item.halfYear}><rect x={x(index) - barWidth / 2} y={percentY(percentage)} width={barWidth} height={Math.max(0, top + chartHeight - percentY(percentage))} rx="4" fill={CATEGORY_META[category].background} stroke={CATEGORY_META[category].color} strokeWidth="1"><title>{shortHalf(item.halfYear)} · {category}占比：{Math.round(percentage)}%</title></rect><text x={x(index)} y={height - 17} textAnchor="middle">{shortHalf(item.halfYear)}</text></g>; })}
-      <polyline points={points} fill="none" stroke={WORKLOAD_SIDE_META[side].color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-      {summaries.map((item, index) => <circle key={item.halfYear} cx={x(index)} cy={workloadY(item.bySide[side])} r="4" fill="#fff" stroke={WORKLOAD_SIDE_META[side].color} strokeWidth="3"><title>{shortHalf(item.halfYear)} · {WORKLOAD_SIDE_META[side].label}：{formatNumber(item.bySide[side])} 人月</title></circle>)}
+    <svg className="summary-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${WORKLOAD_SIDE_META[side].label}三类需求占比柱状图`}>
+      {[0, 0.25, 0.5, 0.75, 1].map((ratio) => { const tickY = top + chartHeight * (1 - ratio); return <g key={ratio}><line x1={left} x2={width - right} y1={tickY} y2={tickY} stroke="#e8edef" /><text x={width - right + 10} y={tickY + 4}>{Math.round(ratio * 100)}%</text></g>; })}
+      {summaries.map((item, index) => {
+        const percentages = categoryPercentagesForSide(item, side);
+        const start = x(index) - groupBarsWidth / 2;
+        return <g key={item.halfYear}>{CATEGORIES.map((category, categoryIndex) => {
+          const percentage = percentages[category];
+          return <rect key={category} x={start + categoryIndex * (barWidth + barGap)} y={percentY(percentage)} width={barWidth} height={Math.max(0, top + chartHeight - percentY(percentage))} rx="3" fill={CATEGORY_META[category].background} stroke={CATEGORY_META[category].color} strokeWidth="1"><title>{shortHalf(item.halfYear)} · {category}占比：{formatNumber(percentage)}%</title></rect>;
+        })}<text x={x(index)} y={height - 17} textAnchor="middle">{shortHalf(item.halfYear)}</text></g>;
+      })}
     </svg>
   );
 }
@@ -1555,6 +1571,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
   const [workbookApplying, setWorkbookApplying] = useState<WorkspaceWorkbookConflictMode | null>(null);
   const [exporting, setExporting] = useState(false);
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
+  const workbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).length;
 
   async function inspectPackage() {
     setInspecting(true);
@@ -1640,9 +1657,10 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
           <section className="panel export-type-card excel-export-card">
             <div className="export-type-head"><span className="export-type-icon">X</span><span className="eyebrow">EXCEL COLLABORATION</span></div>
             <h3>Excel 表格</h3>
-            <p>导出全部结构化数据用于多人协作编辑，定稿后可检查并合并导入本机。</p>
+            <p>按当前半年区间导出需求用于多人协作编辑，完整领域和产品字典会随表格保留。</p>
             <dl className="export-type-meta">
-              <div><dt>协作范围</dt><dd>全部需求数据</dd></div>
+              <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
+              <div><dt>需求</dt><dd>{workbookRequirementCount} 条</dd></div>
               <div><dt>图片</dt><dd>不包含</dd></div>
             </dl>
             <div className="export-card-actions">

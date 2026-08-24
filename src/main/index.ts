@@ -12,6 +12,7 @@ import type {
   WorkspaceImportMode,
 } from "../shared/types.js";
 import { buildPptExportPlan } from "../shared/pptExport.js";
+import { halfYearSequence } from "../shared/roadmap.js";
 import { windowsSetupDownloadUrl } from "../shared/release.js";
 import { createRoadmapPresentation } from "./pptxExport.js";
 import {
@@ -24,7 +25,7 @@ import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 const PRODUCT_NAME = "解决方案需求管理";
 const APP_RELEASED_AT = "2026-08-24";
 const APP_AUTHOR = "林忠维";
-const LATEST_PUBLIC_WINDOWS_VERSION = "0.7.11";
+const LATEST_PUBLIC_WINDOWS_VERSION = "0.7.14";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
 let database: LocalDatabase;
@@ -133,15 +134,17 @@ function registerIpc(): void {
     return { snapshot: await database.importWorkspace(prepared.data, input.mode) };
   });
 
-  ipcMain.handle("workbook:export", async () => {
+  ipcMain.handle("workbook:export", async (_event, input: HalfYearRange) => {
+    if (!input) throw new Error("请选择有效的 Excel 导出区间");
+    halfYearSequence(input.start, input.end);
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: "导出企业协作 Excel",
-      defaultPath: `需求路标协作-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      defaultPath: `需求路标协作-${input.start.slice(2)}-${input.end.slice(2)}-${new Date().toISOString().slice(0, 10)}.xlsx`,
       filters: [{ name: "Excel 工作簿", extensions: ["xlsx"] }],
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     const outputPath = result.filePath.toLowerCase().endsWith(".xlsx") ? result.filePath : `${result.filePath}.xlsx`;
-    await writeFile(outputPath, await createWorkspaceWorkbook(database.getWorkspaceData(), app.getVersion()));
+    await writeFile(outputPath, await createWorkspaceWorkbook(database.getWorkspaceData(), app.getVersion(), new Date().toISOString(), input));
     return { canceled: false, path: outputPath };
   });
 

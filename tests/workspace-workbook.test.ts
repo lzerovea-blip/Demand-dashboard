@@ -87,6 +87,41 @@ describe("企业协作 Excel", () => {
     expect(applyPreparedWorkspaceWorkbook(data, prepared, "local-wins")).toEqual(data);
   });
 
+  it("按半年区间导出需求和卡片并保留完整字典，回导不影响范围外数据", async () => {
+    const base = workspace();
+    const outsideRequirement = {
+      ...base.requirements[0],
+      id: "r2",
+      title: "范围外需求",
+      category: "体验优化" as const,
+      targetMonth: "2028-01",
+      productIds: [],
+    };
+    const data = workspace({
+      requirements: [...base.requirements, outsideRequirement],
+      products: [...base.products, { id: "p2", name: "手环", sortOrder: 1, active: true }],
+      groupOverrides: [
+        ...base.groupOverrides,
+        { groupKey: "d1::健康基础::2028-01", cardTitle: "范围外卡片", cardSummary: "范围外摘要", sortOrder: 0, updatedAt: "2026-08-20T00:00:00.000Z" },
+      ],
+    });
+    const bytes = await createWorkspaceWorkbook(data, "0.7.13", "2026-08-24T08:00:00.000Z", { start: "2027H1", end: "2027H1" });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes as never);
+
+    expect(workbook.getWorksheet("填写说明")?.getCell("B18").value).toBe("2027H1 – 2027H1");
+    expect(workbook.getWorksheet("需求清单")?.getCell("B4").value).toBe("社交时差");
+    expect(workbook.getWorksheet("需求清单")?.getCell("B5").value).toBeNull();
+    expect(workbook.getWorksheet("路标卡片")?.getCell("H4").value).toBe("d1::健康基础::2027-03");
+    expect(workbook.getWorksheet("路标卡片")?.getCell("H5").value).toBeNull();
+    expect(workbook.getWorksheet("产品字典")?.getCell("A5").value).toBe("手环");
+
+    const prepared = await inspectWorkspaceWorkbook(bytes, "区间协作.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.counts).toMatchObject({ unchanged: 1, added: 0, updated: 0, deleted: 0 });
+    expect(applyPreparedWorkspaceWorkbook(data, prepared, "local-wins")).toEqual(data);
+  });
+
   it("回导修改和新增需求，并保留同ID需求图片", async () => {
     const data = workspace();
     const bytes = await createWorkspaceWorkbook(data, "0.1.0", "2026-08-20T08:00:00.000Z");

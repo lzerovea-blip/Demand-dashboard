@@ -265,7 +265,7 @@ export interface ElectronApi {
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspacePackage(): Promise<{ canceled: boolean; preview?: WorkspaceImportPreview }>;
   applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode }): Promise<{ snapshot: AppSnapshot }>;
-  exportWorkspaceWorkbook(): Promise<{ canceled: boolean; path?: string }>;
+  exportWorkspaceWorkbook(input: HalfYearRange): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspaceWorkbook(): Promise<{ canceled: boolean; preview?: WorkspaceWorkbookImportPreview }>;
   applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
