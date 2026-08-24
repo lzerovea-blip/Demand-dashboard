@@ -21,7 +21,6 @@ import {
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
 import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type RoadmapRegion } from "../shared/requirements";
-import { windowsSetupDownloadUrl } from "../shared/release";
 import { splitTextIntoLines } from "../shared/text";
 import { moveImageViewerIndex } from "./imageViewer";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
@@ -64,10 +63,9 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.14",
+  version: "0.7.15",
   releasedAt: "2026-08-24",
   author: "林忠维",
-  updateUrl: windowsSetupDownloadUrl("0.7.14"),
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
@@ -507,10 +505,6 @@ function AboutDialog({ info, onClose }: { info: AppInfo; onClose: () => void }) 
           <div><dt>应用版本</dt><dd>v{info.version}</dd></div>
           <div><dt>发版时间</dt><dd>{formatReleaseDate(info.releasedAt)}</dd></div>
           <div><dt>制作者</dt><dd>{info.author}</dd></div>
-          <div className="about-update-row">
-            <dt>最新公开 Windows EXE</dt>
-            <dd><code>{info.updateUrl}</code><button type="button" onClick={() => void window.roadmapApi.openUpdatePage()}>下载安装版 EXE ↗</button></dd>
-          </div>
         </dl>
         <div className="about-guide">
           <h3>使用说明</h3>

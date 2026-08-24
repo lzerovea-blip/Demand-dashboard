@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
 import { basename, join } from "node:path";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { LocalDatabase } from "./database.js";
@@ -13,7 +13,6 @@ import type {
 } from "../shared/types.js";
 import { buildPptExportPlan } from "../shared/pptExport.js";
 import { halfYearSequence } from "../shared/roadmap.js";
-import { windowsSetupDownloadUrl } from "../shared/release.js";
 import { createRoadmapPresentation } from "./pptxExport.js";
 import {
   createWorkspaceWorkbook,
@@ -25,7 +24,6 @@ import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 const PRODUCT_NAME = "解决方案需求管理";
 const APP_RELEASED_AT = "2026-08-24";
 const APP_AUTHOR = "林忠维";
-const LATEST_PUBLIC_WINDOWS_VERSION = "0.7.14";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
 let database: LocalDatabase;
@@ -67,17 +65,12 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
-  const windowsInstallerUrl = windowsSetupDownloadUrl(LATEST_PUBLIC_WINDOWS_VERSION);
   ipcMain.handle("app:info", () => ({
     name: PRODUCT_NAME,
     version: app.getVersion(),
     releasedAt: APP_RELEASED_AT,
     author: APP_AUTHOR,
-    updateUrl: windowsInstallerUrl,
   }));
-  ipcMain.handle("app:update:open", async () => {
-    await shell.openExternal(windowsInstallerUrl);
-  });
   ipcMain.handle("snapshot:get", () => database.getSnapshot());
   ipcMain.handle("window:fullscreen:get", (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false);
   ipcMain.handle("window:fullscreen:set", (event, enabled: boolean) => {

@@ -244,12 +244,10 @@ export interface AppInfo {
   version: string;
   releasedAt: string;
   author: string;
-  updateUrl: string;
 }
 
 export interface ElectronApi {
   getAppInfo(): Promise<AppInfo>;
-  openUpdatePage(): Promise<void>;
   getSnapshot(): Promise<AppSnapshot>;
   getWindowFullscreen(): Promise<boolean>;
   setWindowFullscreen(enabled: boolean): Promise<void>;

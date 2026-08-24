@@ -12,7 +12,6 @@ import type {
 
 const api: ElectronApi = {
   getAppInfo: () => ipcRenderer.invoke("app:info"),
-  openUpdatePage: () => ipcRenderer.invoke("app:update:open"),
   getSnapshot: () => ipcRenderer.invoke("snapshot:get"),
   getWindowFullscreen: () => ipcRenderer.invoke("window:fullscreen:get"),
   setWindowFullscreen: (enabled: boolean) => ipcRenderer.invoke("window:fullscreen:set", enabled),

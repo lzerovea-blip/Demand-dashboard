@@ -12,15 +12,15 @@
 
 GitHub Release 页面提供 64 位 Windows 版本：
 
-- `Solution-Requirements-Manager-Setup-0.7.14-x64.exe`：安装版，可选择安装目录。
-- `Solution-Requirements-Manager-Portable-0.7.14-x64.exe`：便携版，无需安装即可运行。
+- `Solution-Requirements-Manager-Setup-0.7.15-x64.exe`：安装版，可选择安装目录。
+- `Solution-Requirements-Manager-Portable-0.7.15-x64.exe`：便携版，无需安装即可运行。
 
 两个版本均包含离线数据库、PPT 共创模板和工作区数据包能力，运行时不依赖网络。当前构建未使用商业代码签名证书，Windows 首次运行时可能显示“未知发布者”或 SmartScreen 提示；应在可信来源下载并核对发布文件。
 
 ## 当前能力
 
 - 单机 SQLite 数据库，运行时不访问网络。
-- 侧栏显示应用版本、发版时间和制作者，并在内置使用说明中提供最新公开 Windows 安装版 EXE 直达下载地址。
+- 侧栏和内置使用说明显示应用版本、发版时间及制作者。
 - 十四类来源：运动/健康各含基础、进阶、高阶，以及行业、全场景、health平台、AI运动、AI健康、AI综合、NMPA送检、CE送检；历史 AI/ai 自动迁移为 AI综合，历史医疗送检自动迁移为 NMPA送检。
 - 领域字典分为 L0 与 L1，一个 L0 可关联多个 L1；新建需求先选 L0，再从其子级中选择 L1，路标卡片只显示并按 L1 合并。
 - 三类分类：体验优化、平台演进、产品专属；三类均可单选匹配产品，产品专属必选，另外两类可选。
