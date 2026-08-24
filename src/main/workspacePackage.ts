@@ -235,6 +235,7 @@ export function validateWorkspaceData(data: WorkspaceData): void {
   const overrideKeys = new Set<string>();
   for (const item of data.groupOverrides) {
     if (!item.groupKey || overrideKeys.has(item.groupKey) || !item.cardTitle?.trim() || !validTimestamp(item.updatedAt)) throw new Error("数据包包含无效或重复路标卡片编辑");
+    if (item.sortOrder !== undefined && (!Number.isInteger(item.sortOrder) || item.sortOrder < 0)) throw new Error(`路标卡片“${item.cardTitle}”的排序无效`);
     overrideKeys.add(item.groupKey);
     const [domainId, source, targetMonth] = item.groupKey.split("::");
     if (!domainIds.has(domainId) || !SOURCES.includes(normalizeLegacySource(source) as (typeof SOURCES)[number]) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth ?? "")) {

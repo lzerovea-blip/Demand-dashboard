@@ -39,7 +39,7 @@ const workspace: WorkspaceData = {
     { id: "d1", name: "睡眠", sortOrder: 0, active: true, level: "L1", parentId: "l0" },
   ],
   products: [{ id: "p1", name: "手表", sortOrder: 0, active: true }],
-  groupOverrides: [{ groupKey: "d1::健康基础::2027-03", cardTitle: "睡眠", cardSummary: "摘要", updatedAt: "2026-08-20T00:00:00.000Z" }],
+  groupOverrides: [{ groupKey: "d1::健康基础::2027-03", cardTitle: "睡眠", cardSummary: "摘要", sortOrder: 2, updatedAt: "2026-08-20T00:00:00.000Z" }],
 };
 
 describe(".roadmap 数据包", () => {
@@ -127,5 +127,13 @@ describe(".roadmap 数据包", () => {
       requirements: [{ ...workspace.requirements[0], scope: "未知" as never }],
     };
     await expect(createWorkspacePackage(invalid, "0.7.2")).rejects.toThrow("适用范围无效");
+  });
+
+  it("拒绝包含非法卡片顺序的数据包", async () => {
+    const invalid = {
+      ...workspace,
+      groupOverrides: workspace.groupOverrides.map((item) => ({ ...item, sortOrder: -1 })),
+    };
+    await expect(createWorkspacePackage(invalid, "0.7.6")).rejects.toThrow("排序无效");
   });
 });

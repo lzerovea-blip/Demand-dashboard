@@ -5,6 +5,7 @@ import { LocalDatabase } from "./database.js";
 import { createWorkspacePackage, inspectWorkspacePackage, type PreparedWorkspaceImport } from "./workspacePackage.js";
 import type {
   SaveDictionaryInput,
+  SaveGroupOrderInput,
   SaveGroupOverrideInput,
   SaveRequirementInput,
   HalfYearRange,
@@ -23,7 +24,7 @@ import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 const PRODUCT_NAME = "解决方案需求管理";
 const APP_RELEASED_AT = "2026-08-24";
 const APP_AUTHOR = "林忠维";
-const LATEST_PUBLIC_WINDOWS_VERSION = "0.7.4";
+const LATEST_PUBLIC_WINDOWS_VERSION = "0.7.8";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
 let database: LocalDatabase;
@@ -91,6 +92,7 @@ function registerIpc(): void {
   ipcMain.handle("products:save", (_event, input: SaveDictionaryInput) => database.saveProduct(input));
   ipcMain.handle("products:delete", (_event, id: string) => database.deleteProduct(id));
   ipcMain.handle("groups:save", (_event, input: SaveGroupOverrideInput) => database.saveGroupOverride(input));
+  ipcMain.handle("groups:reorder", (_event, input: SaveGroupOrderInput) => database.saveGroupOrder(input));
 
   ipcMain.handle("workspace:export", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {

@@ -15,6 +15,7 @@ export interface RoadmapGroup {
   key: string;
   domainId: string;
   domainName: string;
+  domainSortOrder: number;
   source: RequirementSource;
   track: Track;
   level: Level | null;
@@ -22,6 +23,7 @@ export interface RoadmapGroup {
   targetMonth: string;
   cardTitle: string;
   cardSummary: string;
+  sortOrder?: number;
   requirements: Requirement[];
   productIds: string[];
   productNames: string[];
@@ -134,6 +136,7 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
         key,
         domainId: seed.domainId,
         domainName,
+        domainSortOrder: domains.get(seed.domainId)?.sortOrder ?? Number.MAX_SAFE_INTEGER,
         source: seed.source,
         track: trackOf(seed.source),
         level: levelOf(seed.source),
@@ -141,6 +144,7 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
         targetMonth: seed.targetMonth,
         cardTitle: override?.cardTitle.trim() || domainName,
         cardSummary: override?.cardSummary.trim() || requirements.map((item) => item.title).join("、"),
+        ...(override?.sortOrder === undefined ? {} : { sortOrder: override.sortOrder }),
         requirements: [...requirements].sort((a, b) => a.title.localeCompare(b.title, "zh-CN")),
         productIds,
         productNames: productIds.map((id) => products.get(id)?.name).filter(Boolean) as string[],
@@ -150,7 +154,36 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
         categories,
       } satisfies RoadmapGroup;
     })
-    .sort((a, b) => a.targetMonth.localeCompare(b.targetMonth) || a.source.localeCompare(b.source, "zh-CN"));
+    .sort((a, b) => a.targetMonth.localeCompare(b.targetMonth)
+      || a.source.localeCompare(b.source, "zh-CN")
+      || compareRoadmapGroupOrder(a, b));
+}
+
+export function compareRoadmapGroupOrder(
+  a: Pick<RoadmapGroup, "sortOrder" | "domainSortOrder" | "domainName" | "key">,
+  b: Pick<RoadmapGroup, "sortOrder" | "domainSortOrder" | "domainName" | "key">,
+): number {
+  const aOrdered = Number.isInteger(a.sortOrder) && (a.sortOrder ?? -1) >= 0;
+  const bOrdered = Number.isInteger(b.sortOrder) && (b.sortOrder ?? -1) >= 0;
+  if (aOrdered !== bOrdered) return aOrdered ? -1 : 1;
+  if (aOrdered && bOrdered && a.sortOrder !== b.sortOrder) return (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+  return a.domainSortOrder - b.domainSortOrder
+    || a.domainName.localeCompare(b.domainName, "zh-CN")
+    || a.key.localeCompare(b.key);
+}
+
+export function moveRoadmapGroupKey(
+  groupKeys: string[],
+  draggedKey: string,
+  targetKey?: string,
+  position: "before" | "after" | "end" = "end",
+): string[] {
+  if (!groupKeys.includes(draggedKey)) return groupKeys;
+  const next = groupKeys.filter((key) => key !== draggedKey);
+  if (position === "end" || !targetKey || !next.includes(targetKey)) return [...next, draggedKey];
+  const targetIndex = next.indexOf(targetKey);
+  next.splice(targetIndex + (position === "after" ? 1 : 0), 0, draggedKey);
+  return next;
 }
 
 export function roadmapTrackOrder(groups: Pick<RoadmapGroup, "track">[]): Track[] {

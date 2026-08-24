@@ -7,6 +7,7 @@ import {
   halfYearOf,
   halfYearSequence,
   monthsForHalfYear,
+  moveRoadmapGroupKey,
   roadmapCardLabel,
   roadmapCardDisplayParts,
   roadmapCardDisplayLines,
@@ -146,6 +147,38 @@ describe("工作量汇总", () => {
 });
 
 describe("路标首屏排序", () => {
+  it("同一泳道同一月份按保存顺序排列，未排序卡片排在其后", () => {
+    const requirements = [
+      requirement("order-a", "卡片A", "d1", "健康基础", "体验优化", "2026-05", [], 1),
+      requirement("order-b", "卡片B", "d2", "健康基础", "体验优化", "2026-05", [], 1),
+      requirement("order-c", "卡片C", "d3", "健康基础", "体验优化", "2026-05", [], 1),
+    ];
+    const groups = buildRoadmapGroups({
+      ...snapshot,
+      requirements,
+      domains: [
+        ...snapshot.domains,
+        { id: "d3", name: "心率", active: true, sortOrder: 2, level: "L1" },
+      ],
+      groupOverrides: [
+        { groupKey: groupKeyFor(requirements[0]), cardTitle: "血压", cardSummary: "", sortOrder: 1, updatedAt: "2026-01-01" },
+        { groupKey: groupKeyFor(requirements[1]), cardTitle: "跑步", cardSummary: "", sortOrder: 0, updatedAt: "2026-01-01" },
+      ],
+    }, "2026H1", "2026H1");
+    expect(groups.map((group) => group.key)).toEqual([
+      groupKeyFor(requirements[1]),
+      groupKeyFor(requirements[0]),
+      groupKeyFor(requirements[2]),
+    ]);
+  });
+
+  it("只重排指定卡片并支持插入前后或末尾", () => {
+    expect(moveRoadmapGroupKey(["a", "b", "c"], "c", "a", "before")).toEqual(["c", "a", "b"]);
+    expect(moveRoadmapGroupKey(["a", "b", "c"], "a", "b", "after")).toEqual(["b", "a", "c"]);
+    expect(moveRoadmapGroupKey(["a", "b", "c"], "a")).toEqual(["b", "c", "a"]);
+    expect(moveRoadmapGroupKey(["a", "b"], "missing", "a", "before")).toEqual(["a", "b"]);
+  });
+
   it("只有健康需求时优先展示健康路标", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H1");
     expect(roadmapTrackOrder(groups)).toEqual(["健康", "运动", "行业", "全场景", "health平台", "AI", "医疗送检"]);

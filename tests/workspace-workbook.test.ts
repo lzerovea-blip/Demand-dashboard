@@ -45,7 +45,7 @@ function workspace(overrides: Partial<WorkspaceData> = {}): WorkspaceData {
       { id: "d1", name: "睡眠", sortOrder: 0, active: true, level: "L1", parentId: "l0" },
     ],
     products: [{ id: "p1", name: "手表", sortOrder: 0, active: true }],
-    groupOverrides: [{ groupKey: "d1::健康基础::2027-03", cardTitle: "睡眠", cardSummary: "摘要", updatedAt: "2026-08-20T00:00:00.000Z" }],
+    groupOverrides: [{ groupKey: "d1::健康基础::2027-03", cardTitle: "睡眠", cardSummary: "摘要", sortOrder: 0, updatedAt: "2026-08-20T00:00:00.000Z" }],
     ...overrides,
   };
 }
@@ -74,10 +74,11 @@ describe("企业协作 Excel", () => {
     await workbook.xlsx.load(bytes as never);
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["填写说明", "领域L0字典", "领域L1字典", "产品字典", "需求清单", "路标卡片"]);
     expect(workbook.getWorksheet("填写说明")?.getCell("B13").value).toBe("health-roadmap-collaboration");
-    expect(workbook.getWorksheet("填写说明")?.getCell("B14").value).toBe("v3");
+    expect(workbook.getWorksheet("填写说明")?.getCell("B14").value).toBe("v4");
     expect(workbook.getWorksheet("需求清单")?.getRow(3).values).not.toContain("海外区域（用、分隔）");
     expect(workbook.getWorksheet("需求清单")?.getRow(3).values).toEqual(expect.arrayContaining(["领域L0", "领域L1", "适用范围", "匹配产品（单选）"]));
     expect(workbook.getWorksheet("领域L1字典")?.getCell("B4").value).toBe("健康");
+    expect(workbook.getWorksheet("路标卡片")?.getCell(4, headerColumn(workbook.getWorksheet("路标卡片")!, "卡片顺序（请勿修改）")).value).toBe(0);
     expect(workbook.getWorksheet("需求清单")?.getCell("O4").value).toMatchObject({ formula: "SUM(K4:N4)", result: 1 });
 
     const prepared = await inspectWorkspaceWorkbook(bytes, "协作.xlsx", data);
@@ -215,12 +216,30 @@ describe("企业协作 Excel", () => {
       const sheet = workbook.getWorksheet("需求清单")!;
       sheet.spliceColumns(headerColumn(sheet, "适用范围"), 1);
       sheet.getCell(4, headerColumn(sheet, "基线校验（请勿修改）")).value = legacyRequirementHash(data.requirements[0]);
+      const overrideSheet = workbook.getWorksheet("路标卡片")!;
+      overrideSheet.spliceColumns(headerColumn(overrideSheet, "卡片顺序（请勿修改）"), 1);
+      overrideSheet.getCell(4, headerColumn(overrideSheet, "基线校验（请勿修改）")).value = legacyOverrideHash(data.groupOverrides[0]);
     });
     const prepared = await inspectWorkspaceWorkbook(legacy, "旧版协作.xlsx", data);
     expect(prepared.preview.errors).toEqual([]);
     expect(prepared.preview.formatVersion).toBe("v2");
     expect(prepared.preview.counts).toMatchObject({ unchanged: 1, conflicts: 0 });
     expect(applyPreparedWorkspaceWorkbook(data, prepared, "local-wins").requirements[0].scope).toBe("仅国内");
+  });
+
+  it("兼容 v3 协作表并保留本机卡片顺序", async () => {
+    const data = workspace();
+    const bytes = await createWorkspaceWorkbook(data, "0.7.5");
+    const legacy = await editWorkbook(bytes, (workbook) => {
+      workbook.getWorksheet("填写说明")!.getCell("B14").value = "v3";
+      const sheet = workbook.getWorksheet("路标卡片")!;
+      sheet.spliceColumns(headerColumn(sheet, "卡片顺序（请勿修改）"), 1);
+      sheet.getCell(4, headerColumn(sheet, "基线校验（请勿修改）")).value = legacyOverrideHash(data.groupOverrides[0]);
+    });
+    const prepared = await inspectWorkspaceWorkbook(legacy, "v3协作.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.counts.conflicts).toBe(0);
+    expect(applyPreparedWorkspaceWorkbook(data, prepared, "local-wins").groupOverrides[0].sortOrder).toBe(0);
   });
 
   it("三端工作量允许留空或显式填写0", async () => {
@@ -325,5 +344,13 @@ function legacyRequirementHash(item: WorkspaceData["requirements"][number]): str
     appWorkloadPm: item.appWorkloadPm,
     cloudWorkloadPm: item.cloudWorkloadPm,
     unallocatedWorkloadPm: item.unallocatedWorkloadPm,
+  })).digest("hex");
+}
+
+function legacyOverrideHash(item: WorkspaceData["groupOverrides"][number]): string {
+  return createHash("sha256").update(JSON.stringify({
+    groupKey: item.groupKey,
+    cardTitle: item.cardTitle.trim(),
+    cardSummary: item.cardSummary.trim(),
   })).digest("hex");
 }

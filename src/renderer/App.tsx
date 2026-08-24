@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode, type RefObject } from "react";
 import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
@@ -8,6 +8,7 @@ import {
   roadmapCardLabel,
   roadmapCardDisplayParts,
   roadmapLanesForTrack,
+  moveRoadmapGroupKey,
   roadmapMonthColumnTemplate,
   roadmapPrimaryLane,
   roadmapTrackOrder,
@@ -19,6 +20,7 @@ import { latestRequirementSelections } from "../shared/entryDefaults";
 import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type RoadmapRegion } from "../shared/requirements";
 import { windowsSetupDownloadUrl } from "../shared/release";
 import { splitTextIntoLines } from "../shared/text";
+import { moveImageViewerIndex } from "./imageViewer";
 import {
   CATEGORY_META,
   CATEGORIES,
@@ -58,10 +60,10 @@ type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template"
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.4",
+  version: "0.7.8",
   releasedAt: "2026-08-24",
   author: "林忠维",
-  updateUrl: windowsSetupDownloadUrl("0.7.4"),
+  updateUrl: windowsSetupDownloadUrl("0.7.8"),
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
@@ -76,6 +78,9 @@ const HALF_YEARS = Array.from({ length: 18 }, (_, index) => {
   const serial = 2024 * 2 + index;
   return `${Math.floor(serial / 2)}H${(serial % 2) + 1}`;
 });
+
+const DEFAULT_START_HALF = "2026H1";
+const DEFAULT_END_HALF = "2027H2";
 
 const SOURCE_COLORS: Record<RequirementSource, string> = {
   运动基础: "#2687ff",
@@ -118,8 +123,12 @@ export default function App() {
   const [error, setError] = useState<string>("");
   const [editor, setEditor] = useState<Requirement | "new" | null>(null);
   const [selectedGroupContext, setSelectedGroupContext] = useState<{ key: string; region: RoadmapRegion | null } | null>(null);
-  const [startHalf, setStartHalf] = useState("2026H1");
-  const [endHalf, setEndHalf] = useState("2027H2");
+  const [summaryStartHalf, setSummaryStartHalf] = useState(DEFAULT_START_HALF);
+  const [summaryEndHalf, setSummaryEndHalf] = useState(DEFAULT_END_HALF);
+  const [roadmapStartHalf, setRoadmapStartHalf] = useState(DEFAULT_START_HALF);
+  const [roadmapEndHalf, setRoadmapEndHalf] = useState(DEFAULT_END_HALF);
+  const [exportStartHalf, setExportStartHalf] = useState(DEFAULT_START_HALF);
+  const [exportEndHalf, setExportEndHalf] = useState(DEFAULT_END_HALF);
   const [windowFullscreen, setWindowFullscreenState] = useState(false);
   const [roadmapFocusRequested, setRoadmapFocusRequested] = useState(false);
   const [roadmapRegion, setRoadmapRegion] = useState<RoadmapRegion>("domestic");
@@ -175,37 +184,37 @@ export default function App() {
 
   const groups = useMemo(() => {
     try {
-      return buildRoadmapGroups(snapshot, startHalf, endHalf);
+      return buildRoadmapGroups(snapshot, roadmapStartHalf, roadmapEndHalf);
     } catch {
       return [];
     }
-  }, [snapshot, startHalf, endHalf]);
+  }, [snapshot, roadmapStartHalf, roadmapEndHalf]);
 
   const regionalGroups = useMemo<Record<RoadmapRegion, RoadmapGroup[]>>(() => {
     const build = (region: RoadmapRegion) => {
       try {
         return buildRoadmapGroups(
           { ...snapshot, requirements: filterRequirementsForRegion(snapshot.requirements, region) },
-          startHalf,
-          endHalf,
+          roadmapStartHalf,
+          roadmapEndHalf,
         );
       } catch {
         return [];
       }
     };
     return { domestic: build("domestic"), overseas: build("overseas") };
-  }, [snapshot, startHalf, endHalf]);
+  }, [snapshot, roadmapStartHalf, roadmapEndHalf]);
   const selectedGroup = selectedGroupContext
     ? (selectedGroupContext.region ? regionalGroups[selectedGroupContext.region] : groups)
       .find((item) => item.key === selectedGroupContext.key) ?? null
     : null;
   const summaries = useMemo(() => {
     try {
-      return buildHalfYearSummaries(snapshot.requirements, startHalf, endHalf);
+      return buildHalfYearSummaries(snapshot.requirements, summaryStartHalf, summaryEndHalf);
     } catch {
       return [];
     }
-  }, [snapshot.requirements, startHalf, endHalf]);
+  }, [snapshot.requirements, summaryStartHalf, summaryEndHalf]);
   const roadmapFocusMode = page === "roadmap" && windowFullscreen && roadmapFocusRequested;
 
   useEffect(() => {
@@ -295,9 +304,9 @@ export default function App() {
             <p>{pageSubtitle(page)}</p>
           </div>
           <div className="top-actions">
-            {(page === "summary" || page === "roadmap" || page === "template") && (
-              <PeriodSelector start={startHalf} end={endHalf} onStart={setStartHalf} onEnd={setEndHalf} />
-            )}
+            {page === "summary" && <PeriodSelector start={summaryStartHalf} end={summaryEndHalf} onStart={setSummaryStartHalf} onEnd={setSummaryEndHalf} />}
+            {page === "roadmap" && <PeriodSelector start={roadmapStartHalf} end={roadmapEndHalf} onStart={setRoadmapStartHalf} onEnd={setRoadmapEndHalf} />}
+            {page === "template" && <PeriodSelector start={exportStartHalf} end={exportEndHalf} onStart={setExportStartHalf} onEnd={setExportEndHalf} />}
             {page === "roadmap" && (
               <button type="button" className="button dark roadmap-fullscreen-enter" onClick={() => void enterRoadmapFullscreen()}>⛶ 全屏查看</button>
             )}
@@ -323,8 +332,8 @@ export default function App() {
             <RoadmapPage
               groups={groups}
               focusGroups={regionalGroups[roadmapRegion]}
-              start={startHalf}
-              end={endHalf}
+              start={roadmapStartHalf}
+              end={roadmapEndHalf}
               focusMode={roadmapFocusMode}
               region={roadmapRegion}
               onRegionChange={(region) => {
@@ -332,6 +341,9 @@ export default function App() {
                 setSelectedGroupContext(null);
               }}
               onOpenGroup={(group, region) => setSelectedGroupContext({ key: group.key, region })}
+              onReorderGroups={async (input) => {
+                await update(() => window.roadmapApi.saveGroupOrder(input), "卡片顺序已更新");
+              }}
             />
           )}
           {page === "dictionaries" && (
@@ -347,11 +359,11 @@ export default function App() {
           {page === "template" && (
             <TemplatePage
               snapshot={snapshot}
-              start={startHalf}
-              end={endHalf}
+              start={exportStartHalf}
+              end={exportEndHalf}
               onExportPpt={async () => {
                 try {
-                  const result = await window.roadmapApi.exportRoadmapPresentation({ start: startHalf, end: endHalf });
+                  const result = await window.roadmapApi.exportRoadmapPresentation({ start: exportStartHalf, end: exportEndHalf });
                   if (!result.canceled) setNotice(`PPT 已导出（${result.slideCount} 页）：${result.path}`);
                 } catch (reason) {
                   setError(messageOf(reason));
@@ -451,7 +463,11 @@ export default function App() {
               const visibleRequirements = selectedGroupContext.region
                 ? filterRequirementsForRegion(nextSnapshot.requirements, selectedGroupContext.region)
                 : nextSnapshot.requirements;
-              const nextGroups = buildRoadmapGroups({ ...nextSnapshot, requirements: visibleRequirements }, startHalf, endHalf);
+              const nextGroups = buildRoadmapGroups(
+                { ...nextSnapshot, requirements: visibleRequirements },
+                roadmapStartHalf,
+                roadmapEndHalf,
+              );
               const nextGroup = nextGroups.find((group) => group.requirements.some((item) => item.id === input.id));
               if (nextGroup) {
                 setSelectedGroupContext({ ...selectedGroupContext, key: nextGroup.key });
@@ -719,7 +735,7 @@ function SideCategoryChart({ summaries, side, category }: { summaries: HalfYearS
   );
 }
 
-function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onRegionChange, onOpenGroup }: {
+function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onRegionChange, onOpenGroup, onReorderGroups }: {
   groups: RoadmapGroup[];
   focusGroups: RoadmapGroup[];
   start: string;
@@ -728,6 +744,7 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
   region: RoadmapRegion;
   onRegionChange: (region: RoadmapRegion) => void;
   onOpenGroup: (group: RoadmapGroup, region: RoadmapRegion | null) => void;
+  onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
 }) {
   const tracks = roadmapTrackOrder(groups);
   const [focusIndex, setFocusIndex] = useState(0);
@@ -763,6 +780,7 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
             region={region}
             onRegionChange={onRegionChange}
             onOpenGroup={(group) => onOpenGroup(group, focusMode ? region : null)}
+            onReorderGroups={onReorderGroups}
           />
         </div>
       ))}
@@ -789,7 +807,7 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
   );
 }
 
-function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup }: {
+function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup, onReorderGroups }: {
   title: string;
   track: Track;
   groups: RoadmapGroup[];
@@ -800,6 +818,7 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
   region: RoadmapRegion;
   onRegionChange: (region: RoadmapRegion) => void;
   onOpenGroup: (group: RoadmapGroup) => void;
+  onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const halves = halfYearSequence(start, end);
@@ -853,7 +872,15 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
           <div className="lane-corner muted">上线月份</div>
           {months.map((month) => <div key={month} className="month-header">{Number(month.slice(5))}月</div>)}
           {lanes.map((lane) => (
-            <RoadmapLane key={lane} lane={lane} months={months} groups={scoped.filter((item) => groupMatchesRoadmapLane(item, lane))} onOpenGroup={onOpenGroup} />
+            <RoadmapLane
+              key={lane}
+              lane={lane}
+              months={months}
+              groups={scoped.filter((item) => groupMatchesRoadmapLane(item, lane))}
+              reorderEnabled={!focusMode}
+              onOpenGroup={onOpenGroup}
+              onReorderGroups={onReorderGroups}
+            />
           ))}
         </div>
       </div>
@@ -861,30 +888,169 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
   );
 }
 
-function RoadmapLane({ lane, months, groups, onOpenGroup }: { lane: RoadmapLane; months: string[]; groups: RoadmapGroup[]; onOpenGroup: (group: RoadmapGroup) => void }) {
+type RoadmapDropIndicator = { month: string; targetKey?: string; position: "before" | "after" | "end" };
+
+function RoadmapLane({ lane, months, groups, reorderEnabled, onOpenGroup, onReorderGroups }: {
+  lane: RoadmapLane;
+  months: string[];
+  groups: RoadmapGroup[];
+  reorderEnabled: boolean;
+  onOpenGroup: (group: RoadmapGroup) => void;
+  onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
+}) {
   const laneAccent = lane.startsWith("AI") ? SOURCE_COLORS[lane as RequirementSource] : undefined;
+  const draggedKeyRef = useRef<string | null>(null);
+  const suppressOpenKeyRef = useRef<string | null>(null);
+  const [draggedKey, setDraggedKey] = useState<string | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<RoadmapDropIndicator | null>(null);
+
+  function draggedGroup(): RoadmapGroup | undefined {
+    return groups.find((group) => group.key === draggedKeyRef.current);
+  }
+
+  function canDropOn(group: RoadmapGroup): boolean {
+    const dragged = draggedGroup();
+    return Boolean(reorderEnabled
+      && dragged
+      && dragged.key !== group.key
+      && dragged.source === group.source
+      && dragged.targetMonth === group.targetMonth);
+  }
+
+  function beginDrag(event: ReactDragEvent<HTMLButtonElement>, group: RoadmapGroup) {
+    if (!reorderEnabled) {
+      event.preventDefault();
+      return;
+    }
+    draggedKeyRef.current = group.key;
+    suppressOpenKeyRef.current = group.key;
+    setDraggedKey(group.key);
+    setDropIndicator(null);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", group.key);
+  }
+
+  function endDrag() {
+    const key = draggedKeyRef.current;
+    draggedKeyRef.current = null;
+    setDraggedKey(null);
+    setDropIndicator(null);
+    window.setTimeout(() => {
+      if (suppressOpenKeyRef.current === key) suppressOpenKeyRef.current = null;
+    }, 0);
+  }
+
+  function markCardDrop(event: ReactDragEvent<HTMLButtonElement>, group: RoadmapGroup) {
+    if (!canDropOn(group)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const position = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+    setDropIndicator({ month: group.targetMonth, targetKey: group.key, position });
+  }
+
+  async function saveDrop(monthGroups: RoadmapGroup[], targetKey?: string, position: RoadmapDropIndicator["position"] = "end") {
+    const dragged = draggedGroup();
+    if (!dragged || !monthGroups.some((group) => group.key === dragged.key)) return;
+    const currentKeys = monthGroups.map((group) => group.key);
+    const nextKeys = moveRoadmapGroupKey(currentKeys, dragged.key, targetKey, position);
+    if (nextKeys.every((key, index) => key === currentKeys[index])) return;
+    try {
+      await onReorderGroups({ source: dragged.source, targetMonth: dragged.targetMonth, groupKeys: nextKeys });
+    } catch {
+      // 全局更新流程已显示错误；当前列表由未变更的快照自然恢复。
+    }
+  }
+
+  function openGroup(group: RoadmapGroup) {
+    if (suppressOpenKeyRef.current === group.key) {
+      suppressOpenKeyRef.current = null;
+      return;
+    }
+    onOpenGroup(group);
+  }
+
   return (
     <>
       <div className="lane-label" style={laneAccent ? { borderLeft: `4px solid ${laneAccent}` } : undefined}><strong>{lane}</strong><span>{groups.length} 卡片</span></div>
-      {months.map((month) => (
-        <div key={`${lane}-${month}`} className="month-cell" data-roadmap-month={month} data-roadmap-lane={lane}>
-          {groups.filter((item) => item.targetMonth === month).map((group) => <RoadmapCard key={group.key} group={group} onClick={() => onOpenGroup(group)} />)}
-        </div>
-      ))}
+      {months.map((month) => {
+        const monthGroups = groups.filter((item) => item.targetMonth === month);
+        const draggable = reorderEnabled && monthGroups.length > 1;
+        const canDropAtEnd = Boolean(draggable && draggedGroup()?.targetMonth === month && draggedGroup()?.source === monthGroups[0]?.source);
+        return (
+          <div
+            key={`${lane}-${month}`}
+            className={`month-cell${dropIndicator?.month === month && dropIndicator.position === "end" ? " drop-at-end" : ""}`}
+            data-roadmap-month={month}
+            data-roadmap-lane={lane}
+            onDragOver={(event) => {
+              if (!canDropAtEnd || event.target !== event.currentTarget) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              setDropIndicator({ month, position: "end" });
+            }}
+            onDrop={(event) => {
+              if (!canDropAtEnd || event.target !== event.currentTarget) return;
+              event.preventDefault();
+              void saveDrop(monthGroups);
+            }}
+          >
+            {monthGroups.map((group) => (
+              <RoadmapCard
+                key={group.key}
+                group={group}
+                draggable={draggable}
+                dragging={draggedKey === group.key}
+                dropPosition={dropIndicator?.targetKey === group.key ? dropIndicator.position : undefined}
+                onClick={() => openGroup(group)}
+                onDragStart={(event) => beginDrag(event, group)}
+                onDragEnd={endDrag}
+                onDragOver={(event) => markCardDrop(event, group)}
+                onDrop={(event) => {
+                  if (!canDropOn(group)) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void saveDrop(monthGroups, group.key, dropIndicator?.targetKey === group.key ? dropIndicator.position : "before");
+                }}
+              />
+            ))}
+          </div>
+        );
+      })}
     </>
   );
 }
 
-function RoadmapCard({ group, onClick }: { group: RoadmapGroup; onClick: () => void }) {
+function RoadmapCard({ group, draggable, dragging, dropPosition, onClick, onDragStart, onDragEnd, onDragOver, onDrop }: {
+  group: RoadmapGroup;
+  draggable: boolean;
+  dragging: boolean;
+  dropPosition?: "before" | "after" | "end";
+  onClick: () => void;
+  onDragStart: (event: ReactDragEvent<HTMLButtonElement>) => void;
+  onDragEnd: () => void;
+  onDragOver: (event: ReactDragEvent<HTMLButtonElement>) => void;
+  onDrop: (event: ReactDragEvent<HTMLButtonElement>) => void;
+}) {
   const hasExclusive = group.categories.includes("产品专属");
   const label = roadmapCardLabel(group);
   const displayLines = roadmapCardDisplayParts(label, Array.from(`${group.cardTitle}：`).length);
   const visibleProducts = group.productNames.slice(0, 2);
   const hiddenProductCount = Math.max(group.productNames.length - visibleProducts.length, 0);
   const productLabel = group.productNames.length ? `涉及产品：${group.productNames.join("、")}` : "";
-  const accessibleLabel = [label, productLabel, "点击查看全部需求"].filter(Boolean).join("；");
+  const accessibleLabel = [label, productLabel, draggable ? "可上下拖动排序，点击查看全部需求" : "点击查看全部需求"].filter(Boolean).join("；");
   return (
-    <button className={`roadmap-card ${hasExclusive ? "has-exclusive" : ""}`} onClick={onClick} aria-label={accessibleLabel}>
+    <button
+      className={`roadmap-card${hasExclusive ? " has-exclusive" : ""}${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
+      draggable={draggable}
+      onClick={onClick}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      aria-label={accessibleLabel}
+    >
       <span className="roadmap-card-copy" aria-hidden="true">
         {displayLines.map((line, index) => (
           <span className="roadmap-card-line" key={`${index}-${line.emphasis}-${line.content}`}>
@@ -1116,37 +1282,150 @@ function GroupDrawer({ group, onClose, onSave, onEditRequirement }: {
 }) {
   const [title, setTitle] = useState(group.cardTitle);
   const [summary, setSummary] = useState(group.cardSummary);
+  const [expandedRequirementIds, setExpandedRequirementIds] = useState<Set<string>>(() => new Set(group.requirements.map((item) => item.id)));
+  const [imageViewer, setImageViewer] = useState<{ images: RequirementImage[]; index: number } | null>(null);
+  const imageTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const viewerCloseRef = useRef<HTMLButtonElement | null>(null);
+
+  function closeImageViewer() {
+    setImageViewer(null);
+    window.requestAnimationFrame(() => imageTriggerRef.current?.focus());
+  }
+
+  useEffect(() => {
+    setExpandedRequirementIds(new Set(group.requirements.map((item) => item.id)));
+  }, [group.requirements.map((item) => item.id).join("|")]);
+
+  useEffect(() => {
+    if (!imageViewer) return;
+    viewerCloseRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeImageViewer();
+        return;
+      }
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setImageViewer((current) => current ? {
+        ...current,
+        index: moveImageViewerIndex(current.index, current.images.length, event.key === "ArrowLeft" ? -1 : 1),
+      } : current);
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [Boolean(imageViewer)]);
+
   return (
-    <div className="overlay" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
-      <div className="drawer group-drawer">
-        <div className="drawer-header"><div><span className="eyebrow">ROADMAP GROUP</span><h2>{group.domainName}</h2></div><button className="icon-button" onClick={onClose}>×</button></div>
-        <div className="group-hero"><SourceBadge source={group.source} /><b>{formatMonth(group.targetMonth)}</b><span>合计 {formatNumber(group.totalWorkloadPm)} 人月</span><span>{formatWorkloadBreakdown(group.workloadBreakdown)}</span><span>{group.requirements.length} 条需求</span></div>
-        <div className="form-body">
-          <Field label="路标卡片标题" required><input value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
-          <Field label="详情 / PPT 摘要"><textarea rows={3} value={summary} onChange={(event) => setSummary(event.target.value)} /><small>该摘要保留给详情页与未来 PPT，不在路标轴卡片上显示。</small></Field>
-          {group.productNames.length > 0 && <div className="detail-products"><span>涉及产品</span>{group.productNames.map((name) => <b key={name}>{name}</b>)}</div>}
-          <div className="detail-list">
-            <div className="detail-list-head"><h3>领域全量需求</h3><span>工作量合计 {formatNumber(group.totalWorkloadPm)} PM</span></div>
-            {group.requirements.map((item, index) => (
-              <details className="requirement-detail" key={item.id}>
-                <summary>
-                  <em>{String(index + 1).padStart(2, "0")}</em>
-                  <div><strong>{item.title}</strong><span>{item.category}{item.productIds.length ? ` · ${group.requirementProductNames[item.id].join(" / ")}` : ""}</span><ScopeBadge scope={item.scope} /></div>
-                  <b>{formatNumber(item.workloadPm)} PM</b>
-                  <i>查看详情</i>
-                </summary>
-                <div className="requirement-detail-body">
-                  <div className="requirement-detail-actions"><button type="button" className="button ghost" onClick={() => onEditRequirement(item)}>编辑需求</button></div>
-                  <div className="detail-workload-breakdown">{workloadBreakdownItems(workloadBreakdownOf(item)).map(([label, value]) => <span key={label}><b>{label}</b>{formatNumber(value)} 人月</span>)}</div>
-                  {item.description ? <p>{item.description}</p> : <p className="muted-detail">暂无需求描述</p>}
-                  {item.images.length > 0 && <div className="detail-image-grid">{item.images.map((image) => <figure key={image.id}><img src={image.dataUrl} alt={image.name} /><figcaption>{image.name}</figcaption></figure>)}</div>}
-                  {!item.description && item.images.length === 0 && <small>编辑该需求后可补充描述和图片。</small>}
-                </div>
-              </details>
-            ))}
+    <>
+      <div className="overlay" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
+        <div className="drawer group-drawer">
+          <div className="drawer-header"><div><span className="eyebrow">ROADMAP GROUP</span><h2>{group.domainName}</h2></div><button className="icon-button" onClick={onClose}>×</button></div>
+          <div className="group-hero"><SourceBadge source={group.source} /><b>{formatMonth(group.targetMonth)}</b><span>合计 {formatNumber(group.totalWorkloadPm)} 人月</span><span>{group.requirements.length} 条需求</span></div>
+          <div className="form-body">
+            <Field label="路标卡片标题" required><input value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
+            <Field label="详情 / PPT 摘要"><textarea rows={3} value={summary} onChange={(event) => setSummary(event.target.value)} /><small>该摘要保留给详情页与未来 PPT，不在路标轴卡片上显示。</small></Field>
+            {group.productNames.length > 0 && <div className="detail-products"><span>涉及产品</span>{group.productNames.map((name) => <b key={name}>{name}</b>)}</div>}
+            <div className="detail-list">
+              <div className="detail-list-head"><h3>领域全量需求</h3><span>工作量合计 {formatNumber(group.totalWorkloadPm)} PM</span></div>
+              {group.requirements.map((item, index) => (
+                <details
+                  className="requirement-detail"
+                  key={item.id}
+                  open={expandedRequirementIds.has(item.id)}
+                  onToggle={(event) => {
+                    const open = event.currentTarget.open;
+                    setExpandedRequirementIds((current) => {
+                      const next = new Set(current);
+                      if (open) next.add(item.id);
+                      else next.delete(item.id);
+                      return next;
+                    });
+                  }}
+                >
+                  <summary>
+                    <em>{String(index + 1).padStart(2, "0")}</em>
+                    <div><strong>{item.title}</strong><span>{item.category}{item.productIds.length ? ` · ${group.requirementProductNames[item.id].join(" / ")}` : ""}</span><ScopeBadge scope={item.scope} /></div>
+                    <b>{formatNumber(item.workloadPm)} PM</b>
+                    <i>查看详情</i>
+                  </summary>
+                  <div className="requirement-detail-body">
+                    <div className="requirement-detail-actions"><button type="button" className="button ghost" onClick={() => onEditRequirement(item)}>编辑需求</button></div>
+                    {item.description ? <p>{item.description}</p> : <p className="muted-detail">暂无需求描述</p>}
+                    {item.images.length > 0 && <div className="detail-image-grid">{item.images.map((image, imageIndex) => (
+                      <figure key={image.id}>
+                        <button
+                          type="button"
+                          className="detail-image-button"
+                          aria-label={`放大查看图片 ${image.name}`}
+                          onClick={(event) => {
+                            imageTriggerRef.current = event.currentTarget;
+                            setImageViewer({ images: item.images, index: imageIndex });
+                          }}
+                        >
+                          <img src={image.dataUrl} alt={image.name} />
+                        </button>
+                        <figcaption>{image.name}</figcaption>
+                      </figure>
+                    ))}</div>}
+                    {!item.description && item.images.length === 0 && <small>编辑该需求后可补充描述和图片。</small>}
+                  </div>
+                </details>
+              ))}
+            </div>
           </div>
+          <div className="drawer-footer"><span>导出PPT后，路标卡片将链接到对应详情页。</span><div><button className="button ghost" onClick={onClose}>关闭</button><button className="button primary" onClick={() => onSave(title, summary)}>保存卡片</button></div></div>
         </div>
-        <div className="drawer-footer"><span>导出PPT后，路标卡片将链接到对应详情页。</span><div><button className="button ghost" onClick={onClose}>关闭</button><button className="button primary" onClick={() => onSave(title, summary)}>保存卡片</button></div></div>
+      </div>
+      {imageViewer && (
+        <ImageViewer
+          images={imageViewer.images}
+          index={imageViewer.index}
+          closeButtonRef={viewerCloseRef}
+          onSelect={(index) => setImageViewer((current) => current ? { ...current, index } : current)}
+          onClose={closeImageViewer}
+        />
+      )}
+    </>
+  );
+}
+
+function ImageViewer({ images, index, closeButtonRef, onSelect, onClose }: {
+  images: RequirementImage[];
+  index: number;
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
+  onSelect: (index: number) => void;
+  onClose: () => void;
+}) {
+  const currentImage = images[index];
+  if (!currentImage) return null;
+  return (
+    <div className="image-viewer-overlay" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
+      <div className="image-viewer" role="dialog" aria-modal="true" aria-labelledby="image-viewer-title">
+        <div className="image-viewer-header">
+          <div>
+            <strong id="image-viewer-title">{currentImage.name}</strong>
+            <span aria-live="polite">{index + 1} / {images.length}</span>
+          </div>
+          <button ref={closeButtonRef} type="button" className="image-viewer-close" onClick={onClose} aria-label="关闭图片查看">×</button>
+        </div>
+        <div className="image-viewer-stage"><img src={currentImage.dataUrl} alt={currentImage.name} /></div>
+        <div className="image-viewer-thumbnails" aria-label="图片缩略图导航">
+          {images.map((image, imageIndex) => (
+            <button
+              type="button"
+              key={image.id}
+              className={imageIndex === index ? "active" : ""}
+              aria-label={`查看第 ${imageIndex + 1} 张图片：${image.name}`}
+              aria-current={imageIndex === index ? "true" : undefined}
+              onClick={() => onSelect(imageIndex)}
+            >
+              <img src={image.dataUrl} alt="" />
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

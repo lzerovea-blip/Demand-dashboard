@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   ElectronApi,
   SaveDictionaryInput,
+  SaveGroupOrderInput,
   SaveGroupOverrideInput,
   SaveRequirementInput,
   WorkspaceImportMode,
@@ -26,6 +27,7 @@ const api: ElectronApi = {
   saveProduct: (input: SaveDictionaryInput) => ipcRenderer.invoke("products:save", input),
   deleteProduct: (id: string) => ipcRenderer.invoke("products:delete", id),
   saveGroupOverride: (input: SaveGroupOverrideInput) => ipcRenderer.invoke("groups:save", input),
+  saveGroupOrder: (input: SaveGroupOrderInput) => ipcRenderer.invoke("groups:reorder", input),
   exportWorkspacePackage: () => ipcRenderer.invoke("workspace:export"),
   inspectWorkspacePackage: () => ipcRenderer.invoke("workspace:inspect"),
   applyWorkspacePackage: (input: { token: string; mode: WorkspaceImportMode }) => ipcRenderer.invoke("workspace:apply", input),

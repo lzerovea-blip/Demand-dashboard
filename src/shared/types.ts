@@ -87,6 +87,7 @@ export interface GroupOverride {
   groupKey: string;
   cardTitle: string;
   cardSummary: string;
+  sortOrder?: number;
   updatedAt: string;
 }
 
@@ -164,6 +165,12 @@ export interface SaveGroupOverrideInput {
   groupKey: string;
   cardTitle: string;
   cardSummary: string;
+}
+
+export interface SaveGroupOrderInput {
+  source: RequirementSource;
+  targetMonth: string;
+  groupKeys: string[];
 }
 
 export interface HalfYearRange {
@@ -253,6 +260,7 @@ export interface ElectronApi {
   saveProduct(input: SaveDictionaryInput): Promise<AppSnapshot>;
   deleteProduct(id: string): Promise<AppSnapshot>;
   saveGroupOverride(input: SaveGroupOverrideInput): Promise<AppSnapshot>;
+  saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot>;
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspacePackage(): Promise<{ canceled: boolean; preview?: WorkspaceImportPreview }>;
   applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode }): Promise<{ snapshot: AppSnapshot }>;

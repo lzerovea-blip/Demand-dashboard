@@ -54,6 +54,25 @@ describe("PPT导出计划", () => {
     expect(widths.reduce((sum, value) => sum + value, 0)).toBeCloseTo(10.04);
   });
 
+  it("PPT 路标页沿用已保存的同月卡片顺序", () => {
+    const second = { ...requirements[0], id: "r-second", title: "心率需求", domainId: "d2" };
+    const orderedSnapshot: AppSnapshot = {
+      ...snapshot,
+      requirements: [requirements[0], second],
+      domains: [...snapshot.domains, { id: "d2", name: "心率", sortOrder: 1, active: true, level: "L1" }],
+      groupOverrides: [
+        { groupKey: "d1::健康基础::2027-03", cardTitle: "睡眠", cardSummary: "", sortOrder: 1, updatedAt: "2026-08-24T00:00:00.000Z" },
+        { groupKey: "d2::健康基础::2027-03", cardTitle: "心率", cardSummary: "", sortOrder: 0, updatedAt: "2026-08-24T00:00:00.000Z" },
+      ],
+    };
+    const plan = buildPptExportPlan(orderedSnapshot, "2027H1", "2027H1");
+    const healthPage = plan.roadmapPages.find((page) => page.track === "健康")!;
+    expect(healthPage.groups.map((group) => group.key)).toEqual([
+      "d2::健康基础::2027-03",
+      "d1::健康基础::2027-03",
+    ]);
+  });
+
   it("生成结构完整且可解压的PPTX", async () => {
     const bytes = await createRoadmapPresentation(snapshot, "2027H1", "2027H1");
     const zip = await JSZip.loadAsync(bytes);

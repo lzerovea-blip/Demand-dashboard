@@ -10,6 +10,7 @@ import type {
   GroupOverride,
   Requirement,
   SaveDictionaryInput,
+  SaveGroupOrderInput,
   SaveGroupOverrideInput,
   SaveRequirementInput,
   TemplateProfile,
@@ -22,8 +23,10 @@ import {
   MAX_REQUIREMENT_IMAGE_BYTES,
   REQUIREMENT_SCOPES,
   REQUIREMENT_IMAGE_MIME_TYPES,
+  SOURCES,
 } from "../shared/types.js";
 import { LEGACY_AI_SOURCE, LEGACY_OVERSEAS_SOURCE, LEGACY_UPPERCASE_AI_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement } from "../shared/requirements.js";
+import { groupKeyFor } from "../shared/roadmap.js";
 import { mergeWorkspaceData } from "../shared/workspace.js";
 import { roundWorkload } from "../shared/workload.js";
 import { applyPreparedWorkspaceWorkbook, type PreparedWorkspaceWorkbookImport } from "./workspaceWorkbook.js";
@@ -136,16 +139,67 @@ export class LocalDatabase {
 
   async saveGroupOverride(input: SaveGroupOverrideInput): Promise<AppSnapshot> {
     if (!input.groupKey.trim() || !input.cardTitle.trim()) throw new Error("卡片标题不能为空");
+    const existing = this.getPayload<GroupOverride>("group_overrides", "group_key", input.groupKey);
     const value: GroupOverride = {
       groupKey: input.groupKey,
       cardTitle: input.cardTitle.trim(),
       cardSummary: input.cardSummary.trim(),
+      ...(existing?.sortOrder === undefined ? {} : { sortOrder: existing.sortOrder }),
       updatedAt: new Date().toISOString(),
     };
     this.run(
       "INSERT OR REPLACE INTO group_overrides (group_key, updated_at, payload) VALUES (?, ?, ?)",
       [value.groupKey, value.updatedAt, JSON.stringify(value)],
     );
+    await this.persist();
+    return this.getSnapshot();
+  }
+
+  async saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot> {
+    if (!SOURCES.includes(input.source)) throw new Error("路标泳道无效");
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetMonth)) throw new Error("上线月份无效");
+    const orderedKeys = input.groupKeys.map((key) => key.trim());
+    if (!orderedKeys.length || orderedKeys.some((key) => !key) || new Set(orderedKeys).size !== orderedKeys.length) {
+      throw new Error("卡片顺序包含空值或重复项");
+    }
+    for (const key of orderedKeys) {
+      const [, source, targetMonth] = key.split("::");
+      if (source !== input.source || targetMonth !== input.targetMonth) throw new Error("只能调整同一泳道、同一月份内的卡片");
+    }
+
+    const snapshot = this.getSnapshot();
+    const actualKeys = [...new Set(snapshot.requirements
+      .filter((item) => item.source === input.source && item.targetMonth === input.targetMonth)
+      .map(groupKeyFor))];
+    if (actualKeys.length !== orderedKeys.length || actualKeys.some((key) => !orderedKeys.includes(key))) {
+      throw new Error("卡片集合已变化，请刷新路标后重试");
+    }
+
+    const domains = new Map(snapshot.domains.map((item) => [item.id, item]));
+    const overrides = new Map(snapshot.groupOverrides.map((item) => [item.groupKey, item]));
+    const now = new Date().toISOString();
+    this.db.run("BEGIN");
+    try {
+      orderedKeys.forEach((groupKey, sortOrder) => {
+        const [domainId] = groupKey.split("::");
+        const existing = overrides.get(groupKey);
+        const value: GroupOverride = {
+          groupKey,
+          cardTitle: existing?.cardTitle.trim() || domains.get(domainId)?.name || "未命名领域",
+          cardSummary: existing?.cardSummary ?? "",
+          sortOrder,
+          updatedAt: now,
+        };
+        this.run(
+          "INSERT OR REPLACE INTO group_overrides (group_key, updated_at, payload) VALUES (?, ?, ?)",
+          [groupKey, now, JSON.stringify(value)],
+        );
+      });
+      this.db.run("COMMIT");
+    } catch (error) {
+      this.db.run("ROLLBACK");
+      throw error;
+    }
     await this.persist();
     return this.getSnapshot();
   }
