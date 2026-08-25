@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode, type RefObject } from "react";
+import { IconHexagon3d, IconStack2, IconTrendingUp, type Icon } from "@tabler/icons-react";
 import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
@@ -25,6 +26,7 @@ import { splitTextIntoLines } from "../shared/text";
 import { restoreFocusAfterConfirmation } from "./confirmation";
 import { moveImageViewerIndex } from "./imageViewer";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
+import { roadmapCategoryMarks } from "../shared/roadmapCategory";
 import {
   CATEGORY_META,
   CATEGORIES,
@@ -79,9 +81,15 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.16",
-  releasedAt: "2026-08-24",
+  version: "0.7.17",
+  releasedAt: "2026-08-25",
   author: "林忠维",
+};
+
+const ROADMAP_CATEGORY_ICONS: Record<RequirementCategory, Icon> = {
+  体验优化: IconTrendingUp,
+  平台演进: IconStack2,
+  产品专属: IconHexagon3d,
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
@@ -1180,16 +1188,18 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
   onDragOver: (event: ReactDragEvent<HTMLButtonElement>) => void;
   onDrop: (event: ReactDragEvent<HTMLButtonElement>) => void;
 }) {
-  const hasExclusive = group.categories.includes("产品专属");
+  const categoryMarks = roadmapCategoryMarks(group.categories);
+  const primaryCategoryClass = categoryMarks[0]?.className ?? "experience";
   const label = roadmapCardLabel(group);
   const displayLines = roadmapCardDisplayParts(label, Array.from(`${group.cardTitle}：`).length);
   const visibleProducts = group.productNames.slice(0, 2);
   const hiddenProductCount = Math.max(group.productNames.length - visibleProducts.length, 0);
   const productLabel = group.productNames.length ? `涉及产品：${group.productNames.join("、")}` : "";
-  const accessibleLabel = [label, productLabel, draggable ? "可上下拖动排序，点击查看全部需求" : "点击查看全部需求"].filter(Boolean).join("；");
+  const categoryLabel = categoryMarks.length ? `需求分类：${categoryMarks.map((item) => item.category).join("、")}` : "";
+  const accessibleLabel = [label, categoryLabel, productLabel, draggable ? "可上下拖动排序，点击查看全部需求" : "点击查看全部需求"].filter(Boolean).join("；");
   return (
     <button
-      className={`roadmap-card${hasExclusive ? " has-exclusive" : ""}${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${related ? " is-l1-related" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
+      className={`roadmap-card roadmap-card-primary-${primaryCategoryClass}${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${related ? " is-l1-related" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
       draggable={draggable}
       onMouseEnter={() => onRelatedChange(true)}
       onMouseLeave={() => onRelatedChange(false)}
@@ -1202,6 +1212,17 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
       onDrop={onDrop}
       aria-label={accessibleLabel}
     >
+      <span className={`roadmap-card-category-rail category-count-${categoryMarks.length}`} aria-hidden="true">
+        {categoryMarks.map((mark) => {
+          const CategoryIcon = ROADMAP_CATEGORY_ICONS[mark.category];
+          return (
+            <span className={`roadmap-card-category-mark ${mark.className}`} key={mark.category}>
+              <CategoryIcon size={categoryMarks.length === 1 ? 18 : 14} stroke={2} />
+              <b>{mark.label}</b>
+            </span>
+          );
+        })}
+      </span>
       <span className="roadmap-card-copy" aria-hidden="true">
         {displayLines.map((line, index) => (
           <span className="roadmap-card-line" key={`${index}-${line.emphasis}-${line.content}`}>

@@ -22,7 +22,7 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-08-24";
+const APP_RELEASED_AT = "2026-08-25";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
@@ -196,7 +196,7 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   nativeTheme.themeSource = "light";
-  app.setPath("userData", join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY));
+  app.setPath("userData", process.env.SOLUTION_REQUIREMENTS_USER_DATA_DIR || join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY));
   database = new LocalDatabase();
   await database.initialize();
   registerIpc();
