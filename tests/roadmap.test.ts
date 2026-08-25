@@ -61,7 +61,8 @@ describe("领域合并", () => {
     const may = groups.find((item) => item.targetMonth === "2026-05");
     expect(may?.requirements).toHaveLength(2);
     expect(may?.categories).toEqual(["体验优化", "产品专属"]);
-    expect(may?.cardTitle).toBe("分时血压");
+    expect(may?.cardTitle).toBe("血压");
+    expect(may?.cardSummary).toBe("早间血压测量、午间血压测量");
     expect(may?.productNames).toEqual(["产品A"]);
     expect(may?.totalWorkloadPm).toBe(3.5);
   });

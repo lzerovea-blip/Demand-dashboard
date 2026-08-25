@@ -21,6 +21,7 @@ import {
   type RoadmapGroup,
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
+import { ALL_DICTIONARY_PARENTS, filterDictionaryItemsByParent } from "../shared/dictionaries";
 import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type RoadmapRegion } from "../shared/requirements";
 import { splitTextIntoLines } from "../shared/text";
 import { restoreFocusAfterConfirmation } from "./confirmation";
@@ -80,7 +81,7 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.20",
+  version: "0.7.21",
   releasedAt: "2026-08-25",
   author: "林忠维",
 };
@@ -499,12 +500,6 @@ export default function App() {
           group={selectedGroup}
           onClose={() => setSelectedGroupContext(null)}
           onEditRequirement={setEditor}
-          onSave={async (cardTitle, cardSummary) => {
-            await update(
-              () => window.roadmapApi.saveGroupOverride({ groupKey: selectedGroup.key, cardTitle, cardSummary }),
-              "领域卡片已更新",
-            );
-          }}
         />
       )}
       {editor && (
@@ -1443,14 +1438,11 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
   );
 }
 
-function GroupDrawer({ group, onClose, onSave, onEditRequirement }: {
+function GroupDrawer({ group, onClose, onEditRequirement }: {
   group: RoadmapGroup;
   onClose: () => void;
-  onSave: (title: string, summary: string) => Promise<void>;
   onEditRequirement: (requirement: Requirement) => void;
 }) {
-  const [title, setTitle] = useState(group.cardTitle);
-  const [summary, setSummary] = useState(group.cardSummary);
   const [expandedRequirementIds, setExpandedRequirementIds] = useState<Set<string>>(() => new Set(group.requirements.map((item) => item.id)));
   const [imageViewer, setImageViewer] = useState<{ images: RequirementImage[]; index: number } | null>(null);
   const imageTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1494,8 +1486,6 @@ function GroupDrawer({ group, onClose, onSave, onEditRequirement }: {
           <div className="drawer-header"><div><span className="eyebrow">ROADMAP GROUP</span><h2>{group.domainName}</h2></div><button className="icon-button" onClick={onClose}>×</button></div>
           <div className="group-hero"><SourceBadge source={group.source} /><b>{formatMonth(group.targetMonth)}</b><span>合计 {formatNumber(group.totalWorkloadPm)} 人月</span><span>{group.requirements.length} 条需求</span></div>
           <div className="form-body">
-            <Field label="路标卡片标题" required><input value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
-            <Field label="详情 / PPT 摘要"><textarea rows={3} value={summary} onChange={(event) => setSummary(event.target.value)} /><small>该摘要保留给详情页与未来 PPT，不在路标轴卡片上显示。</small></Field>
             {group.productNames.length > 0 && <div className="detail-products"><span>涉及产品</span>{group.productNames.map((name) => <b key={name}>{name}</b>)}</div>}
             <div className="detail-list">
               <div className="detail-list-head"><h3>领域全量需求</h3><span>工作量合计 {formatNumber(group.totalWorkloadPm)} PM</span></div>
@@ -1545,7 +1535,7 @@ function GroupDrawer({ group, onClose, onSave, onEditRequirement }: {
               ))}
             </div>
           </div>
-          <div className="drawer-footer"><span>导出PPT后，路标卡片将链接到对应详情页。</span><div><button className="button ghost" onClick={onClose}>关闭</button><button className="button primary" onClick={() => onSave(title, summary)}>保存卡片</button></div></div>
+          <div className="drawer-footer"><span>卡片标题由领域 L1 标签自动生成；领域调整请编辑具体需求。</span><div><button className="button primary" onClick={onClose}>关闭</button></div></div>
         </div>
       </div>
       {imageViewer && (
@@ -1615,31 +1605,88 @@ function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDe
 function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDelete, requestConfirmation }: { title: string; subtitle: string; items: DictionaryItem[]; parentOptions?: DictionaryItem[]; onSave: (input: SaveDictionaryInput) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const [name, setName] = useState("");
   const [parentId, setParentId] = useState(parentOptions?.[0]?.id ?? "");
+  const [parentFilter, setParentFilter] = useState(ALL_DICTIONARY_PARENTS);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [savingId, setSavingId] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (parentOptions && !parentOptions.some((item) => item.id === parentId)) setParentId(parentOptions[0]?.id ?? "");
   }, [parentId, parentOptions]);
+  useEffect(() => {
+    if (parentOptions && parentFilter !== ALL_DICTIONARY_PARENTS && !parentOptions.some((item) => item.id === parentFilter)) setParentFilter(ALL_DICTIONARY_PARENTS);
+  }, [parentFilter, parentOptions]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!name.trim() || (parentOptions && !parentId)) return;
     await onSave({ name, ...(parentOptions ? { parentId } : {}) });
     setName("");
   }
+  function startEditing(item: DictionaryItem) {
+    setEditingId(item.id);
+    setEditingName(item.name);
+  }
+  function cancelEditing() {
+    setEditingId(null);
+    setEditingName("");
+  }
+  async function saveEditing(item: DictionaryItem) {
+    if (!editingName.trim() || savingId) return;
+    setSavingId(item.id);
+    try {
+      await onSave({
+        id: item.id,
+        name: editingName,
+        sortOrder: item.sortOrder,
+        active: item.active,
+        ...(parentOptions ? { parentId: item.parentId } : {}),
+      });
+      cancelEditing();
+    } catch {
+      // The application-level update helper displays the validation error.
+    } finally {
+      setSavingId(null);
+    }
+  }
+  const visibleItems = parentOptions ? filterDictionaryItemsByParent(items, parentFilter) : items;
   return (
     <div className="panel dictionary-panel">
       <PanelTitle title={title} subtitle={subtitle} />
+      {parentOptions && <div className="dictionary-parent-filter" aria-label="按领域 L0 筛选领域 L1">
+        <button type="button" className={parentFilter === ALL_DICTIONARY_PARENTS ? "active" : ""} onClick={() => setParentFilter(ALL_DICTIONARY_PARENTS)}>全部</button>
+        {parentOptions.map((item) => <button type="button" key={item.id} className={parentFilter === item.id ? "active" : ""} onClick={() => {
+          setParentFilter(item.id);
+          setParentId(item.id);
+        }}>{item.name}</button>)}
+      </div>}
       <form className={`dictionary-add ${parentOptions ? "with-parent" : ""}`} onSubmit={submit}>
         <input ref={nameInputRef} value={name} onChange={(event) => setName(event.target.value)} placeholder={`新增${title.replace("字典", "")}`} />
         {parentOptions && <select aria-label="所属领域 L0" value={parentId} onChange={(event) => setParentId(event.target.value)}><option value="" disabled>选择所属 L0</option>{parentOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
         <button className="button primary" disabled={Boolean(parentOptions && !parentId)}>添加</button>
       </form>
       <div className="dictionary-list">
-        {items.map((item, index) => <div key={item.id} className={parentOptions ? "dictionary-item hierarchical" : "dictionary-item"}>
-          <span><em>{String(index + 1).padStart(2, "0")}</em><b>{item.name}</b></span>
-          {parentOptions && <select aria-label={`${item.name}所属领域 L0`} value={item.parentId ?? ""} onChange={(event) => void onSave({ id: item.id, name: item.name, sortOrder: item.sortOrder, active: item.active, parentId: event.target.value })}><option value="" disabled>未关联 L0</option>{parentOptions.map((parent) => <option key={parent.id} value={parent.id}>{parent.name}</option>)}</select>}
+        {visibleItems.map((item, index) => <div key={item.id} className={parentOptions ? "dictionary-item hierarchical" : "dictionary-item"}>
+          <span><em>{String(index + 1).padStart(2, "0")}</em>{editingId === item.id
+            ? <span className="dictionary-name-editor" role="group" aria-label={`编辑标签 ${item.name}`}>
+                <input autoFocus aria-label={`编辑标签 ${item.name}`} value={editingName} disabled={savingId === item.id} onChange={(event) => setEditingName(event.target.value)} onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelEditing();
+                  } else if (event.key === "Enter") {
+                    event.preventDefault();
+                    void saveEditing(item);
+                  }
+                }} />
+                <button type="button" aria-label={`保存标签 ${item.name}`} disabled={!editingName.trim() || savingId === item.id} onClick={() => void saveEditing(item)}>✓</button>
+                <button type="button" aria-label={`取消编辑 ${item.name}`} disabled={savingId === item.id} onClick={cancelEditing}>×</button>
+              </span>
+            : <b className="dictionary-name" tabIndex={0} title="双击编辑标签" onDoubleClick={() => startEditing(item)} onKeyDown={(event) => {
+                if (event.key === "Enter") startEditing(item);
+              }}>{item.name}</b>}</span>
+          {parentOptions && <select aria-label={`${item.name}所属领域 L0`} value={item.parentId ?? ""} onChange={(event) => { void onSave({ id: item.id, name: item.name, sortOrder: item.sortOrder, active: item.active, parentId: event.target.value }).catch(() => undefined); }}><option value="" disabled>未关联 L0</option>{parentOptions.map((parent) => <option key={parent.id} value={parent.id}>{parent.name}</option>)}</select>}
           <button type="button" className="danger-text" onClick={(event) => requestConfirmation({ title: `删除${title.replace("字典", "")}`, message: `确定删除“${item.name}”？删除后无法直接撤销。`, confirmLabel: "确认删除", action: () => onDelete(item.id) }, event.currentTarget, nameInputRef.current)}>删除</button>
         </div>)}
-        {!items.length && <Empty title="字典为空" body="添加后即可在需求表单中选择。" />}
+        {!visibleItems.length && <Empty title={items.length ? "暂无关联的领域 L1" : "字典为空"} body={items.length ? "可在上方新增并自动关联当前领域 L0。" : "添加后即可在需求表单中选择。"} />}
       </div>
     </div>
   );

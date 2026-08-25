@@ -66,6 +66,41 @@ function headerColumn(sheet: ExcelJS.Worksheet, header: string): number {
   return result;
 }
 
+function writeLegacyRoadmapSheet(workbook: ExcelJS.Workbook, data: WorkspaceData, version: "v2" | "v3" | "v4"): void {
+  const sheet = workbook.getWorksheet("路标卡片")!;
+  sheet.removeTable("RoadmapCardsTable");
+  const withOrder = version === "v4";
+  const headers = [
+    "操作",
+    "卡片标题",
+    "详情/PPT摘要",
+    "领域",
+    "来源",
+    "上线月份",
+    ...(withOrder ? ["卡片顺序（请勿修改）"] : []),
+    "卡片键（请勿修改）",
+    "基线更新时间（请勿修改）",
+    "基线校验（请勿修改）",
+  ];
+  sheet.getRow(3).values = headers;
+  const domains = new Map(data.domains.map((item) => [item.id, item.name]));
+  data.groupOverrides.forEach((item, index) => {
+    const [domainId, source, targetMonth] = item.groupKey.split("::");
+    sheet.getRow(4 + index).values = [
+      "保留",
+      item.cardTitle,
+      item.cardSummary,
+      domains.get(domainId) ?? domainId,
+      source,
+      new Date(`${targetMonth}-01T00:00:00.000Z`),
+      ...(withOrder ? [item.sortOrder ?? null] : []),
+      item.groupKey,
+      item.updatedAt,
+      withOrder ? v4OverrideHash(item) : legacyOverrideHash(item),
+    ];
+  });
+}
+
 describe("企业协作 Excel", () => {
   it("生成标准工作簿并无变化往返", async () => {
     const data = workspace();
@@ -74,10 +109,12 @@ describe("企业协作 Excel", () => {
     await workbook.xlsx.load(bytes as never);
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["填写说明", "领域L0字典", "领域L1字典", "产品字典", "需求清单", "路标卡片"]);
     expect(workbook.getWorksheet("填写说明")?.getCell("B13").value).toBe("health-roadmap-collaboration");
-    expect(workbook.getWorksheet("填写说明")?.getCell("B14").value).toBe("v4");
+    expect(workbook.getWorksheet("填写说明")?.getCell("B14").value).toBe("v5");
     expect(workbook.getWorksheet("需求清单")?.getRow(3).values).not.toContain("海外区域（用、分隔）");
     expect(workbook.getWorksheet("需求清单")?.getRow(3).values).toEqual(expect.arrayContaining(["领域L0", "领域L1", "适用范围", "匹配产品（单选）"]));
     expect(workbook.getWorksheet("领域L1字典")?.getCell("B4").value).toBe("健康");
+    expect(workbook.getWorksheet("路标卡片")?.getRow(3).values).not.toEqual(expect.arrayContaining(["卡片标题", "详情/PPT摘要"]));
+    expect(workbook.getWorksheet("路标卡片")?.getCell(4, headerColumn(workbook.getWorksheet("路标卡片")!, "领域 L1 标签（自动）")).value).toBe("睡眠");
     expect(workbook.getWorksheet("路标卡片")?.getCell(4, headerColumn(workbook.getWorksheet("路标卡片")!, "卡片顺序（请勿修改）")).value).toBe(0);
     expect(workbook.getWorksheet("需求清单")?.getCell("O4").value).toMatchObject({ formula: "SUM(K4:N4)", result: 1 });
 
@@ -112,8 +149,8 @@ describe("企业协作 Excel", () => {
     expect(workbook.getWorksheet("填写说明")?.getCell("B18").value).toBe("2027H1 – 2027H1");
     expect(workbook.getWorksheet("需求清单")?.getCell("B4").value).toBe("社交时差");
     expect(workbook.getWorksheet("需求清单")?.getCell("B5").value).toBeNull();
-    expect(workbook.getWorksheet("路标卡片")?.getCell("H4").value).toBe("d1::健康基础::2027-03");
-    expect(workbook.getWorksheet("路标卡片")?.getCell("H5").value).toBeNull();
+    expect(workbook.getWorksheet("路标卡片")?.getCell(4, headerColumn(workbook.getWorksheet("路标卡片")!, "卡片键（请勿修改）")).value).toBe("d1::健康基础::2027-03");
+    expect(workbook.getWorksheet("路标卡片")?.getCell(5, headerColumn(workbook.getWorksheet("路标卡片")!, "卡片键（请勿修改）")).value).toBeNull();
     expect(workbook.getWorksheet("产品字典")?.getCell("A5").value).toBe("手环");
 
     const prepared = await inspectWorkspaceWorkbook(bytes, "区间协作.xlsx", data);
@@ -263,9 +300,7 @@ describe("企业协作 Excel", () => {
       const sheet = workbook.getWorksheet("需求清单")!;
       sheet.spliceColumns(headerColumn(sheet, "适用范围"), 1);
       sheet.getCell(4, headerColumn(sheet, "基线校验（请勿修改）")).value = legacyRequirementHash(data.requirements[0]);
-      const overrideSheet = workbook.getWorksheet("路标卡片")!;
-      overrideSheet.spliceColumns(headerColumn(overrideSheet, "卡片顺序（请勿修改）"), 1);
-      overrideSheet.getCell(4, headerColumn(overrideSheet, "基线校验（请勿修改）")).value = legacyOverrideHash(data.groupOverrides[0]);
+      writeLegacyRoadmapSheet(workbook, data, "v2");
     });
     const prepared = await inspectWorkspaceWorkbook(legacy, "旧版协作.xlsx", data);
     expect(prepared.preview.errors).toEqual([]);
@@ -279,14 +314,25 @@ describe("企业协作 Excel", () => {
     const bytes = await createWorkspaceWorkbook(data, "0.7.5");
     const legacy = await editWorkbook(bytes, (workbook) => {
       workbook.getWorksheet("填写说明")!.getCell("B14").value = "v3";
-      const sheet = workbook.getWorksheet("路标卡片")!;
-      sheet.spliceColumns(headerColumn(sheet, "卡片顺序（请勿修改）"), 1);
-      sheet.getCell(4, headerColumn(sheet, "基线校验（请勿修改）")).value = legacyOverrideHash(data.groupOverrides[0]);
+      writeLegacyRoadmapSheet(workbook, data, "v3");
     });
     const prepared = await inspectWorkspaceWorkbook(legacy, "v3协作.xlsx", data);
     expect(prepared.preview.errors).toEqual([]);
     expect(prepared.preview.counts.conflicts).toBe(0);
     expect(applyPreparedWorkspaceWorkbook(data, prepared, "local-wins").groupOverrides[0].sortOrder).toBe(0);
+  });
+
+  it("兼容 v4 卡片标题摘要并保留卡片顺序", async () => {
+    const data = workspace();
+    const bytes = await createWorkspaceWorkbook(data, "0.7.20");
+    const legacy = await editWorkbook(bytes, (workbook) => {
+      workbook.getWorksheet("填写说明")!.getCell("B14").value = "v4";
+      writeLegacyRoadmapSheet(workbook, data, "v4");
+    });
+    const prepared = await inspectWorkspaceWorkbook(legacy, "v4协作.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.counts.conflicts).toBe(0);
+    expect(applyPreparedWorkspaceWorkbook(data, prepared, "local-wins").groupOverrides[0]).toEqual(data.groupOverrides[0]);
   });
 
   it("三端工作量允许留空或显式填写0", async () => {
@@ -420,5 +466,14 @@ function legacyOverrideHash(item: WorkspaceData["groupOverrides"][number]): stri
     groupKey: item.groupKey,
     cardTitle: item.cardTitle.trim(),
     cardSummary: item.cardSummary.trim(),
+  })).digest("hex");
+}
+
+function v4OverrideHash(item: WorkspaceData["groupOverrides"][number]): string {
+  return createHash("sha256").update(JSON.stringify({
+    groupKey: item.groupKey,
+    cardTitle: item.cardTitle.trim(),
+    cardSummary: item.cardSummary.trim(),
+    sortOrder: item.sortOrder ?? null,
   })).digest("hex");
 }

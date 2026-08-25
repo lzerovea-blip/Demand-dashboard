@@ -19,8 +19,8 @@ import { roundWorkload } from "../shared/workload.js";
 import { validateWorkspaceData } from "./workspacePackage.js";
 
 const FORMAT_KEY = "health-roadmap-collaboration";
-const FORMAT_VERSION = "v4";
-const LEGACY_FORMAT_VERSIONS = ["v2", "v3"] as const;
+const FORMAT_VERSION = "v5";
+const LEGACY_FORMAT_VERSIONS = ["v2", "v3", "v4"] as const;
 const SUPPORTED_FORMAT_VERSIONS: readonly string[] = [FORMAT_VERSION, ...LEGACY_FORMAT_VERSIONS];
 const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 const HEADER_ROW = 3;
@@ -87,11 +87,20 @@ const LEGACY_OVERRIDE_HEADERS = [
   "基线更新时间（请勿修改）",
   "基线校验（请勿修改）",
 ] as const;
-const OVERRIDE_HEADERS = [
+const V4_OVERRIDE_HEADERS = [
   "操作",
   "卡片标题",
   "详情/PPT摘要",
   "领域",
+  "来源",
+  "上线月份",
+  "卡片顺序（请勿修改）",
+  "卡片键（请勿修改）",
+  "基线更新时间（请勿修改）",
+  "基线校验（请勿修改）",
+] as const;
+const OVERRIDE_HEADERS = [
+  "领域 L1 标签（自动）",
   "来源",
   "上线月份",
   "卡片顺序（请勿修改）",
@@ -280,7 +289,7 @@ function createGuideSheet(workbook: ExcelJS.Workbook, data: WorkspaceData, appVe
     [3, "下载", "协作完成后下载为标准 .xlsx 文件，不要转换成 CSV。"],
     [4, "导入", "工作台先检查新增、修改、删除、冲突和错误，确认后再合并。"],
     ["填写规则", "删除需求", "在“需求清单”的操作列选择“删除”；直接删除整行不会删除应用中的需求。"],
-    ["填写规则", "领域层级", "领域 L1 必须关联一个上游 L0；需求中的 L1 必须属于所选 L0。路标卡片只使用领域 L1。"],
+    ["填写规则", "领域层级", "领域 L1 必须关联一个上游 L0；需求中的 L1 必须属于所选 L0。路标卡片标题由领域 L1 标签自动生成，不支持手工标题或摘要。"],
     ["填写规则", "匹配产品", "体验优化不填写产品；平台演进可选一个产品；产品专属必填且只能选择一个产品。"],
     ["填写规则", "来源与范围", `来源必须从下拉列表选择：${SOURCES.join("、")}；适用范围必须选择：${REQUIREMENT_SCOPES.join("、")}。`],
   ];
@@ -453,21 +462,17 @@ function createRequirementSheet(workbook: ExcelJS.Workbook, data: WorkspaceData)
 
 function createOverrideSheet(workbook: ExcelJS.Workbook, data: WorkspaceData): void {
   const sheet = workbook.addWorksheet(SHEETS.overrides, { properties: { tabColor: { argb: "FF2F9D82" } } });
-  prepareDataSheet(sheet, "路标卡片 · 标题和摘要可编辑，领域/来源/月和卡片顺序由工作台维护", OVERRIDE_HEADERS.length);
+  prepareDataSheet(sheet, "路标卡片 · 标题由领域 L1 标签自动生成；本表仅保留卡片顺序和系统识别字段", OVERRIDE_HEADERS.length);
   const domains = new Map(data.domains.map((item) => [item.id, item.name]));
   const rows = data.groupOverrides.map((item) => {
     const [domainId, source, targetMonth] = item.groupKey.split("::");
-    return ["保留", item.cardTitle, item.cardSummary || null, domains.get(domainId) ?? domainId, source, monthDate(targetMonth), item.sortOrder ?? null, item.groupKey, item.updatedAt, overrideHash(item)];
+    return [domains.get(domainId) ?? domainId, source, monthDate(targetMonth), item.sortOrder ?? null, item.groupKey, item.updatedAt, overrideOrderHash(item)];
   });
   addTable(sheet, "RoadmapCardsTable", OVERRIDE_HEADERS, rows.length ? rows : [blankCells(OVERRIDE_HEADERS.length)]);
-  sheet.columns = [{ width: 10 }, { width: 28 }, { width: 48 }, { width: 20 }, { width: 16 }, { width: 14 }, { width: 18 }, { width: 58 }, { width: 28 }, { width: 68 }];
-  sheet.getColumn(6).numFmt = "yyyy-mm";
+  sheet.columns = [{ width: 24 }, { width: 16 }, { width: 14 }, { width: 18 }, { width: 58 }, { width: 28 }, { width: 68 }];
+  sheet.getColumn(3).numFmt = "yyyy-mm";
   const usedLast = Math.max(FIRST_DATA_ROW, FIRST_DATA_ROW + rows.length - 1);
-  const validationLast = Math.max(usedLast + 20, 24);
-  applyListValidation(sheet, `A${FIRST_DATA_ROW}:A${validationLast}`, ["保留", "删除"]);
-  applyListValidation(sheet, `E${FIRST_DATA_ROW}:E${validationLast}`, [...SOURCES]);
-  styleEditable(sheet, `A${FIRST_DATA_ROW}:C${usedLast}`);
-  styleSystem(sheet, `D${FIRST_DATA_ROW}:J${usedLast}`);
+  styleSystem(sheet, `A${FIRST_DATA_ROW}:G${usedLast}`);
 }
 
 function prepareDataSheet(sheet: ExcelJS.Worksheet, title: string, columnCount: number, freezeColumns = 1): void {
@@ -718,7 +723,8 @@ function parseOverrideSheet(
   formatVersion: ParsedWorkspaceWorkbook["formatVersion"],
   errors: WorkspaceWorkbookIssue[],
 ): ParsedOverrideRow[] {
-  const headers = formatVersion === FORMAT_VERSION ? OVERRIDE_HEADERS : LEGACY_OVERRIDE_HEADERS;
+  const currentFormat = formatVersion === FORMAT_VERSION;
+  const headers = currentFormat ? OVERRIDE_HEADERS : formatVersion === "v4" ? V4_OVERRIDE_HEADERS : LEGACY_OVERRIDE_HEADERS;
   const columns = headerColumns(sheet, headers, errors);
   if (!columns) return [];
   const domainByName = dictionaryByName(domains);
@@ -728,16 +734,16 @@ function parseOverrideSheet(
   for (let row = FIRST_DATA_ROW; row <= sheet.actualRowCount; row += 1) {
     const values = Object.fromEntries(headers.map((header) => [header, valueAt(sheet, row, columns, header)])) as Record<string, string>;
     if (!Object.values(values).some(Boolean)) continue;
-    const action = normalizeAction(values["操作"], sheet.name, row, columns.get("操作")!, errors);
-    const sortOrderValue = formatVersion === FORMAT_VERSION ? values["卡片顺序（请勿修改）"] : "";
+    const action = currentFormat ? "保留" : normalizeAction(values["操作"], sheet.name, row, columns.get("操作")!, errors);
+    const sortOrderValue = currentFormat || formatVersion === "v4" ? values["卡片顺序（请勿修改）"] : "";
     const parsedSortOrder = sortOrderValue === "" ? undefined : Number(sortOrderValue);
     if (parsedSortOrder !== undefined && (!Number.isInteger(parsedSortOrder) || parsedSortOrder < 0)) {
       addIssue(errors, sheet.name, cellAddress(row, columns.get("卡片顺序（请勿修改）")!), "卡片顺序必须是大于或等于0的整数，请不要修改");
     }
     const originalKey = normalizeLegacyGroupOverride({
       groupKey: values["卡片键（请勿修改）"],
-      cardTitle: values["卡片标题"] || "兼容迁移",
-      cardSummary: values["详情/PPT摘要"],
+      cardTitle: currentFormat ? values["领域 L1 标签（自动）"] || "兼容迁移" : values["卡片标题"] || "兼容迁移",
+      cardSummary: currentFormat ? "" : values["详情/PPT摘要"],
       ...(parsedSortOrder === undefined ? {} : { sortOrder: parsedSortOrder }),
       updatedAt: values["基线更新时间（请勿修改）"] || exportedAt,
     }).groupKey;
@@ -753,8 +759,9 @@ function parseOverrideSheet(
       } });
       continue;
     }
-    const title = values["卡片标题"].trim();
-    if (!title) addIssue(errors, sheet.name, cellAddress(row, columns.get("卡片标题")!), "卡片标题不能为空");
+    const titleHeader = currentFormat ? "领域 L1 标签（自动）" : "卡片标题";
+    const title = values[titleHeader].trim();
+    if (!title) addIssue(errors, sheet.name, cellAddress(row, columns.get(titleHeader)!), currentFormat ? "领域 L1 标签不能为空，请不要修改系统字段" : "卡片标题不能为空");
     let groupKey = originalKey;
     if (originalKey) {
       const [domainId, source, month] = originalKey.split("::");
@@ -763,14 +770,18 @@ function parseOverrideSheet(
       const visibleSource = normalizeLegacySource(visibleRawSource);
       const visibleMonth = parseMonth(sheet.getCell(row, columns.get("上线月份")!).value);
       if (!originalDomain || visibleSource !== source || visibleMonth !== month) {
-        addIssue(errors, sheet.name, cellAddress(row, columns.get("领域")!), "现有卡片的领域、来源和上线月份不可修改");
+        addIssue(errors, sheet.name, cellAddress(row, columns.get(titleHeader)!), "现有卡片的领域 L1 标签、来源和上线月份不可修改");
       }
     } else {
-      const domain = domainByName.get(normalizeName(values["领域"]));
+      if (currentFormat) {
+        addIssue(errors, sheet.name, cellAddress(row, columns.get("卡片键（请勿修改）")!), "路标卡片系统行缺少卡片键，请重新导出协作 Excel");
+      }
+      const domainName = currentFormat ? values["领域 L1 标签（自动）"] : values["领域"];
+      const domain = domainByName.get(normalizeName(domainName));
       const rawSource = values["来源"];
       const source = normalizeLegacySource(rawSource);
       const month = parseMonth(sheet.getCell(row, columns.get("上线月份")!).value);
-      if (!domain) addIssue(errors, sheet.name, cellAddress(row, columns.get("领域")!), "领域不存在于领域字典");
+      if (!domain) addIssue(errors, sheet.name, cellAddress(row, columns.get(titleHeader)!), "领域不存在于领域 L1 字典");
       if (!SOURCES.includes(source as (typeof SOURCES)[number])) addIssue(errors, sheet.name, cellAddress(row, columns.get("来源")!), "来源不在允许范围内");
       if (!month) addIssue(errors, sheet.name, cellAddress(row, columns.get("上线月份")!), "上线月份应为有效年月");
       groupKey = `${domain?.id ?? ""}::${source}::${month ?? ""}`;
@@ -782,7 +793,7 @@ function parseOverrideSheet(
     rows.push({ sheet: sheet.name, row, action, baselineHash, override: {
       groupKey,
       cardTitle: title,
-      cardSummary: values["详情/PPT摘要"].trim(),
+      cardSummary: currentFormat ? "" : values["详情/PPT摘要"].trim(),
       ...(parsedSortOrder === undefined ? {} : { sortOrder: parsedSortOrder }),
       updatedAt,
     } });
@@ -876,7 +887,9 @@ function planWorkspaceWorkbookImport(
   }
 
   const overrides = new Map(current.groupOverrides.map((item) => [item.groupKey, item]));
-  const baselineOverrideHash = parsed.formatVersion === FORMAT_VERSION ? overrideHash : overrideHashV3;
+  const baselineOverrideHash = parsed.formatVersion === FORMAT_VERSION
+    ? overrideOrderHash
+    : parsed.formatVersion === "v4" ? overrideHash : overrideHashV3;
   for (const row of parsed.overrides) {
     const [domainId, source, month] = row.override.groupKey.split("::");
     const groupKey = `${domainL1Merge.idMap.get(domainId) ?? domainId}::${source}::${month}`;
@@ -899,8 +912,10 @@ function planWorkspaceWorkbookImport(
       continue;
     }
     const incomingWithCompatibleOrder = parsed.formatVersion === FORMAT_VERSION
-      ? incoming
-      : { ...incoming, ...(existing.sortOrder === undefined ? {} : { sortOrder: existing.sortOrder }) };
+      ? { ...incoming, cardTitle: existing.cardTitle, cardSummary: existing.cardSummary }
+      : parsed.formatVersion === "v4"
+        ? incoming
+        : { ...incoming, ...(existing.sortOrder === undefined ? {} : { sortOrder: existing.sortOrder }) };
     if (row.baselineHash && baselineOverrideHash(incomingWithCompatibleOrder) === row.baselineHash) continue;
     const localChanged = Boolean(row.baselineHash) && baselineOverrideHash(existing) !== row.baselineHash;
     if (localChanged) {
@@ -1126,6 +1141,10 @@ function overrideHash(item: GroupOverride): string {
 
 function overrideHashV3(item: GroupOverride): string {
   return stableHash({ groupKey: item.groupKey, cardTitle: item.cardTitle.trim(), cardSummary: item.cardSummary.trim() });
+}
+
+function overrideOrderHash(item: GroupOverride): string {
+  return stableHash({ groupKey: item.groupKey, sortOrder: item.sortOrder ?? null });
 }
 
 function stableHash(value: unknown): string {
