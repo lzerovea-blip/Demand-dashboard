@@ -80,7 +80,7 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.18",
+  version: "0.7.19",
   releasedAt: "2026-08-25",
   author: "林忠维",
 };
@@ -327,7 +327,7 @@ export default function App() {
   if (loading) return <div className="boot">正在打开离线需求库…</div>;
 
   return (
-    <div className={`app-shell${roadmapFocusMode ? " roadmap-focus-mode" : ""}`}>
+    <div className={`app-shell${roadmapFocusMode ? " roadmap-focus-mode" : ""}${page === "roadmap" && !roadmapFocusMode ? " roadmap-page-mode" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <div>
