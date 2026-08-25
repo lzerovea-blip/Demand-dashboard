@@ -20,9 +20,7 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
   const categorized = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm);
   const legacyTotal = nonNegative(input.workloadPm);
   const source = normalizeLegacySource(input.source) as RequirementSource;
-  const productIds = Array.isArray(input.productIds)
-    ? [...new Set(input.productIds.filter((id): id is string => typeof id === "string" && Boolean(id)))].slice(0, 1)
-    : [];
+  const productIds = normalizeRequirementProductIds(input.category, input.productIds);
   const unallocatedWorkloadPm = hasBreakdown
     ? (Number.isFinite(input.unallocatedWorkloadPm) ? nonNegative(input.unallocatedWorkloadPm) : roundWorkload(Math.max(0, legacyTotal - categorized)))
     : legacyTotal;
@@ -41,6 +39,13 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
     unallocatedWorkloadPm,
     workloadPm: roundWorkload(categorized + unallocatedWorkloadPm),
   };
+}
+
+export function normalizeRequirementProductIds(category: RequirementCategory, productIds: unknown): string[] {
+  if (category === "体验优化") return [];
+  return Array.isArray(productIds)
+    ? [...new Set(productIds.filter((id): id is string => typeof id === "string" && Boolean(id)))].slice(0, 1)
+    : [];
 }
 
 export type RoadmapRegion = "domestic" | "overseas";

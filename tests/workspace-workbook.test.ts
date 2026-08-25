@@ -360,6 +360,19 @@ describe("企业协作 Excel", () => {
     expect(accepted.parsed.requirements[0].requirement.productIds).toEqual(["p1"]);
   });
 
+  it("体验优化不能通过 Excel 匹配产品", async () => {
+    const data = workspace();
+    const bytes = await createWorkspaceWorkbook(data, "0.7.18");
+    const edited = await editWorkbook(bytes, (workbook) => {
+      const sheet = workbook.getWorksheet("需求清单")!;
+      sheet.getCell(4, headerColumn(sheet, "分类")).value = "体验优化";
+      sheet.getCell(4, headerColumn(sheet, "匹配产品（单选）")).value = "手表";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "体验优化产品.xlsx", data);
+    expect(prepared.preview.errors.some((item) => item.message.includes("体验优化需求不匹配产品"))).toBe(true);
+    expect(prepared.parsed.requirements[0].requirement.productIds).toEqual([]);
+  });
+
   it("领域L1必须关联L0，需求中的两级领域必须匹配", async () => {
     const data = workspace({ domains: [
       { id: "l0", name: "健康", sortOrder: 0, active: true, level: "L0" },

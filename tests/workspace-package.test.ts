@@ -86,6 +86,16 @@ describe(".roadmap 数据包", () => {
     expect(inspected.data.requirements[0]).toMatchObject({ category: "平台演进", productIds: ["p1"] });
   });
 
+  it("导出时清除体验优化需求中的旧产品关联", async () => {
+    const experienceWorkspace = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({ ...item, category: "体验优化" as const, productIds: ["p1"] })),
+    };
+    const archive = await createWorkspacePackage(experienceWorkspace, "0.7.18");
+    const inspected = await inspectWorkspacePackage(archive, "体验优化.roadmap");
+    expect(inspected.data.requirements[0]).toMatchObject({ category: "体验优化", productIds: [] });
+  });
+
   it("产品专属在完整数据包中仍必须匹配一个产品", async () => {
     const invalid = {
       ...workspace,

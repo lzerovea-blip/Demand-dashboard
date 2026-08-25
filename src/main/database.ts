@@ -25,7 +25,7 @@ import {
   REQUIREMENT_IMAGE_MIME_TYPES,
   SOURCES,
 } from "../shared/types.js";
-import { LEGACY_AI_SOURCE, LEGACY_MEDICAL_SUBMISSION_SOURCE, LEGACY_OVERSEAS_SOURCE, LEGACY_UPPERCASE_AI_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement } from "../shared/requirements.js";
+import { LEGACY_AI_SOURCE, LEGACY_MEDICAL_SUBMISSION_SOURCE, LEGACY_OVERSEAS_SOURCE, LEGACY_UPPERCASE_AI_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement, normalizeRequirementProductIds } from "../shared/requirements.js";
 import { groupKeyFor } from "../shared/roadmap.js";
 import { mergeWorkspaceData } from "../shared/workspace.js";
 import { roundWorkload } from "../shared/workload.js";
@@ -88,7 +88,7 @@ export class LocalDatabase {
       description: input.description.trim(),
       images: input.images.map((image) => ({ ...image, name: image.name.trim() || "需求图片" })),
       overseasRegions: [],
-      productIds: [...new Set(input.productIds)].slice(0, 1),
+      productIds: normalizeRequirementProductIds(input.category, input.productIds),
       deviceWorkloadPm,
       appWorkloadPm,
       cloudWorkloadPm,
@@ -412,6 +412,7 @@ function validateRequirement(input: SaveRequirementInput): void {
     if (image.sizeBytes <= 0 || image.sizeBytes > MAX_REQUIREMENT_IMAGE_BYTES) throw new Error(`图片“${image.name}”不能超过5MB`);
     if (!image.dataUrl.startsWith(`data:${image.mimeType};base64,`)) throw new Error(`图片“${image.name}”数据无效`);
   }
+  if (input.category === "体验优化" && input.productIds.length > 0) throw new Error("体验优化需求不匹配产品");
   if (input.category === "产品专属" && input.productIds.length !== 1) throw new Error("产品专属需求必须且只能选择一个产品");
-  if (input.category !== "产品专属" && input.productIds.length > 1) throw new Error(`${input.category}需求最多匹配一个产品`);
+  if (input.category === "平台演进" && input.productIds.length > 1) throw new Error("平台演进需求最多匹配一个产品");
 }

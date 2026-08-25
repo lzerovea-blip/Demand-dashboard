@@ -57,7 +57,8 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
   const usedPaths = new Set<string>();
   const packedRequirements: PackedRequirement[] = [];
 
-  for (const requirement of data.requirements) {
+  for (const rawRequirement of data.requirements) {
+    const requirement = normalizeRequirement(rawRequirement);
     const images: PackedRequirementImage[] = [];
     for (const [index, image] of requirement.images.entries()) {
       const bytes = decodeDataUrl(image);
@@ -226,8 +227,9 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (!Number.isFinite(item.workloadPm) || item.workloadPm < 0) throw new Error(`需求“${item.title}”的工作量无效`);
     if (item.description.length > 5000 || !validTimestamp(item.createdAt) || !validTimestamp(item.updatedAt)) throw new Error(`需求“${item.title}”的文本或时间信息无效`);
     if (item.productIds.some((id) => !productIds.has(id))) throw new Error(`需求“${item.title}”引用了不存在的产品`);
+    if (item.category === "体验优化" && item.productIds.length > 0) throw new Error(`体验优化需求“${item.title}”不能匹配产品`);
     if (item.category === "产品专属" && item.productIds.length !== 1) throw new Error(`产品专属需求“${item.title}”必须且只能匹配一个产品`);
-    if (item.category !== "产品专属" && item.productIds.length > 1) throw new Error(`${item.category}需求“${item.title}”最多匹配一个产品`);
+    if (item.category === "平台演进" && item.productIds.length > 1) throw new Error(`平台演进需求“${item.title}”最多匹配一个产品`);
     if (item.images.length > MAX_REQUIREMENT_IMAGES) throw new Error(`需求“${item.title}”的图片数量超限`);
     for (const image of item.images) decodeDataUrl(image);
   }

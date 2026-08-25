@@ -27,12 +27,11 @@ export const CATEGORY_META: Record<RequirementCategory, {
   color: string;
   background: string;
   className: string;
-  roadmapLabel: string;
   requiresProduct: boolean;
 }> = {
-  体验优化: { color: "#6750c9", background: "#f0edff", className: "experience", roadmapLabel: "优化", requiresProduct: false },
-  平台演进: { color: "#c63f3f", background: "#fff0f0", className: "platform", roadmapLabel: "演进", requiresProduct: false },
-  产品专属: { color: "#17202a", background: "#e9edef", className: "exclusive", roadmapLabel: "专属", requiresProduct: true },
+  体验优化: { color: "#7357d9", background: "#efecff", className: "experience", requiresProduct: false },
+  平台演进: { color: "#c96a08", background: "#fff0d8", className: "platform", requiresProduct: false },
+  产品专属: { color: "#17202a", background: "#e9edef", className: "exclusive", requiresProduct: true },
 };
 export type RequirementScope = (typeof REQUIREMENT_SCOPES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];

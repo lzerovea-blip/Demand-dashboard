@@ -151,7 +151,7 @@ describe("历史需求兼容", () => {
     }).groupKey).toBe("d1::NMPA送检::2027-06");
   });
 
-  it("把旧版产品匹配收敛为三类均可单选且不丢失合法产品", () => {
+  it("清除体验优化的旧产品关联，并保留平台演进和产品专属的单选产品", () => {
     const exclusive = normalizeRequirement({
       ...requirement("legacy-exclusive", "旧多产品", "d1", "健康基础", "产品专属", "2027-05"),
       productIds: ["p1", "p2", "p1"],
@@ -165,7 +165,7 @@ describe("历史需求兼容", () => {
       productIds: ["p1"],
     });
     expect(exclusive.productIds).toEqual(["p1"]);
-    expect(experience.productIds).toEqual(["p1"]);
+    expect(experience.productIds).toEqual([]);
     expect(platform.productIds).toEqual(["p1"]);
   });
 });

@@ -281,7 +281,7 @@ function createGuideSheet(workbook: ExcelJS.Workbook, data: WorkspaceData, appVe
     [4, "导入", "工作台先检查新增、修改、删除、冲突和错误，确认后再合并。"],
     ["填写规则", "删除需求", "在“需求清单”的操作列选择“删除”；直接删除整行不会删除应用中的需求。"],
     ["填写规则", "领域层级", "领域 L1 必须关联一个上游 L0；需求中的 L1 必须属于所选 L0。路标卡片只使用领域 L1。"],
-    ["填写规则", "匹配产品", "三类需求均可选择一个产品；产品专属必填，体验优化和平台演进可不填。"],
+    ["填写规则", "匹配产品", "体验优化不填写产品；平台演进可选一个产品；产品专属必填且只能选择一个产品。"],
     ["填写规则", "来源与范围", `来源必须从下拉列表选择：${SOURCES.join("、")}；适用范围必须选择：${REQUIREMENT_SCOPES.join("、")}。`],
   ];
   writeMatrix(sheet, 4, 1, instructions);
@@ -661,8 +661,9 @@ function parseRequirementSheet(
       if (!product) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), `产品“${name}”不存在于产品字典`);
       else productIds.push(product.id);
     });
+    if (category === "体验优化" && productIds.length > 0) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), "体验优化需求不匹配产品");
     if (category === "产品专属" && productIds.length !== 1) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), "产品专属需求必须且只能匹配一个产品");
-    if (category !== "产品专属" && productIds.length > 1) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), `${category}需求最多匹配一个产品`);
+    if (category === "平台演进" && productIds.length > 1) addIssue(errors, sheet.name, cellAddress(row, columns.get("匹配产品（单选）")!), "平台演进需求最多匹配一个产品");
 
     const workloadHeaders = ["设备工作量（人月）", "App工作量（人月）", "云侧工作量（人月）"] as const;
     const device = parseNonNegativeNumber(values[workloadHeaders[0]]);
@@ -689,7 +690,7 @@ function parseRequirementSheet(
       scope: scope as Requirement["scope"],
       category: category as Requirement["category"],
       targetMonth: targetMonth ?? "",
-      productIds: [...new Set(productIds)],
+      productIds: category === "体验优化" ? [] : [...new Set(productIds)],
       overseasRegions: [],
       deviceWorkloadPm: roundWorkload(device ?? 0),
       appWorkloadPm: roundWorkload(app ?? 0),

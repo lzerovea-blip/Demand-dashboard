@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode, type RefObject } from "react";
-import { IconHexagon3d, IconStack2, IconTrendingUp, type Icon } from "@tabler/icons-react";
+import { IconTrendingUp } from "@tabler/icons-react";
 import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
@@ -26,7 +26,6 @@ import { splitTextIntoLines } from "../shared/text";
 import { restoreFocusAfterConfirmation } from "./confirmation";
 import { moveImageViewerIndex } from "./imageViewer";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
-import { roadmapCategoryMarks } from "../shared/roadmapCategory";
 import {
   CATEGORY_META,
   CATEGORIES,
@@ -81,15 +80,9 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.17",
+  version: "0.7.18",
   releasedAt: "2026-08-25",
   author: "林忠维",
-};
-
-const ROADMAP_CATEGORY_ICONS: Record<RequirementCategory, Icon> = {
-  体验优化: IconTrendingUp,
-  平台演进: IconStack2,
-  产品专属: IconHexagon3d,
 };
 
 const EMPTY_SNAPSHOT: AppSnapshot = {
@@ -1188,18 +1181,17 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
   onDragOver: (event: ReactDragEvent<HTMLButtonElement>) => void;
   onDrop: (event: ReactDragEvent<HTMLButtonElement>) => void;
 }) {
-  const categoryMarks = roadmapCategoryMarks(group.categories);
-  const primaryCategoryClass = categoryMarks[0]?.className ?? "experience";
+  const hasExclusive = group.categories.includes("产品专属");
+  const hasExperience = group.categories.includes("体验优化");
   const label = roadmapCardLabel(group);
   const displayLines = roadmapCardDisplayParts(label, Array.from(`${group.cardTitle}：`).length);
   const visibleProducts = group.productNames.slice(0, 2);
   const hiddenProductCount = Math.max(group.productNames.length - visibleProducts.length, 0);
   const productLabel = group.productNames.length ? `涉及产品：${group.productNames.join("、")}` : "";
-  const categoryLabel = categoryMarks.length ? `需求分类：${categoryMarks.map((item) => item.category).join("、")}` : "";
-  const accessibleLabel = [label, categoryLabel, productLabel, draggable ? "可上下拖动排序，点击查看全部需求" : "点击查看全部需求"].filter(Boolean).join("；");
+  const accessibleLabel = [label, productLabel, draggable ? "可上下拖动排序，点击查看全部需求" : "点击查看全部需求"].filter(Boolean).join("；");
   return (
     <button
-      className={`roadmap-card roadmap-card-primary-${primaryCategoryClass}${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${related ? " is-l1-related" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
+      className={`roadmap-card${hasExclusive ? " has-exclusive" : ""}${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${related ? " is-l1-related" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
       draggable={draggable}
       onMouseEnter={() => onRelatedChange(true)}
       onMouseLeave={() => onRelatedChange(false)}
@@ -1212,17 +1204,6 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
       onDrop={onDrop}
       aria-label={accessibleLabel}
     >
-      <span className={`roadmap-card-category-rail category-count-${categoryMarks.length}`} aria-hidden="true">
-        {categoryMarks.map((mark) => {
-          const CategoryIcon = ROADMAP_CATEGORY_ICONS[mark.category];
-          return (
-            <span className={`roadmap-card-category-mark ${mark.className}`} key={mark.category}>
-              <CategoryIcon size={categoryMarks.length === 1 ? 18 : 14} stroke={2} />
-              <b>{mark.label}</b>
-            </span>
-          );
-        })}
-      </span>
       <span className="roadmap-card-copy" aria-hidden="true">
         {displayLines.map((line, index) => (
           <span className="roadmap-card-line" key={`${index}-${line.emphasis}-${line.content}`}>
@@ -1236,6 +1217,11 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
           <i>涉及产品</i>
           {visibleProducts.map((name) => <b key={name}>{name}</b>)}
           {hiddenProductCount > 0 && <b>+{hiddenProductCount}</b>}
+        </span>
+      )}
+      {hasExperience && (
+        <span className="roadmap-card-experience-icon" aria-label="体验优化">
+          <IconTrendingUp size={18} stroke={2.2} aria-hidden="true" />
         </span>
       )}
     </button>
@@ -1270,7 +1256,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       overseasRegions: value.overseasRegions ?? [],
       category: value.category,
       targetMonth: value.targetMonth,
-      productIds: value.productIds,
+      productIds: value.category === "体验优化" ? [] : value.productIds.slice(0, 1),
       deviceWorkloadPm: value.deviceWorkloadPm,
       appWorkloadPm: value.appWorkloadPm,
       cloudWorkloadPm: value.cloudWorkloadPm,
@@ -1333,6 +1319,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
     try {
       await onSave({
         ...form,
+        productIds: form.category === "体验优化" ? [] : form.productIds.slice(0, 1),
         deviceWorkloadPm: draftParts.device ?? 0,
         appWorkloadPm: draftParts.app ?? 0,
         cloudWorkloadPm: draftParts.cloud ?? 0,
@@ -1424,9 +1411,11 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
             </div>
           </Field>
           <div className="form-row-pair category-product-row">
-            <Field label="分类" required><div className="segmented category-segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: form.productIds.slice(0, 1) })}>{item}</button>)}</div></Field>
+            <Field label="分类" required><div className="segmented category-segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "体验优化" ? [] : form.productIds.slice(0, 1) })}>{item}</button>)}</div></Field>
             <Field label="匹配产品" required={form.category === "产品专属"}>
-              {snapshot.products.some((item) => item.active)
+              {form.category === "体验优化"
+                ? <div className="inline-empty">体验优化不匹配产品，路标卡片右侧会显示体验优化图标。</div>
+                : snapshot.products.some((item) => item.active)
                 ? <select className="product-wheel-select" value={form.productIds[0] ?? ""} onChange={(event) => setForm({ ...form, productIds: event.target.value ? [event.target.value] : [] })}><option value="">{form.category === "产品专属" ? "请选择一个产品" : "可选：请选择一个产品"}</option>{snapshot.products.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
                 : <div className="inline-empty">暂无产品，请先到字典设置新增产品。</div>}
             </Field>
@@ -1618,7 +1607,7 @@ function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDe
     <div className="dictionary-grid">
       <DictionaryPanel title="领域 L0 字典" subtitle="上游领域；一个 L0 可以关联多个 L1" items={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L0", parentId: undefined })} onDelete={onDeleteDomain} requestConfirmation={requestConfirmation} />
       <DictionaryPanel title="领域 L1 字典" subtitle="新增或调整 L1 时必须指定所属 L0；路标仅显示 L1" items={domainL1s} parentOptions={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L1" })} onDelete={onDeleteDomain} requestConfirmation={requestConfirmation} />
-      <DictionaryPanel title="产品字典" subtitle="三类需求均可匹配一个产品，产品专属必须选择" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} requestConfirmation={requestConfirmation} />
+      <DictionaryPanel title="产品字典" subtitle="平台演进可选一个产品，产品专属必须选择；体验优化不匹配产品" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} requestConfirmation={requestConfirmation} />
     </div>
   );
 }
