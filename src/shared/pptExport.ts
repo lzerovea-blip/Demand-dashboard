@@ -1,115 +1,99 @@
 import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
+  halfYearOf,
   halfYearSequence,
-  monthsForHalfYear,
   requirementsInRange,
   type HalfYearSummary,
   type RoadmapGroup,
 } from "./roadmap.js";
 import { ROADMAP_TRACKS } from "./types.js";
-import type { AppSnapshot, Requirement, Track } from "./types.js";
+import type { AppSnapshot, PptExportRequest, PptExportSectionId, Requirement, Track } from "./types.js";
+
+export const MAX_PPT_HALF_YEARS = 4;
+
+export const PPT_EXPORT_SECTIONS: ReadonlyArray<{ id: PptExportSectionId; label: string }> = [
+  { id: "summary", label: "需求工作量汇总分析" },
+  ...ROADMAP_TRACKS.map((track) => ({ id: track, label: `${track}路标` as const })),
+];
+
+export const DEFAULT_PPT_EXPORT_SECTIONS = PPT_EXPORT_SECTIONS.map((item) => item.id);
 
 export interface PptRoadmapPagePlan {
-  halfYear: string;
   track: Track;
-  months: string[];
+  halfYears: string[];
   groups: RoadmapGroup[];
-  occupiedMonths: string[];
-}
-
-export interface PptDetailPagePlan {
-  group: RoadmapGroup;
-  requirements: Requirement[];
-  part: number;
-  partCount: number;
-  slideNumber: number;
 }
 
 export interface PptExportPlan {
   start: string;
   end: string;
+  materialName: string;
+  selectedSections: PptExportSectionId[];
   halfYears: string[];
   requirements: Requirement[];
   summaries: HalfYearSummary[];
   groups: RoadmapGroup[];
   roadmapPages: PptRoadmapPagePlan[];
-  detailPages: PptDetailPagePlan[];
-  firstDetailSlideByGroup: Record<string, number>;
   slideCount: number;
 }
 
-const FIXED_OPENING_SLIDES = 3;
-const REQUIREMENTS_PER_DETAIL_PAGE = 2;
-
-export function buildPptExportPlan(snapshot: AppSnapshot, start: string, end: string): PptExportPlan {
-  const halfYears = halfYearSequence(start, end);
-  const requirements = requirementsInRange(snapshot.requirements, start, end);
-  const summaries = buildHalfYearSummaries(snapshot.requirements, start, end);
-  const groups = buildRoadmapGroups(snapshot, start, end);
-  const roadmapPages = halfYears.flatMap((halfYear) => {
-    const months = monthsForHalfYear(halfYear);
-    const halfGroups = groups.filter((group) => months.includes(group.targetMonth));
-    return ROADMAP_TRACKS.map((track) => {
-      const trackGroups = halfGroups.filter((group) => group.track === track);
-      return {
-        halfYear,
-        track,
-        months,
-        groups: trackGroups,
-        occupiedMonths: [...new Set(trackGroups.map((group) => group.targetMonth))],
-      };
-    });
-  });
-
-  const detailStartSlide = FIXED_OPENING_SLIDES + roadmapPages.length + 1;
-  const detailPages: PptDetailPagePlan[] = [];
-  const firstDetailSlideByGroup: Record<string, number> = {};
-
-  for (const group of groups) {
-    const chunks = chunk(group.requirements, REQUIREMENTS_PER_DETAIL_PAGE);
-    const partCount = Math.max(1, chunks.length);
-    const firstSlide = detailStartSlide + detailPages.length;
-    firstDetailSlideByGroup[group.key] = firstSlide;
-    (chunks.length ? chunks : [[]]).forEach((items, index) => {
-      detailPages.push({
-        group,
-        requirements: items,
-        part: index + 1,
-        partCount,
-        slideNumber: detailStartSlide + detailPages.length,
-      });
-    });
-  }
-
+export function normalizePptExportRequest(input: PptExportRequest): PptExportRequest {
+  const valid = new Set(PPT_EXPORT_SECTIONS.map((item) => item.id));
+  const selected = [...new Set(input.sections ?? DEFAULT_PPT_EXPORT_SECTIONS)]
+    .filter((section): section is PptExportSectionId => valid.has(section));
   return {
-    start,
-    end,
+    start: input.start,
+    end: input.end,
+    materialName: input.materialName?.trim() || "解决方案需求路标",
+    sections: PPT_EXPORT_SECTIONS.map((item) => item.id).filter((id) => selected.includes(id)),
+  };
+}
+
+export function buildPptExportPlan(snapshot: AppSnapshot, startOrRequest: string | PptExportRequest, end?: string): PptExportPlan {
+  const request = normalizePptExportRequest(typeof startOrRequest === "string"
+    ? { start: startOrRequest, end: end ?? startOrRequest, materialName: "解决方案需求路标", sections: DEFAULT_PPT_EXPORT_SECTIONS }
+    : startOrRequest);
+  const halfYears = halfYearSequence(request.start, request.end);
+  if (halfYears.length > MAX_PPT_HALF_YEARS) {
+    throw new Error(`PPT 一次最多支持 ${MAX_PPT_HALF_YEARS} 个连续半年，请缩短导出区间后重试`);
+  }
+  const requirements = requirementsInRange(snapshot.requirements, request.start, request.end);
+  const summaries = buildHalfYearSummaries(snapshot.requirements, request.start, request.end);
+  const groups = buildRoadmapGroups(snapshot, request.start, request.end);
+  const roadmapPages = ROADMAP_TRACKS.filter((track) => request.sections.includes(track)).map((track) => ({
+    track,
+    halfYears,
+    groups: groups.filter((group) => group.track === track),
+  }));
+  return {
+    start: request.start,
+    end: request.end,
+    materialName: request.materialName,
+    selectedSections: request.sections,
     halfYears,
     requirements,
     summaries,
     groups,
     roadmapPages,
-    detailPages,
-    firstDetailSlideByGroup,
-    slideCount: FIXED_OPENING_SLIDES + roadmapPages.length + detailPages.length,
+    slideCount: 1 + request.sections.length,
   };
 }
 
-export function dynamicRoadmapMonthWidths(
-  months: string[],
-  occupiedMonths: string[],
-  totalWidth: number,
-  emptyWidth = 0.62,
-): number[] {
-  const occupied = new Set(occupiedMonths);
-  const occupiedCount = months.filter((month) => occupied.has(month)).length;
-  if (occupiedCount === 0) return months.map(() => totalWidth / months.length);
-  const emptyCount = months.length - occupiedCount;
-  const occupiedWidth = Math.max(emptyWidth, (totalWidth - emptyCount * emptyWidth) / occupiedCount);
-  return months.map((month) => occupied.has(month) ? occupiedWidth : emptyWidth);
+export function groupsForHalfYear(groups: RoadmapGroup[], halfYear: string): RoadmapGroup[] {
+  return groups.filter((group) => halfYearOf(group.targetMonth) === halfYear);
 }
 
-function chunk<T>(items: T[], size: number): T[][] {
-  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size));
+export type RoadmapBadgeKind = "product" | "experience" | null;
+
+export function roadmapBadgeKind(group: Pick<RoadmapGroup, "requirements">): RoadmapBadgeKind {
+  if (group.requirements.some((item) => item.productIds.length > 0)) return "product";
+  if (group.requirements.some((item) => item.category === "体验优化")) return "experience";
+  return null;
+}
+
+export function visibleRequirementTitles(requirements: Requirement[], limit = 3): string[] {
+  const visible = requirements.slice(0, limit).map((item) => item.title.trim()).filter(Boolean);
+  if (requirements.length > limit && visible.length) visible[visible.length - 1] = `${visible[visible.length - 1]}…`;
+  return visible;
 }

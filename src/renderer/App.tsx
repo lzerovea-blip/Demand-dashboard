@@ -25,6 +25,7 @@ import { ALL_DICTIONARY_PARENTS, filterDictionaryItemsByParent } from "../shared
 import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type RoadmapRegion } from "../shared/requirements";
 import { splitTextIntoLines } from "../shared/text";
 import { restoreFocusAfterConfirmation } from "./confirmation";
+import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS } from "../shared/pptExport";
 import { moveImageViewerIndex } from "./imageViewer";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
 import {
@@ -44,6 +45,7 @@ import {
   type RequirementImage,
   type RequirementScope,
   type RequirementSource,
+  type PptExportSectionId,
   type SaveDictionaryInput,
   type SaveRequirementInput,
   type Track,
@@ -81,8 +83,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.21",
-  releasedAt: "2026-08-25",
+  version: "0.7.22",
+  releasedAt: "2026-08-27",
   author: "林忠维",
 };
 
@@ -417,18 +419,10 @@ export default function App() {
               snapshot={snapshot}
               start={exportStartHalf}
               end={exportEndHalf}
-              onExportPpt={async () => {
+              onExportPpt={async (config) => {
                 try {
-                  const result = await window.roadmapApi.exportRoadmapPresentation({ start: exportStartHalf, end: exportEndHalf });
+                  const result = await window.roadmapApi.exportRoadmapPresentation({ start: exportStartHalf, end: exportEndHalf, ...config });
                   if (!result.canceled) setNotice(`PPT 已导出（${result.slideCount} 页）：${result.path}`);
-                } catch (reason) {
-                  setError(messageOf(reason));
-                }
-              }}
-              onExportDraft={async () => {
-                try {
-                  const result = await window.roadmapApi.exportTemplateDraft();
-                  if (!result.canceled) setNotice(`共创版已导出：${result.path}`);
                 } catch (reason) {
                   setError(messageOf(reason));
                 }
@@ -1692,12 +1686,11 @@ function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDele
   );
 }
 
-function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook }: {
+function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook }: {
   snapshot: AppSnapshot;
   start: string;
   end: string;
-  onExportPpt: () => Promise<void>;
-  onExportDraft: () => Promise<void>;
+  onExportPpt: (config: { materialName: string; sections: PptExportSectionId[] }) => Promise<void>;
   onExportWorkspace: () => Promise<void>;
   onInspectWorkspace: () => Promise<WorkspaceImportPreview | undefined>;
   onApplyWorkspace: (token: string, mode: WorkspaceImportMode) => Promise<boolean>;
@@ -1712,6 +1705,8 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
   const [applying, setApplying] = useState<WorkspaceImportMode | null>(null);
   const [workbookApplying, setWorkbookApplying] = useState<WorkspaceWorkbookConflictMode | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [pptMaterialName, setPptMaterialName] = useState("解决方案需求路标");
+  const [pptSections, setPptSections] = useState<PptExportSectionId[]>([...DEFAULT_PPT_EXPORT_SECTIONS]);
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
   const workbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).length;
 
@@ -1758,7 +1753,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
   async function exportPpt() {
     setExporting(true);
     try {
-      await onExportPpt();
+      await onExportPpt({ materialName: pptMaterialName, sections: pptSections });
     } finally {
       setExporting(false);
     }
@@ -1785,14 +1780,22 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportDraft, onExpo
           <section className="panel export-type-card roadmap-export-card">
             <div className="export-type-head"><span className="export-type-icon">P</span><span className="eyebrow">POWERPOINT</span></div>
             <h3>需求路标</h3>
-            <p>按当前半年区间生成可编辑 PowerPoint，包含汇总、七类路标、需求描述和本地图片。</p>
+            <p>按当前半年区间生成原生可编辑 PowerPoint。封面固定保留，其余内容一项对应一页。</p>
             <dl className="export-type-meta">
               <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
+              <div><dt>预计页数</dt><dd>{1 + pptSections.length} 页</dd></div>
               <div><dt>处理方式</dt><dd>全程本地</dd></div>
             </dl>
+            <div className="ppt-export-config">
+              <label className="ppt-material-name"><span>材料名称</span><input value={pptMaterialName} maxLength={40} onChange={(event) => setPptMaterialName(event.target.value)} /></label>
+              <div className="ppt-section-head"><b>导出内容</b><span>封面固定</span></div>
+              <div className="ppt-section-list">
+                {PPT_EXPORT_SECTIONS.map((section) => <label key={section.id} className="ppt-section-option"><input type="checkbox" checked={pptSections.includes(section.id)} onChange={(event) => setPptSections((current) => event.target.checked ? [...current, section.id] : current.filter((item) => item !== section.id))} /><span>{section.label}</span></label>)}
+              </div>
+              {halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS && <p className="ppt-range-warning">PPT 一次最多支持 {MAX_PPT_HALF_YEARS} 个连续半年，请缩短导出区间。</p>}
+            </div>
             <div className="export-card-actions">
-              <button className="button primary" onClick={exportPpt} disabled={exporting}>{exporting ? "正在生成…" : "生成需求路标 PPT"}</button>
-              <button className="button ghost" onClick={onExportDraft}>导出 6 页共创版</button>
+              <button className="button primary" onClick={exportPpt} disabled={exporting || !pptMaterialName.trim() || halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS}>{exporting ? "正在生成…" : `生成 ${1 + pptSections.length} 页 PPT`}</button>
             </div>
           </section>
 

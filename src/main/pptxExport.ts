@@ -1,12 +1,20 @@
 import PptxGenJSImport from "pptxgenjs";
-import { imageSize } from "image-size";
-import { buildPptExportPlan, dynamicRoadmapMonthWidths, type PptDetailPagePlan, type PptExportPlan, type PptRoadmapPagePlan } from "../shared/pptExport.js";
-import { groupMatchesRoadmapLane, roadmapCardLabel, roadmapLanesForTrack, type AiRoadmapLane, type HalfYearSummary, type MedicalSubmissionRoadmapLane, type RoadmapGroup } from "../shared/roadmap.js";
-import { CATEGORIES, ROADMAP_TRACKS, SOURCES } from "../shared/types.js";
-import type { AppSnapshot, Requirement, RequirementCategory, RequirementImage, RequirementScope, Track } from "../shared/types.js";
-import { sumWorkloadBreakdown, type WorkloadSide } from "../shared/workload.js";
+import {
+  buildPptExportPlan,
+  groupsForHalfYear,
+  roadmapBadgeKind,
+  visibleRequirementTitles,
+  type PptExportPlan,
+  type PptRoadmapPagePlan,
+  type RoadmapBadgeKind,
+} from "../shared/pptExport.js";
+import { groupMatchesRoadmapLane, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
+import { CATEGORIES } from "../shared/types.js";
+import type { AppSnapshot, PptExportRequest, RequirementCategory, Track } from "../shared/types.js";
+import type { WorkloadSide } from "../shared/workload.js";
 
 const FONT = "HarmonyOS Sans SC";
+const PX = 1 / 96;
 const C = {
   ink: "101820",
   navy: "17232E",
@@ -14,47 +22,18 @@ const C = {
   paper: "F3F6F7",
   white: "FFFFFF",
   muted: "70808B",
+  muted2: "98A4AC",
   faint: "DCE4E8",
+  faint2: "E9EEF1",
   mint: "85E8B8",
   mintDeep: "30A978",
   blue: "287EF0",
-  cyan: "12A99A",
-  orange: "EE6B56",
+  coral: "EE6B56",
+  coralPale: "FFF0EC",
   violet: "7357D9",
-  lilac: "F0EEFF",
-  paleMint: "E9FAF2",
-  paleBlue: "EAF2FF",
-  paleOrange: "FFF0EC",
   amber: "C96A08",
-  paleAmber: "FFF0D8",
+  red: "C00000",
 } as const;
-
-const SIDE_META: Record<WorkloadSide, { label: string; color: string }> = {
-  device: { label: "设备侧", color: C.cyan },
-  app: { label: "App 侧", color: C.blue },
-  cloud: { label: "云侧", color: C.violet },
-};
-
-const TRACK_COLORS: Record<Track, string> = {
-  运动: C.blue,
-  健康: C.orange,
-  行业: C.cyan,
-  全场景: "5B6EE1",
-  health平台: "11A8C7",
-  AI: "8B5CF6",
-  医疗送检: "D64D85",
-};
-
-const AI_LANE_COLORS: Record<AiRoadmapLane, string> = {
-  AI运动: "5B6EE1",
-  AI健康: "8B5CF6",
-  AI综合: "B14AC4",
-};
-
-const MEDICAL_SUBMISSION_LANE_COLORS: Record<MedicalSubmissionRoadmapLane, string> = {
-  NMPA送检: "D64D85",
-  CE送检: "287EF0",
-};
 
 const CATEGORY_COLORS: Record<RequirementCategory, string> = {
   体验优化: C.violet,
@@ -62,361 +41,428 @@ const CATEGORY_COLORS: Record<RequirementCategory, string> = {
   产品专属: C.ink,
 };
 
+const SIDE_META: Record<WorkloadSide, { label: string; color: string }> = {
+  device: { label: "设备侧", color: C.mintDeep },
+  app: { label: "App 侧", color: C.blue },
+  cloud: { label: "云侧", color: C.coral },
+};
+
+const ROADMAP_TABLE = {
+  x: 27.6,
+  y: 76.93,
+  w: 1223.07,
+  h: 580.87,
+  laneW: 128,
+  headerH: 68,
+} as const;
+
 type PptxPresentation = any;
 type PptxSlide = any;
 const PptxGenJS = PptxGenJSImport as unknown as { new(): PptxPresentation };
 
-function trackColor(track: Track): string {
-  return TRACK_COLORS[track];
+export interface RoadmapCardLayout {
+  group: RoadmapGroup;
+  badge: RoadmapBadgeKind;
+  fontSize: number;
+  margin: number;
+  gapAfter: number;
+  visibleRequirements: string[];
+  titleLines: string[];
+  titleLineHeight: number;
+  bodyLineHeight: number;
+  height: number;
+  top: number;
+  badgeLeft: number;
+  badgeTop: number;
 }
 
-function trackEnglishName(track: Track): string {
-  return ({
-    运动: "SPORT",
-    健康: "HEALTH",
-    行业: "INDUSTRY",
-    全场景: "ALL SCENARIOS",
-    health平台: "HEALTH PLATFORM",
-    AI: "AI",
-    医疗送检: "MEDICAL SUBMISSION",
-  } satisfies Record<Track, string>)[track];
+export interface RoadmapCellLayout {
+  fontSize: number;
+  margin: number;
+  cardGap: number;
+  visibleLimit: number;
+  cards: RoadmapCardLayout[];
 }
 
-export async function createRoadmapPresentation(
-  snapshot: AppSnapshot,
-  start: string,
-  end: string,
-): Promise<Buffer> {
-  const plan = buildPptExportPlan(snapshot, start, end);
+export async function createRoadmapPresentation(snapshot: AppSnapshot, request: PptExportRequest): Promise<Buffer> {
+  const plan = buildPptExportPlan(snapshot, request);
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
-  pptx.author = "解决方案需求管理";
+  pptx.author = "林忠维";
   pptx.company = "运动健康方案团队";
-  pptx.subject = `${formatHalfYear(start)} 至 ${formatHalfYear(end)}需求路标`;
-  pptx.title = "运动健康需求路标";
+  pptx.subject = `${formatHalfYear(plan.start)} 至 ${formatHalfYear(plan.end)}解决方案需求路标`;
+  pptx.title = plan.materialName;
   pptx.lang = "zh-CN";
-  pptx.theme = {
-    headFontFace: FONT,
-    bodyFontFace: FONT,
-    lang: "zh-CN",
-  };
-  pptx.defineSlideMaster({
-    title: "ROADMAP_LIGHT",
-    background: { color: C.paper },
-    objects: [],
-    slideNumber: { x: 12.3, y: 0.26, w: 0.5, h: 0.2, color: C.ink, fontFace: FONT, fontSize: 9, bold: true, align: "right", margin: 0 },
-  });
-  pptx.defineSlideMaster({
-    title: "ROADMAP_WHITE",
-    background: { color: C.white },
-    objects: [],
-    slideNumber: { x: 12.3, y: 0.26, w: 0.5, h: 0.2, color: C.ink, fontFace: FONT, fontSize: 9, bold: true, align: "right", margin: 0 },
-  });
-  pptx.defineSlideMaster({
-    title: "ROADMAP_DARK",
-    background: { color: C.ink },
-    objects: [],
-    slideNumber: { x: 12.3, y: 0.26, w: 0.5, h: 0.2, color: C.white, fontFace: FONT, fontSize: 9, bold: true, align: "right", margin: 0 },
-  });
+  pptx.theme = { headFontFace: FONT, bodyFontFace: FONT, lang: "zh-CN" };
 
   addCoverSlide(pptx, plan);
-  addSummaryOverviewSlide(pptx, plan);
-  addSummaryTrendSlide(pptx, plan);
-  for (const page of plan.roadmapPages) addRoadmapSlide(pptx, plan, page);
-  for (const page of plan.detailPages) addDetailSlide(pptx, page);
+  for (const section of plan.selectedSections) {
+    if (section === "summary") addSummarySlide(pptx, plan);
+    else {
+      const page = plan.roadmapPages.find((item) => item.track === section);
+      if (page) addRoadmapSlide(pptx, page);
+    }
+  }
 
   const output = await pptx.write({ outputType: "nodebuffer", compression: true });
   return Buffer.from(output as Uint8Array);
 }
 
 function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
-  const slide = pptx.addSlide({ masterName: "ROADMAP_DARK" });
-  addTopBar(slide, "需求路标输出", true);
-  addShape(slide, "rect", 0.67, 0.98, 0.94, 0.07, C.mint, C.mint);
-  addText(slide, "运动健康\n需求路标", 0.67, 1.5, 6.8, 1.72, 38, C.white, true);
-  addText(slide, `${formatHalfYear(plan.start)} — ${formatHalfYear(plan.end)}`, 0.69, 3.43, 5.8, 0.38, 17, "B8C6CE", false);
-  addPill(slide, `${plan.requirements.length} 条需求`, 0.7, 4.2, 1.45, C.paleMint, C.mintDeep);
-  addPill(slide, `${formatNumber(totalWorkload(plan.summaries))} 人月`, 2.27, 4.2, 1.52, C.paleBlue, C.blue);
-  addPill(slide, `${plan.groups.length} 张路标卡片`, 3.92, 4.2, 1.85, C.paleOrange, C.orange);
-  addText(slide, `本地离线生成 · ${formatDate(new Date())}`, 0.7, 6.62, 3.4, 0.25, 10, "71828D", false);
+  const slide = pptx.addSlide();
+  slide.background = { color: C.ink };
+  addChrome(slide, 1, "ROADMAP REVIEW", true);
+  rect(slide, 64, 116, 40, 4, C.mint, C.mint, 0, 2);
+  text(slide, "解决方案版本 · 半年度视图", 64, 137, 520, 26, 13, C.mint, true);
+  text(slide, plan.materialName, 64, 178, 620, 140, 48, C.white, true, "left", "mid", { breakLine: true });
+  text(slide, `${formatHalfYear(plan.start)} — ${formatHalfYear(plan.end)}`, 64, 338, 520, 34, 20, "AFC0CB", true);
 
-  addShape(slide, "roundRect", 8.46, 1.36, 3.9, 4.62, C.navy2, "334654", 1);
-  addText(slide, `${plan.halfYears.length} 个半年`, 8.83, 1.77, 1.7, 0.27, 14, C.mint, true);
-  addText(slide, "路标概览", 8.83, 2.14, 2.4, 0.42, 24, C.white, true);
-  ROADMAP_TRACKS.forEach((track, index) => {
-    const scoped = plan.groups.filter((group) => group.track === track);
-    const y = 2.7 + index * 0.43;
-    const color = trackColor(track);
-    addShape(slide, "ellipse", 8.86, y + 0.1, 0.08, 0.08, color, color);
-    addText(slide, `${track}路标`, 9.08, y, 1.25, 0.24, 9, "B6C5CF", true);
-    addShape(slide, "line", 10.33, y + 0.13, 1.42, 0, "40515E", "40515E", 1);
-    addText(slide, `${scoped.length} 张`, 10.48, y, 1.25, 0.24, 9, C.white, true, "right");
-  });
-  addNotes(slide, "封面数据来自本地工作区当前选定时间范围。");
-}
-
-function addSummaryOverviewSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
-  const slide = pptx.addSlide({ masterName: "ROADMAP_LIGHT" });
-  addTopBar(slide, "汇总分析");
-  const totals = summaryTotals(plan.summaries);
-  addTitle(slide, "SUMMARY", "三端投入与业务结构一页看清", `${formatHalfYear(plan.start)} 至 ${formatHalfYear(plan.end)} · ${plan.requirements.length} 条需求`);
-
-  addMetric(slide, 0.67, "总工作量（三端合计）", `${formatNumber(totals.total)} 人月`, C.ink);
-  addMetric(slide, 3.33, "设备侧", `${formatNumber(totals.device)} 人月`, C.cyan);
-  addMetric(slide, 6.0, "App 侧", `${formatNumber(totals.app)} 人月`, C.blue);
-  addMetric(slide, 8.67, "云侧", `${formatNumber(totals.cloud)} 人月`, C.violet);
-
-  addDonut(slide, "三端投入占比", 0.68, 3.7, 3.65, 2.65, [
-    { label: "设备侧", value: totals.device, color: C.cyan },
-    { label: "App 侧", value: totals.app, color: C.blue },
-    { label: "云侧", value: totals.cloud, color: C.violet },
-  ]);
-  addDonut(slide, "各路标来源投入占比", 4.84, 3.7, 3.65, 2.65, ROADMAP_TRACKS.map((track) => ({
-    label: track,
-    value: totals.byTrack[track],
-    color: trackColor(track),
-  })));
-  addDonut(slide, "需求分类投入占比", 9.0, 3.7, 3.65, 2.65, CATEGORIES.map((category) => ({
-    label: category,
-    value: totals.byCategory[category],
-    color: CATEGORY_COLORS[category],
-  })));
-  if (totals.unallocated > 0) addText(slide, `另有 ${formatNumber(totals.unallocated)} 人月历史工作量待拆分，未计入三端。`, 0.72, 6.77, 7.8, 0.25, 10, C.orange, true);
-  addNotes(slide, "指标按设备侧、App 侧、云侧工作量累加；业务与分类占比使用同一工作量口径。");
-}
-
-function addSummaryTrendSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
-  const slide = pptx.addSlide({ masterName: "ROADMAP_LIGHT" });
-  addTopBar(slide, "投入趋势");
-  addTitle(slide, "WORKLOAD TREND", "三端投入节奏与分类占比", "柱状图显示各端工作量；右侧折线显示三类需求工作量占比。");
-  const categories = plan.summaries.map((item) => formatHalfYear(item.halfYear));
-  const safeCategories = categories.length ? categories : ["暂无数据"];
-  const summaries = plan.summaries.length ? plan.summaries : [emptySummary("暂无数据")];
-
-  addText(slide, "三端投入工作量", 0.72, 2.42, 5.0, 0.3, 15, C.ink, true);
-  slide.addChart("bar", (["device", "app", "cloud"] as WorkloadSide[]).map((side) => ({
-    name: SIDE_META[side].label,
-    labels: safeCategories,
-    values: summaries.map((item) => item.bySide[side]),
-  })), {
-    x: 0.7, y: 2.78, w: 6.2, h: 3.55,
-    barDir: "col", grouping: "clustered", gapWidthPct: 55,
-    chartColors: [C.cyan, C.blue, C.violet],
-    showLegend: true, legendPos: "b", legendFontFace: FONT, legendFontSize: 10,
-    catAxisLabelFontFace: FONT, catAxisLabelFontSize: 10,
-    valAxisLabelFontFace: FONT, valAxisLabelFontSize: 9,
-    showValue: false, showTitle: false,
-    showCatName: false,
-    showPercent: false,
-    showLeaderLines: false,
-    showSerName: false,
-    valGridLine: { color: C.faint, width: 1 },
-    showBorder: false,
+  const total = totals(plan.summaries);
+  const stats: Array<[string, string]> = [
+    ["时间范围", `${plan.halfYears.length} 个半年`],
+    ["需求数量", `${plan.requirements.length} 条`],
+    ["总工作量", `${formatNumber(total.total + total.unallocated)} PM`],
+    ["生成日期", formatDate(new Date())],
+  ];
+  stats.forEach(([label, value], index) => {
+    const x = 64 + index * 166;
+    if (index > 0) line(slide, x - 22, 448, 0, 76, C.navy2, 1);
+    text(slide, label, x, 444, 135, 20, 11, "AFC0CB", true);
+    text(slide, value, x, 476, 145, 32, 20, C.white, true);
   });
 
-  addText(slide, "需求分类投入占比（三端合计）", 7.28, 2.42, 4.8, 0.3, 15, C.ink, true);
-  slide.addChart("line", CATEGORIES.map((category) => ({
-    name: category,
-    labels: safeCategories,
-    values: summaries.map((item) => item.totalWorkload ? Math.round((item.byCategory[category] / item.totalWorkload) * 100) : 0),
-  })), {
-    x: 7.25, y: 2.78, w: 5.35, h: 3.55,
-    chartColors: CATEGORIES.map((category) => CATEGORY_COLORS[category]),
-    showLegend: true, legendPos: "b", legendFontFace: FONT, legendFontSize: 10,
-    catAxisLabelFontFace: FONT, catAxisLabelFontSize: 10,
-    valAxisLabelFontFace: FONT, valAxisLabelFontSize: 9,
-    valAxisMinVal: 0, valAxisMaxVal: 100, valAxisMajorUnit: 25,
-    valAxisLabelFormatCode: "0\"%\"", showTitle: false, showValue: false,
-    lineSize: 3, showMarker: true, markerSize: 6,
-    valGridLine: { color: C.faint, width: 1 },
-    showBorder: false,
+  roundRect(slide, 760, 116, 457, 471, C.navy, C.navy2, 1, 18);
+  text(slide, "MATERIAL WINDOW", 796, 149, 220, 20, 10, C.mint, true);
+  text(slide, "统一的半年度路标视图", 796, 177, 340, 36, 24, C.white, true);
+  text(slide, "汇总分析与七类路标采用一致页眉、间距、卡片和标识规则。", 796, 221, 350, 48, 13, "AFC0CB");
+  line(slide, 830, 299, 0, 205, "60717D", 2);
+  plan.halfYears.forEach((halfYear, index) => {
+    const y = 289 + index * 68;
+    ellipse(slide, 820, y, 20, 20, index === 0 ? C.mint : C.navy2, index === 0 ? C.mint : "60717D", 2);
+    text(slide, formatHalfYear(halfYear), 862, y - 2, 150, 24, 15, C.white, true, "left", "mid");
   });
-  addNotes(slide, "分类占比 = 对应分类三端工作量 / 三端总工作量；无投入时按 0% 处理。");
+  text(slide, "解决方案需求路标材料", 64, 645, 400, 22, 11, "AFC0CB");
+  notes(slide, "封面数据来自本地工作区当前导出时间范围。所有元素均为可编辑原生对象。");
 }
 
-function addRoadmapSlide(pptx: PptxPresentation, plan: PptExportPlan, page: PptRoadmapPagePlan): void {
-  const slide = pptx.addSlide({ masterName: "ROADMAP_LIGHT" });
-  addTopBar(slide, `${page.track}路标`);
-  const pageWorkload = page.groups.reduce((sum, group) => sum + group.totalWorkloadPm, 0);
-  const trackEnglish = trackEnglishName(page.track);
-  addTitle(slide, `${trackEnglish} ROADMAP`, `${formatHalfYear(page.halfYear)} ${page.track}需求路标`, `${page.groups.length} 张卡片 · ${formatNumber(pageWorkload)} 人月 · 点击卡片跳转详情`);
-  addRoadmapGrid(slide, page, plan.firstDetailSlideByGroup);
-  addNotes(slide, "同领域、同来源、同上线年月自动合并为一张卡片；产品专属卡片使用深色边框。");
+function addSummarySlide(pptx: PptxPresentation, plan: PptExportPlan): void {
+  const slide = pptx.addSlide();
+  slide.background = { color: C.paper };
+  addSlideHeader(slide, 2, "WORKLOAD SUMMARY", "需求工作量汇总分析", `${formatHalfYear(plan.start)}—${formatHalfYear(plan.end)} · ${plan.requirements.length} 条需求`);
+  const total = totals(plan.summaries);
+  const metrics: Array<[string, number, string]> = [
+    ["总工作量", total.total + total.unallocated, C.ink],
+    ["设备侧", total.device, C.mintDeep],
+    ["App 侧", total.app, C.blue],
+    ["云侧", total.cloud, C.coral],
+  ];
+  metrics.forEach(([label, value, color], index) => metricCard(slide, 64 + index * 288, 194, 266, 101, label, value, color));
+
+  roundRect(slide, 64, 320, 700, 326, C.white, C.faint, 1, 12);
+  text(slide, "三端工作量趋势", 88, 342, 230, 24, 16, C.ink, true);
+  text(slide, "单位：PM", 620, 346, 116, 18, 10, C.muted, false, "right");
+  drawSummaryTrend(slide, plan.summaries);
+
+  roundRect(slide, 784, 320, 434, 326, C.white, C.faint, 1, 12);
+  text(slide, "三端需求结构", 808, 342, 230, 24, 16, C.ink, true);
+  text(slide, "体验优化／平台演进／产品专属", 808, 370, 360, 18, 10, C.muted);
+  drawSideCategoryStructure(slide, plan.summaries);
+  if (total.unallocated > 0) {
+    roundRect(slide, 808, 613, 386, 22, C.coralPale, C.coralPale, 0, 6);
+    text(slide, `提示：另有 ${formatNumber(total.unallocated)} PM 历史工作量未拆分至三端`, 820, 616, 362, 16, 9, C.coral, true);
+  }
+  notes(slide, "三端和分类均按需求实际工作量计算；本页不展示七类路标投入。");
 }
 
-function addDetailSlide(pptx: PptxPresentation, page: PptDetailPagePlan): void {
-  const slide = pptx.addSlide({ masterName: "ROADMAP_WHITE" });
-  addTopBar(slide, "领域详情");
-  const partText = page.partCount > 1 ? ` · ${page.part}/${page.partCount}` : "";
-  addTitle(slide, "DOMAIN DETAIL", `${page.group.cardTitle}：${page.group.requirements.length} 条需求${partText}`, `${page.group.source} · ${formatMonth(page.group.targetMonth)} · ${formatNumber(page.group.totalWorkloadPm)} 人月`);
-  const cards = page.requirements.length ? page.requirements : page.group.requirements.slice(0, 1);
-  cards.forEach((requirement, index) => addRequirementCard(slide, requirement, page.group, index, cards.length));
-  addNotes(slide, page.group.cardSummary || "领域详情由工作台当前数据自动生成。");
+function addRoadmapSlide(pptx: PptxPresentation, page: PptRoadmapPagePlan): void {
+  const slide = pptx.addSlide();
+  slide.background = { color: C.paper };
+  const slideNumber = pptx._slides.length;
+  text(slide, `${page.track}路标`, 50, 20, 500, 38, 24, C.ink, true, "left", "mid");
+  text(slide, String(slideNumber).padStart(2, "0"), 1170, 26, 46, 18, 9, C.ink, true, "right");
+  line(slide, 50, 64, 1170, 0, C.faint, 1);
+  drawRoadmapTable(slide, page);
+  notes(slide, `${page.track}路标按半年展示；每条圆点文本对应一条独立需求记录，不展示产品名称。`);
 }
 
-function addRoadmapGrid(slide: PptxSlide, page: PptRoadmapPagePlan, detailLinks: Record<string, number>): void {
-  const gridX = 1.66;
-  const gridY = 2.67;
-  const gridWidth = 10.04;
-  const rowHeight = 1.03;
-  const monthWidths = dynamicRoadmapMonthWidths(page.months, page.occupiedMonths, gridWidth);
-  const monthX: number[] = [];
-  monthWidths.reduce((x, width) => { monthX.push(x); return x + width; }, gridX);
-  addText(slide, page.halfYear.slice(0, 4), 0.7, 2.33, 0.7, 0.28, 14, C.ink, true);
-  page.months.forEach((month, index) => addText(slide, `${Number(month.slice(5))}月`, monthX[index], 2.33, monthWidths[index], 0.25, 11, C.muted, true, "center"));
+function drawRoadmapTable(slide: PptxSlide, page: PptRoadmapPagePlan): void {
+  const { x, y, w, h, laneW, headerH } = ROADMAP_TABLE;
   const lanes = roadmapLanesForTrack(page.track);
-  lanes.forEach((lane, row) => {
-    const accent = page.track === "运动" || page.track === "健康"
-      ? (row === 0 ? C.orange : row === 1 ? C.blue : C.violet)
-      : page.track === "AI"
-        ? AI_LANE_COLORS[lane as AiRoadmapLane]
-        : page.track === "医疗送检"
-          ? MEDICAL_SUBMISSION_LANE_COLORS[lane as MedicalSubmissionRoadmapLane]
-          : trackColor(page.track);
-    addShape(slide, "ellipse", 0.76, gridY + row * rowHeight + 0.43, 0.1, 0.1, accent, accent);
-    addText(slide, lane, 0.91, gridY + row * rowHeight + 0.32, 0.68, 0.3, page.track === "AI" || page.track === "医疗送检" ? 10 : 12, C.ink, true);
-    page.months.forEach((month, col) => {
-      const x = monthX[col];
-      const w = monthWidths[col];
-      addShape(slide, "roundRect", x, gridY + row * rowHeight, Math.max(0.5, w - 0.06), rowHeight - 0.07, C.white, C.faint, 1);
-      const groups = page.groups.filter((group) => groupMatchesRoadmapLane(group, lane) && group.targetMonth === month);
-      if (groups.length) addRoadmapCellCards(slide, groups, x + 0.06, gridY + row * rowHeight + 0.07, Math.max(0.42, w - 0.18), rowHeight - 0.21, detailLinks);
+  const halfW = (w - laneW) / page.halfYears.length;
+  const bodyH = h - headerH;
+  const laneH = bodyH / lanes.length;
+  const rows = [
+    ["类型", ...page.halfYears.map((halfYear) => `${shortHalf(halfYear)}\n（产品标识）`)],
+    ...lanes.map((lane) => [lane, ...page.halfYears.map(() => "")]),
+  ];
+  const colW = [laneW * PX, ...page.halfYears.map(() => halfW * PX)];
+  const rowH = [headerH * PX, ...lanes.map(() => laneH * PX)];
+  slide.addTable(rows, {
+    x: x * PX,
+    y: y * PX,
+    w: w * PX,
+    h: h * PX,
+    colW,
+    rowH,
+    border: { type: "solid", color: "D2D2D2", pt: 1 },
+    fill: C.white,
+    color: C.ink,
+    fontFace: FONT,
+    fontSize: 12,
+    margin: 0,
+    autoFit: false,
+    valign: "middle",
+    align: "center",
+  });
+  rect(slide, x, y, w, headerH, C.red, C.red, 0);
+  text(slide, "类型", x, y, laneW, headerH, 16, C.white, true, "center", "mid");
+  page.halfYears.forEach((halfYear, index) => {
+    text(slide, `${shortHalf(halfYear)}\n（产品标识）`, x + laneW + index * halfW, y + 6, halfW, headerH - 12, 12, C.white, true, "center", "mid");
+  });
+  lanes.forEach((lane, laneIndex) => {
+    const rowY = y + headerH + laneIndex * laneH;
+    text(slide, lane, x + 4, rowY, laneW - 8, laneH, lane.length > 4 ? 12 : 16, C.ink, true, "center", "mid");
+    page.halfYears.forEach((halfYear, halfIndex) => {
+      const cellX = x + laneW + halfIndex * halfW;
+      const groups = groupsForHalfYear(page.groups, halfYear).filter((group) => groupMatchesRoadmapLane(group, lane));
+      if (groups.length) drawRoadmapCell(slide, groups, cellX, rowY, halfW, laneH, page.track, lane, halfYear);
+      else if (page.groups.length === 0) text(slide, "当前区间暂无需求", cellX + 8, rowY + 8, halfW - 16, laneH - 16, 10.5, C.muted2, true, "center", "mid");
     });
   });
-  if (!page.groups.length) {
-    addText(slide, `当前半年暂无${page.track}需求`, 4.35, 4.02, 4.65, 0.46, 19, C.muted, true, "center");
-    addText(slide, "空状态保留月份与对应泳道，避免误解为漏数。", 4.15, 4.48, 5.05, 0.35, 12, C.muted, false, "center");
-  }
 }
 
-function addRoadmapCellCards(
+function drawRoadmapCell(
   slide: PptxSlide,
   groups: RoadmapGroup[],
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  detailLinks: Record<string, number>,
+  cellX: number,
+  cellY: number,
+  cellW: number,
+  cellH: number,
+  track: Track,
+  lane: string,
+  halfYear: string,
 ): void {
-  const shown = groups.slice(0, 3);
-  const gap = 0.05;
-  const cardHeight = Math.max(0.22, (h - gap * (shown.length - 1)) / shown.length);
-  shown.forEach((group, index) => {
-    const hasExclusive = group.categories.includes("产品专属");
-    const cardY = y + index * (cardHeight + gap);
-    addShape(slide, "roundRect", x, cardY, w, cardHeight, hasExclusive ? C.navy : C.paper, hasExclusive ? C.navy : C.faint, 1);
-    addText(slide, roadmapCardLabel(group), x + 0.07, cardY + 0.03, Math.max(0.1, w - 0.14), Math.max(0.12, cardHeight - 0.06), w < 1.1 ? 8 : 10, hasExclusive ? C.white : C.ink, true, "left", {
-      slide: detailLinks[group.key],
-      tooltip: "查看领域详情",
-    });
-  });
-  if (groups.length > shown.length) addText(slide, `+${groups.length - shown.length}`, x + w - 0.3, y + h - 0.2, 0.25, 0.16, 8, C.muted, true, "right");
-}
-
-function addRequirementCard(slide: PptxSlide, requirement: Requirement, group: RoadmapGroup, index: number, count: number): void {
-  const cardY = count === 1 ? 2.48 : 2.4 + index * 2.12;
-  const cardH = count === 1 ? 3.85 : 1.92;
-  const image = requirement.images[0];
-  const cardW = image ? 8.1 : 11.95;
-  addShape(slide, "roundRect", 0.66, cardY, cardW, cardH, C.paper, C.paper, 1);
-  const accent = group.level === "基础" ? C.orange : group.level === "进阶" ? C.blue : group.level === "高阶" ? C.violet : trackColor(group.track);
-  addShape(slide, "ellipse", 0.92, cardY + 0.26, 0.13, 0.13, accent, accent);
-  addText(slide, String(index + 1).padStart(2, "0"), 1.18, cardY + 0.17, 0.42, 0.24, 10, C.muted, true);
-  addText(slide, requirement.title, 1.68, cardY + 0.12, image ? 4.25 : 6.6, 0.38, count === 1 ? 23 : 18, C.ink, true);
-  addScopePill(slide, requirement.scope, image ? 5.12 : 9.22, cardY + 0.16);
-  addCategoryPill(slide, requirement.category, image ? 6.25 : 10.36, cardY + 0.16);
-  const products = group.requirementProductNames[requirement.id] ?? [];
-  if (products.length) addText(slide, products.join("、"), image ? 6.0 : 9.1, cardY + 0.62, image ? 1.65 : 2.7, 0.22, 9, C.muted, false, "right");
-  addText(slide, "需求描述", 0.95, cardY + 0.72, 1.1, 0.24, 10, C.muted, true);
-  const description = requirement.description.trim() || "描述待补充";
-  addText(slide, truncate(description, count === 1 ? 290 : 135), 0.95, cardY + 1.03, cardW - 0.7, count === 1 ? 1.25 : 0.46, count === 1 ? 15 : 12, requirement.description.trim() ? C.ink : C.muted, false);
-  const workload = sumWorkloadBreakdown([requirement]);
-  const workloadLabel = `设备 ${formatNumber(workload.device)}  ·  App ${formatNumber(workload.app)}  ·  云 ${formatNumber(workload.cloud)}  ·  合计 ${formatNumber(workload.total)} 人月`;
-  addText(slide, workloadLabel, 0.95, cardY + cardH - 0.52, cardW - 2.65, 0.25, 10, C.muted, true);
-  addText(slide, formatMonth(requirement.targetMonth), cardW - 0.95, cardY + cardH - 0.52, 1.35, 0.25, 10, C.ink, true, "right");
-  if (image) addRequirementImage(slide, image, 9.04, cardY, 3.62, cardH, requirement.images.length);
-}
-
-function addRequirementImage(slide: PptxSlide, image: RequirementImage, x: number, y: number, w: number, h: number, imageCount: number): void {
-  addShape(slide, "roundRect", x, y, w, h, C.navy, C.navy, 1);
-  const frame = containImage(image.dataUrl, x + 0.08, y + 0.08, w - 0.16, h - 0.42);
-  slide.addImage({ data: image.dataUrl, ...frame });
-  addText(slide, imageCount > 1 ? `首图 · 共 ${imageCount} 张` : image.name, x + 0.16, y + h - 0.3, w - 0.32, 0.18, 8, "B7C4CD", false, "center");
-}
-
-function addDonut(
-  slide: PptxSlide,
-  title: string,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  items: Array<{ label: string; value: number; color: string }>,
-): void {
-  addText(slide, title, x, y - 0.12, w, 0.28, 13, C.ink, true);
-  const total = items.reduce((sum, item) => sum + item.value, 0);
-  if (!total) {
-    slide.addChart("doughnut", [{ name: title, labels: ["暂无数据"], values: [1] }], {
-      x, y: y + 0.24, w, h: h - 0.24,
-      chartColors: ["E3E9EC"], holeSize: 64,
-      showLegend: false, showTitle: false, showValue: false, showPercent: false, showCatName: false,
-      showBorder: false,
-    });
-    addText(slide, "暂无可计算数据", x + 0.78, y + 1.28, w - 1.56, 0.3, 11, C.muted, true, "center");
-    addText(slide, items.map((item) => item.label).join(" / "), x + 0.3, y + h - 0.23, w - 0.6, 0.18, 8, C.muted, false, "center");
-    return;
+  const layout = layoutRoadmapCell(groups, cellW, cellH);
+  for (const [index, card] of layout.cards.entries()) {
+    const left = cellX + card.margin;
+    const top = cellY + card.top;
+    const width = cellW - card.margin * 2;
+    const titleHeight = card.titleLines.length * card.titleLineHeight;
+    text(slide, card.titleLines.join("\n"), left, top, width, titleHeight, card.fontSize, C.ink, true, "left", "top", { margin: 0, breakLine: true, name: `roadmap-title-${track}-${lane}-${halfYear}-${index}` });
+    const bodyTop = top + titleHeight + 2;
+    const bodyLines = card.visibleRequirements.flatMap((item) => wrapText(`· ${item}`, width, card.fontSize, false).map((part, partIndex) => partIndex ? `  ${part}` : part));
+    text(slide, bodyLines.join("\n"), left, bodyTop, width, Math.max(card.bodyLineHeight, card.height - titleHeight - 2), card.fontSize, C.ink, false, "left", "top", { margin: 0, breakLine: true, name: `roadmap-body-${track}-${lane}-${halfYear}-${index}` });
+    if (card.badge === "product") {
+      roundRect(slide, cellX + card.badgeLeft, cellY + card.badgeTop, 58, 17, C.navy, C.navy, 0, 4);
+      text(slide, "产品专属", cellX + card.badgeLeft, cellY + card.badgeTop, 58, 17, 8.5, C.white, true, "center", "mid", { margin: 0, name: `roadmap-product-${track}-${lane}-${halfYear}-${index}` });
+    } else if (card.badge === "experience") {
+      ellipse(slide, cellX + card.badgeLeft, cellY + card.badgeTop, 17, 17, C.navy, C.navy, 0);
+      text(slide, "↑", cellX + card.badgeLeft, cellY + card.badgeTop - 1, 17, 18, 11, C.white, true, "center", "mid", { margin: 0, name: `roadmap-experience-${track}-${lane}-${halfYear}-${index}` });
+    }
   }
-  const normalized = items;
-  slide.addChart("doughnut", [{ name: title, labels: normalized.map((item) => item.label), values: normalized.map((item) => item.value) }], {
-    x, y: y + 0.24, w, h: h - 0.24,
-    chartColors: normalized.map((item) => item.color), holeSize: 64,
-    showLegend: true, legendPos: "b", legendFontFace: FONT, legendFontSize: 9,
-    showTitle: false, showValue: false, showPercent: true, showCatName: false,
-    dataLabelColor: C.ink, dataLabelFormatCode: "0%",
-    showBorder: false,
+}
+
+export function layoutRoadmapCell(groups: RoadmapGroup[], width: number, height: number): RoadmapCellLayout {
+  const attempts: Array<{ fontSize: number; margin: number; gap: number; visibleLimit: number }> = [
+    ...[10, 9.5, 9, 8.5, 8].map((fontSize) => ({ fontSize, margin: 8, gap: 7, visibleLimit: 3 })),
+    { fontSize: 8, margin: 4, gap: 4, visibleLimit: 3 },
+    { fontSize: 8, margin: 4, gap: 4, visibleLimit: 2 },
+    { fontSize: 8, margin: 4, gap: 4, visibleLimit: 1 },
+  ];
+  for (const attempt of attempts) {
+    const cards = calculateCardLayouts(groups, width, attempt.fontSize, attempt.margin, attempt.gap, attempt.visibleLimit);
+    const used = cards.reduce((sum, card) => sum + card.height, 0) + Math.max(0, cards.length - 1) * attempt.gap + attempt.margin * 2;
+    if (used <= height + 0.01) {
+      let top = attempt.margin;
+      return {
+        fontSize: attempt.fontSize,
+        margin: attempt.margin,
+        cardGap: attempt.gap,
+        visibleLimit: attempt.visibleLimit,
+        cards: cards.map((card) => {
+          const placed = { ...card, top, badgeTop: top + card.badgeTop };
+          top += card.height + attempt.gap;
+          return placed;
+        }),
+      };
+    }
+  }
+  throw new Error("PPT 路标单元格内容超过可排版容量：即使使用 8pt、4px 边距并仅保留每卡 1 条需求仍无法容纳，请缩短标题或拆分时间范围");
+}
+
+function calculateCardLayouts(groups: RoadmapGroup[], width: number, fontSize: number, margin: number, gap: number, visibleLimit: number): RoadmapCardLayout[] {
+  const textWidth = width - margin * 2;
+  const titleLineHeight = pointsToPixels(fontSize) * 1.18;
+  const bodyLineHeight = pointsToPixels(fontSize) * 1.25;
+  return groups.map((group, index) => {
+    const badge = roadmapBadgeKind(group);
+    const badgeWidth = badge === "product" ? 58 : badge === "experience" ? 17 : 0;
+    const badgeGap = badge ? 7 : 0;
+    let titleLines = wrapText(group.cardTitle, textWidth, fontSize, true);
+    const lastLineWidth = measureTextWidth(titleLines.at(-1) ?? "", fontSize, true);
+    if (badge && lastLineWidth + badgeGap + badgeWidth > textWidth) {
+      titleLines = wrapText(group.cardTitle, Math.max(20, textWidth - badgeWidth - badgeGap), fontSize, true);
+    }
+    const visibleRequirements = visibleRequirementTitlesForLayout(group, visibleLimit);
+    const bodyLines = visibleRequirements.reduce((sum, item) => sum + Math.max(1, wrapText(`· ${item}`, textWidth, fontSize, false).length), 0);
+    const titleHeight = titleLines.length * titleLineHeight;
+    const height = titleHeight + 2 + Math.max(1, bodyLines) * bodyLineHeight;
+    const dynamicLastWidth = measureTextWidth(titleLines.at(-1) ?? "", fontSize, true);
+    const badgeTop = (titleLines.length - 1) * titleLineHeight + Math.max(0, (titleLineHeight - 17) / 2);
+    return {
+      group,
+      badge,
+      fontSize,
+      margin,
+      gapAfter: index === groups.length - 1 ? 0 : gap,
+      visibleRequirements,
+      titleLines,
+      titleLineHeight,
+      bodyLineHeight,
+      height,
+      top: 0,
+      badgeLeft: Math.min(width - margin - badgeWidth, margin + dynamicLastWidth + badgeGap),
+      badgeTop,
+    };
   });
 }
 
-function addTopBar(slide: PptxSlide, section: string, dark = false): void {
-  const muted = dark ? "AFC0CB" : C.muted;
-  addText(slide, "解决方案需求管理", 0.67, 0.27, 2.5, 0.22, 9, muted, true);
-  addText(slide, section, 10.25, 0.27, 1.65, 0.22, 9, muted, true, "right");
+function visibleRequirementTitlesForLayout(group: RoadmapGroup, limit: number): string[] {
+  const visible = visibleRequirementTitles(group.requirements, Math.min(3, limit));
+  if (group.requirements.length > limit && visible.length && !visible.at(-1)?.endsWith("…")) {
+    visible[visible.length - 1] = `${visible[visible.length - 1]}…`;
+  }
+  return visible;
 }
 
-function addTitle(slide: PptxSlide, eyebrow: string, title: string, subtitle: string): void {
-  addText(slide, eyebrow.toUpperCase(), 0.68, 0.86, 4.3, 0.24, 10, C.mintDeep, true);
-  addText(slide, title, 0.68, 1.16, 11.8, 0.55, 26, C.ink, true);
-  addText(slide, subtitle, 0.68, 1.87, 11.1, 0.3, 12, C.muted, false);
+function wrapText(value: string, maxWidth: number, fontSize: number, bold: boolean): string[] {
+  const chars = Array.from(value || " ");
+  const lines: string[] = [];
+  let lineValue = "";
+  let lineWidth = 0;
+  for (const char of chars) {
+    const charWidth = measureTextWidth(char, fontSize, bold);
+    if (lineValue && lineWidth + charWidth > maxWidth) {
+      lines.push(lineValue);
+      lineValue = char;
+      lineWidth = charWidth;
+    } else {
+      lineValue += char;
+      lineWidth += charWidth;
+    }
+  }
+  if (lineValue || !lines.length) lines.push(lineValue);
+  return lines;
 }
 
-function addMetric(slide: PptxSlide, x: number, label: string, value: string, accent: string): void {
-  addText(slide, label, x, 2.45, 2.25, 0.25, 10, C.muted, true);
-  addText(slide, value, x, 2.77, 2.35, 0.5, 25, C.ink, true);
-  addShape(slide, "rect", x, 3.34, 2.22, 0.06, accent, accent);
+export function measureTextWidth(value: string, fontSize: number, bold = false): number {
+  const pixelSize = pointsToPixels(fontSize);
+  const factor = bold ? 1.04 : 1;
+  return Array.from(value).reduce((sum, char) => {
+    if (/\s/u.test(char)) return sum + pixelSize * 0.3;
+    if (/[\u3400-\u9fff\uf900-\ufaff]/u.test(char)) return sum + pixelSize * factor;
+    if (/[A-Z0-9]/u.test(char)) return sum + pixelSize * 0.62 * factor;
+    return sum + pixelSize * 0.54 * factor;
+  }, 0);
 }
 
-function addPill(slide: PptxSlide, text: string, x: number, y: number, w: number, fill: string, color: string): void {
-  addText(slide, text, x, y, w, 0.33, 10, color, true, "center", undefined, fill, "roundRect");
+function drawSummaryTrend(slide: PptxSlide, summaries: HalfYearSummary[]): void {
+  const plot = { x: 112, y: 389, w: 610, h: 172 };
+  const maximum = Math.max(1, ...summaries.flatMap((item) => [item.bySide.device, item.bySide.app, item.bySide.cloud]));
+  [0, 0.33, 0.66, 1].forEach((ratio, index) => {
+    const y = plot.y + plot.h - ratio * plot.h;
+    line(slide, plot.x, y, plot.w, 0, C.faint2, 1);
+    text(slide, formatNumber((maximum * ratio)), 74, y - 8, 30, 16, 9, C.muted, false, "right");
+  });
+  const groupWidth = plot.w / Math.max(1, summaries.length);
+  const barWidth = Math.min(18, groupWidth / 5);
+  summaries.forEach((summary, halfIndex) => {
+    const center = plot.x + groupWidth * (halfIndex + 0.5);
+    (["device", "app", "cloud"] as WorkloadSide[]).forEach((side, sideIndex) => {
+      const value = summary.bySide[side];
+      const height = value / maximum * plot.h;
+      const x = center - barWidth * 1.7 + sideIndex * barWidth * 1.2;
+      rect(slide, x, plot.y + plot.h - height, barWidth, height, SIDE_META[side].color, SIDE_META[side].color, 0, 3);
+    });
+    text(slide, shortHalf(summary.halfYear), center - groupWidth / 2, 570, groupWidth, 20, 10, C.muted, true, "center");
+  });
+  (["device", "app", "cloud"] as WorkloadSide[]).forEach((side, index) => {
+    const x = 240 + index * 125;
+    ellipse(slide, x, 611, 8, 8, SIDE_META[side].color, SIDE_META[side].color, 0);
+    text(slide, SIDE_META[side].label, x + 14, 605, 90, 18, 10, C.muted);
+  });
 }
 
-function addCategoryPill(slide: PptxSlide, category: RequirementCategory, x: number, y: number): void {
-  const style = category === "产品专属"
-    ? { fill: C.navy, color: C.white }
-    : category === "平台演进"
-      ? { fill: C.paleAmber, color: C.amber }
-      : { fill: C.lilac, color: C.violet };
-  addPill(slide, category, x, y, 1.18, style.fill, style.color);
+function drawSideCategoryStructure(slide: PptxSlide, summaries: HalfYearSummary[]): void {
+  (["device", "app", "cloud"] as WorkloadSide[]).forEach((side, row) => {
+    const y = 410 + row * 60;
+    const values = CATEGORIES.map((category) => summaries.reduce((sum, item) => sum + item.categoryBySide[category][side], 0));
+    const total = values.reduce((sum, value) => sum + value, 0);
+    text(slide, SIDE_META[side].label, 808, y + 8, 58, 18, 11, C.ink, true);
+    let cursor = 870;
+    values.forEach((value, index) => {
+      const width = total ? value / total * 280 : index === 0 ? 280 : 0;
+      if (width > 0) rect(slide, cursor, y, width, 34, total ? CATEGORY_COLORS[CATEGORIES[index]] : C.faint2, total ? CATEGORY_COLORS[CATEGORIES[index]] : C.faint2, 0, 4);
+      if (total && width >= 48) text(slide, formatNumber(value), cursor, y + 8, width, 18, 9, C.white, true, "center");
+      cursor += width;
+    });
+    text(slide, formatNumber(total), 1160, y + 8, 42, 18, 10, C.ink, true, "right");
+  });
+  CATEGORIES.forEach((category, index) => {
+    const x = 812 + index * 126;
+    ellipse(slide, x, 588, 8, 8, CATEGORY_COLORS[category], CATEGORY_COLORS[category], 0);
+    text(slide, category, x + 14, 582, 102, 18, 10, C.muted);
+  });
 }
 
-function addScopePill(slide: PptxSlide, scope: RequirementScope, x: number, y: number): void {
-  const fill = scope === "全球" ? "E5ECF2" : scope === "仅国内" ? "DFF5EA" : "ECE8FF";
-  const color = scope === "全球" ? "42556A" : scope === "仅国内" ? "17684F" : "5B43AD";
-  addPill(slide, scope, x, y, 1.0, fill, color);
+function metricCard(slide: PptxSlide, x: number, y: number, w: number, h: number, label: string, value: number, color: string): void {
+  roundRect(slide, x, y, w, h, C.white, C.faint, 1, 12);
+  text(slide, label, x + 20, y + 17, w - 40, 20, 11, C.muted, true);
+  text(slide, formatNumber(value), x + 20, y + 43, w - 78, 38, 25, color, true);
+  text(slide, "PM", x + w - 58, y + 55, 34, 20, 10, C.muted, true, "right");
 }
 
-function addText(
+function totals(summaries: HalfYearSummary[]) {
+  return summaries.reduce((result, item) => ({
+    total: result.total + item.totalWorkload,
+    device: result.device + item.bySide.device,
+    app: result.app + item.bySide.app,
+    cloud: result.cloud + item.bySide.cloud,
+    unallocated: result.unallocated + item.unallocatedWorkload,
+  }), { total: 0, device: 0, app: 0, cloud: 0, unallocated: 0 });
+}
+
+function addSlideHeader(slide: PptxSlide, page: number, eyebrow: string, titleValue: string, subtitle: string): void {
+  addChrome(slide, page, eyebrow, false);
+  text(slide, titleValue, 64, 105, 760, 42, 27, C.ink, true);
+  text(slide, subtitle, 64, 153, 850, 24, 12, C.muted);
+}
+
+function addChrome(slide: PptxSlide, page: number, section: string, dark: boolean): void {
+  text(slide, section, 64, 26, 360, 18, 9, dark ? "AFC0CB" : C.muted, true);
+  text(slide, String(page).padStart(2, "0"), 1170, 26, 46, 18, 9, dark ? C.white : C.ink, true, "right");
+  line(slide, 64, 58, 1152, 0, dark ? C.navy2 : C.faint, 1);
+}
+
+function rect(slide: PptxSlide, x: number, y: number, w: number, h: number, fill: string, border: string, borderWidth = 1, radius = 0): void {
+  slide.addShape(radius ? "roundRect" : "rect", { x: x * PX, y: y * PX, w: w * PX, h: h * PX, rectRadius: radius * PX, fill: { color: fill }, line: { color: border, width: borderWidth } });
+}
+
+function roundRect(slide: PptxSlide, x: number, y: number, w: number, h: number, fill: string, border: string, borderWidth = 1, radius = 8): void {
+  rect(slide, x, y, w, h, fill, border, borderWidth, radius);
+}
+
+function ellipse(slide: PptxSlide, x: number, y: number, w: number, h: number, fill: string, border: string, borderWidth = 1): void {
+  slide.addShape("ellipse", { x: x * PX, y: y * PX, w: w * PX, h: h * PX, fill: { color: fill }, line: { color: border, width: borderWidth } });
+}
+
+function line(slide: PptxSlide, x: number, y: number, w: number, h: number, color: string, width = 1): void {
+  slide.addShape("line", { x: x * PX, y: y * PX, w: w * PX, h: h * PX, line: { color, width } });
+}
+
+function text(
   slide: PptxSlide,
-  text: string,
+  value: string,
   x: number,
   y: number,
   w: number,
@@ -425,108 +471,47 @@ function addText(
   color: string,
   bold = false,
   align: "left" | "center" | "right" = "left",
-  hyperlink?: { slide?: number; url?: string; tooltip?: string },
-  fill?: string,
-  shape: "rect" | "roundRect" = "rect",
+  valign: "top" | "mid" | "bottom" = "top",
+  extra: { margin?: number; breakLine?: boolean; name?: string } = {},
 ): void {
-  slide.addText(text, {
-    x, y, w, h, fontFace: FONT, fontSize, color, bold, align, valign: "mid",
-    margin: 0, breakLine: false, fit: "shrink", hyperlink,
-    ...(fill ? { shape, fill: { color: fill }, line: { color: fill, transparency: 100 }, radius: 0.1 } : {}),
+  slide.addText(value, {
+    x: x * PX,
+    y: y * PX,
+    w: w * PX,
+    h: h * PX,
+    fontFace: FONT,
+    fontSize,
+    color,
+    bold,
+    margin: extra.margin ?? 0,
+    breakLine: extra.breakLine,
+    fit: "shrink",
+    valign,
+    align,
+    name: extra.name,
   });
 }
 
-function addShape(
-  slide: PptxSlide,
-  shape: "rect" | "roundRect" | "ellipse" | "line",
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  fill: string,
-  line: string,
-  lineWidth = 0,
-): void {
-  slide.addShape(shape, {
-    x, y, w, h,
-    fill: { color: fill },
-    line: { color: line, width: lineWidth, transparency: lineWidth ? 0 : 100 },
-    radius: shape === "roundRect" ? 0.1 : undefined,
-  });
+function notes(slide: PptxSlide, value: string): void {
+  slide.addNotes(`[Sources]\n- Data: local offline workspace\n- Purpose: ${value}`);
 }
 
-function addNotes(slide: PptxSlide, note: string): void {
-  slide.addNotes(`[Sources]\n- 本地解决方案需求管理数据快照（离线生成）\n\n${note}`);
+function pointsToPixels(points: number): number {
+  return points * 96 / 72;
 }
 
-function summaryTotals(summaries: HalfYearSummary[]) {
-  const device = summaries.reduce((sum, item) => sum + item.deviceWorkload, 0);
-  const app = summaries.reduce((sum, item) => sum + item.appWorkload, 0);
-  const cloud = summaries.reduce((sum, item) => sum + item.cloudWorkload, 0);
-  return {
-    device,
-    app,
-    cloud,
-    total: device + app + cloud,
-    byTrack: Object.fromEntries(ROADMAP_TRACKS.map((track) => [track, summaries.reduce((sum, item) => sum + item.byTrack[track], 0)])) as Record<Track, number>,
-    byCategory: Object.fromEntries(CATEGORIES.map((category) => [
-      category,
-      summaries.reduce((sum, item) => sum + item.byCategory[category], 0),
-    ])) as Record<RequirementCategory, number>,
-    unallocated: summaries.reduce((sum, item) => sum + item.unallocatedWorkload, 0),
-  };
-}
-
-function totalWorkload(summaries: HalfYearSummary[]): number {
-  return summaries.reduce((sum, item) => sum + item.totalWorkload, 0);
-}
-
-function emptySummary(halfYear: string): HalfYearSummary {
-  return {
-    halfYear,
-    bySource: Object.fromEntries(SOURCES.map((source) => [source, 0])) as HalfYearSummary["bySource"],
-    byTrack: Object.fromEntries(ROADMAP_TRACKS.map((track) => [track, 0])) as HalfYearSummary["byTrack"],
-    sportsWorkload: 0, healthWorkload: 0,
-    byCategory: Object.fromEntries(CATEGORIES.map((category) => [category, 0])) as HalfYearSummary["byCategory"],
-    totalWorkload: 0, deviceWorkload: 0, appWorkload: 0, cloudWorkload: 0, unallocatedWorkload: 0,
-    bySide: { device: 0, app: 0, cloud: 0 },
-    categoryBySide: Object.fromEntries(CATEGORIES.map((category) => [category, { device: 0, app: 0, cloud: 0 }])) as HalfYearSummary["categoryBySide"],
-    requirementCount: 0,
-  };
+function shortHalf(value: string): string {
+  return value.replace(/^(\d{2})(\d{2})/, "$2");
 }
 
 function formatHalfYear(value: string): string {
-  const match = /^(\d{4})H([12])$/.exec(value);
-  return match ? `${match[1]} H${match[2]}` : value;
-}
-
-function formatMonth(value: string): string {
-  const [year, month] = value.split("-");
-  return `${year}年${Number(month)}月`;
-}
-
-function formatNumber(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+  return value.replace("H", " H");
 }
 
 function formatDate(date: Date): string {
   return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
 }
 
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
-}
-
-function containImage(dataUrl: string, x: number, y: number, w: number, h: number): { x: number; y: number; w: number; h: number } {
-  try {
-    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-    const dimensions = imageSize(Buffer.from(base64, "base64"));
-    if (!dimensions.width || !dimensions.height) return { x, y, w, h };
-    const scale = Math.min(w / dimensions.width, h / dimensions.height);
-    const fittedW = dimensions.width * scale;
-    const fittedH = dimensions.height * scale;
-    return { x: x + (w - fittedW) / 2, y: y + (h - fittedH) / 2, w: fittedW, h: fittedH };
-  } catch {
-    return { x, y, w, h };
-  }
+function formatNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }

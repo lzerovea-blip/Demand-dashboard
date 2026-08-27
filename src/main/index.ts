@@ -9,6 +9,7 @@ import type {
   SaveGroupOverrideInput,
   SaveRequirementInput,
   HalfYearRange,
+  PptExportRequest,
   WorkspaceImportMode,
 } from "../shared/types.js";
 import { buildPptExportPlan } from "../shared/pptExport.js";
@@ -22,7 +23,7 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-08-25";
+const APP_RELEASED_AT = "2026-08-27";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
@@ -179,17 +180,17 @@ function registerIpc(): void {
     return { canceled: false, path: result.filePath };
   });
 
-  ipcMain.handle("presentation:export", async (_event, input: HalfYearRange) => {
+  ipcMain.handle("presentation:export", async (_event, input: PptExportRequest) => {
     const snapshot = database.getSnapshot();
-    const plan = buildPptExportPlan(snapshot, input.start, input.end);
+    const plan = buildPptExportPlan(snapshot, input);
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: "导出需求路标PPT",
-      defaultPath: `需求路标-${input.start}-${input.end}-${new Date().toISOString().slice(0, 10)}.pptx`,
+      defaultPath: `${plan.materialName.replace(/[\\/:*?\"<>|]/g, "-")}-${input.start}-${input.end}-${new Date().toISOString().slice(0, 10)}.pptx`,
       filters: [{ name: "PowerPoint演示文稿", extensions: ["pptx"] }],
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     const outputPath = result.filePath.toLowerCase().endsWith(".pptx") ? result.filePath : `${result.filePath}.pptx`;
-    await writeFile(outputPath, await createRoadmapPresentation(snapshot, input.start, input.end));
+    await writeFile(outputPath, await createRoadmapPresentation(snapshot, input));
     return { canceled: false, path: outputPath, slideCount: plan.slideCount };
   });
 }

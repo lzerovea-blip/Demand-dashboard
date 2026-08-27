@@ -36,6 +36,11 @@ export const CATEGORY_META: Record<RequirementCategory, {
 export type RequirementScope = (typeof REQUIREMENT_SCOPES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
 export type Track = (typeof ROADMAP_TRACKS)[number];
+export type PptExportSectionId = "summary" | Track;
+export interface PptExportRequest extends HalfYearRange {
+  materialName: string;
+  sections: PptExportSectionId[];
+}
 export type Level = "基础" | "进阶" | "高阶";
 export type DomainLevel = "L0" | "L1";
 
@@ -267,7 +272,7 @@ export interface ElectronApi {
   inspectWorkspaceWorkbook(): Promise<{ canceled: boolean; preview?: WorkspaceWorkbookImportPreview }>;
   applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
-  exportRoadmapPresentation(input: HalfYearRange): Promise<{ canceled: boolean; path?: string; slideCount?: number }>;
+  exportRoadmapPresentation(input: PptExportRequest): Promise<{ canceled: boolean; path?: string; slideCount?: number }>;
 }
 
 declare global {
