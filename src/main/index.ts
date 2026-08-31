@@ -16,7 +16,7 @@ import type {
 } from "../shared/types.js";
 import { buildPptExportPlan } from "../shared/pptExport.js";
 import { halfYearSequence } from "../shared/roadmap.js";
-import { createRoadmapPresentation } from "./pptxExport.js";
+import { createRoadmapPresentation, presentationSlideCount } from "./pptxExport.js";
 import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm } from "./pptIrm.js";
 import { pptPermissionExpiration } from "../shared/pptAccess.js";
 import {
@@ -197,6 +197,7 @@ function registerIpc(): void {
     const environment = await checkPowerPointIrmEnvironment();
     if (!environment.supported || !environment.powerPointInstalled || !environment.irmReady) throw new Error(environment.message);
     const plan = buildPptExportPlan(snapshot, input);
+    const slideCount = presentationSlideCount(plan);
     const exportedAt = new Date();
     const expiration = pptPermissionExpiration(exportedAt);
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -222,7 +223,7 @@ function registerIpc(): void {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-    return { canceled: false, path: outputPath, slideCount: plan.slideCount };
+    return { canceled: false, path: outputPath, slideCount };
   });
 }
 

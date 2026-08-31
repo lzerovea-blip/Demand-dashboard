@@ -90,7 +90,7 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.34",
+  version: "0.7.35",
   releasedAt: "2026-08-31",
   author: "林忠维",
 };
@@ -2008,10 +2008,10 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           <section className="panel export-type-card roadmap-export-card">
             <div className="export-type-head"><span className="export-type-icon">P</span><span className="eyebrow">POWERPOINT</span></div>
             <h3>需求路标</h3>
-            <p>按当前半年区间生成原生可编辑 PowerPoint。封面固定保留，其余内容一项对应一页。</p>
+            <p>按当前半年区间生成原生可编辑 PowerPoint。封面固定保留；路标内容超出单页容量时会自动生成续页，确保卡片完整保留。</p>
             <dl className="export-type-meta">
               <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
-              <div><dt>预计页数</dt><dd>{1 + pptSections.length} 页</dd></div>
+              <div><dt>基础页数</dt><dd>{1 + pptSections.length} 页（超载自动续页）</dd></div>
               <div><dt>处理方式</dt><dd>全程本地</dd></div>
             </dl>
             <div className="ppt-export-config">
@@ -2023,7 +2023,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
               {halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS && <p className="ppt-range-warning">PPT 一次最多支持 {MAX_PPT_HALF_YEARS} 个连续半年，请缩短导出区间。</p>}
             </div>
             <div className="export-card-actions">
-              <button className="button primary" onClick={exportPpt} disabled={exporting || !whitelistEntries.length || !pptMaterialName.trim() || halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS}>{exporting ? (checkingIrm ? "正在检测 IRM…" : "正在生成并保护…") : `生成 ${1 + pptSections.length} 页受保护 PPT`}</button>
+              <button className="button primary" onClick={exportPpt} disabled={exporting || !whitelistEntries.length || !pptMaterialName.trim() || halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS}>{exporting ? (checkingIrm ? "正在检测 IRM…" : "正在生成并保护…") : `生成至少 ${1 + pptSections.length} 页受保护 PPT`}</button>
             </div>
           </section>
 

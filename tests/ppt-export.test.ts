@@ -1,6 +1,12 @@
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
-import { createRoadmapPresentation, layoutRoadmapCell, measureTextWidth } from "../src/main/pptxExport";
+import {
+  createRoadmapPresentation,
+  layoutRoadmapCell,
+  measureTextWidth,
+  paginateRoadmapPage,
+  presentationSlideCount,
+} from "../src/main/pptxExport";
 import {
   DEFAULT_PPT_EXPORT_SECTIONS,
   MAX_PPT_HALF_YEARS,
@@ -127,6 +133,37 @@ describe("路标卡片内容和标识", () => {
     expect(layout.cards.every((card) => card.top + card.height <= 170.95)).toBe(true);
     expect(measureTextWidth("连续英文ABC123", 10, true)).toBeGreaterThan(0);
   });
+
+  it("单元格超载时自动拆分续页并保留全部卡片", () => {
+    const denseSnapshot: AppSnapshot = {
+      ...snapshot,
+      domains: [
+        snapshot.domains[0],
+        ...Array.from({ length: 14 }, (_, index) => ({
+          id: `dense-${index}`,
+          name: `高密度领域标题${index + 1}`,
+          sortOrder: index,
+          active: true,
+          level: "L1" as const,
+          parentId: "l0",
+        })),
+      ],
+      requirements: Array.from({ length: 14 }, (_, index) => requirement(
+        String(100 + index),
+        `需求标题${index + 1}`,
+        "健康基础",
+        "2026-03",
+        "体验优化",
+        [],
+        `dense-${index}`,
+      )),
+    };
+    const plan = buildPptExportPlan(denseSnapshot, { ...fullRequest, sections: ["健康"] });
+    const pages = paginateRoadmapPage(plan.roadmapPages[0]);
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.flatMap((page) => page.groups).map((group) => group.key)).toEqual(plan.roadmapPages[0].groups.map((group) => group.key));
+    expect(presentationSlideCount(plan)).toBe(1 + pages.length);
+  });
 });
 
 describe("PPTX输出", () => {
@@ -157,5 +194,23 @@ describe("PPTX输出", () => {
     expect(xml).toContain("26H1");
     expect(xml).toContain("产品标识");
     expect(xml).toContain("当前区间暂无需求");
+  }, 30_000);
+
+  it("高密度路标导出续页而不是因单元格超载失败", async () => {
+    const denseSnapshot: AppSnapshot = {
+      ...snapshot,
+      domains: [
+        snapshot.domains[0],
+        ...Array.from({ length: 14 }, (_, index) => ({ id: `dense-${index}`, name: `高密度领域标题${index + 1}`, sortOrder: index, active: true, level: "L1" as const, parentId: "l0" })),
+      ],
+      requirements: Array.from({ length: 14 }, (_, index) => requirement(String(200 + index), `需求标题${index + 1}`, "健康基础", "2026-03", "体验优化", [], `dense-${index}`)),
+    };
+    const bytes = await createRoadmapPresentation(denseSnapshot, { ...fullRequest, sections: ["健康"] });
+    const zip = await JSZip.loadAsync(bytes);
+    const slideFiles = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    expect(slideFiles.length).toBeGreaterThan(2);
+    const xml = (await Promise.all(slideFiles.map((name) => zip.file(name)!.async("string")))).join("\n");
+    for (let index = 0; index < 14; index += 1) expect(xml).toContain(`高密度领域标题${index + 1}`);
+    expect(xml).toContain("健康路标（续 2/");
   }, 30_000);
 });

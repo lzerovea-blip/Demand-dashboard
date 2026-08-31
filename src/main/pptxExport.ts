@@ -85,6 +85,11 @@ export interface RoadmapCellLayout {
   cards: RoadmapCardLayout[];
 }
 
+export interface PaginatedRoadmapPage extends PptRoadmapPagePlan {
+  continuationIndex: number;
+  continuationCount: number;
+}
+
 export interface PptExportSecurityContext {
   exportedAt: Date;
   expiration: Date;
@@ -112,10 +117,10 @@ export async function createRoadmapPresentation(
 
   addCoverSlide(pptx, plan, security);
   for (const section of plan.selectedSections) {
-    if (section === "summary") addSummarySlide(pptx, plan);
+    if (section === "summary") addSummarySlide(pptx, plan, pptx._slides.length + 1);
     else {
       const page = plan.roadmapPages.find((item) => item.track === section);
-      if (page) addRoadmapSlide(pptx, page);
+      if (page) paginateRoadmapPage(page).forEach((part) => addRoadmapSlide(pptx, part));
     }
   }
 
@@ -161,10 +166,18 @@ function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan, security: Pp
   notes(slide, "封面数据来自本地工作区当前导出时间范围。所有元素均为可编辑原生对象。");
 }
 
-function addSummarySlide(pptx: PptxPresentation, plan: PptExportPlan): void {
+export function presentationSlideCount(plan: PptExportPlan): number {
+  return 1 + plan.selectedSections.reduce((count, section) => {
+    if (section === "summary") return count + 1;
+    const page = plan.roadmapPages.find((item) => item.track === section);
+    return count + (page ? paginateRoadmapPage(page).length : 0);
+  }, 0);
+}
+
+function addSummarySlide(pptx: PptxPresentation, plan: PptExportPlan, slideNumber: number): void {
   const slide = pptx.addSlide();
   slide.background = { color: C.paper };
-  addSlideHeader(slide, 2, "WORKLOAD SUMMARY", "需求工作量汇总分析", `${formatHalfYear(plan.start)}—${formatHalfYear(plan.end)} · ${plan.requirements.length} 条需求`);
+  addSlideHeader(slide, slideNumber, "WORKLOAD SUMMARY", "需求工作量汇总分析", `${formatHalfYear(plan.start)}—${formatHalfYear(plan.end)} · ${plan.requirements.length} 条需求`);
   const total = totals(plan.summaries);
   const metrics: Array<[string, number, string]> = [
     ["总工作量", total.total + total.unallocated, C.ink],
@@ -190,15 +203,72 @@ function addSummarySlide(pptx: PptxPresentation, plan: PptExportPlan): void {
   notes(slide, "三端和分类均按需求实际工作量计算；本页不展示七类路标投入。");
 }
 
-function addRoadmapSlide(pptx: PptxPresentation, page: PptRoadmapPagePlan): void {
+function addRoadmapSlide(pptx: PptxPresentation, page: PaginatedRoadmapPage): void {
   const slide = pptx.addSlide();
   slide.background = { color: C.paper };
   const slideNumber = pptx._slides.length;
-  text(slide, `${page.track}路标`, 50, 20, 500, 38, 24, C.ink, true, "left", "mid");
+  const continuation = page.continuationCount > 1
+    ? page.continuationIndex === 0
+      ? `（1/${page.continuationCount}）`
+      : `（续 ${page.continuationIndex + 1}/${page.continuationCount}）`
+    : "";
+  text(slide, `${page.track}路标${continuation}`, 50, 20, 650, 38, 24, C.ink, true, "left", "mid");
   text(slide, String(slideNumber).padStart(2, "0"), 1170, 26, 46, 18, 9, C.ink, true, "right");
   line(slide, 50, 64, 1170, 0, C.faint, 1);
   drawRoadmapTable(slide, page);
   notes(slide, `${page.track}路标按半年展示；每条圆点文本对应一条独立需求记录，不展示产品名称。`);
+}
+
+export function paginateRoadmapPage(page: PptRoadmapPagePlan): PaginatedRoadmapPage[] {
+  if (page.groups.length === 0) return [{ ...page, continuationIndex: 0, continuationCount: 1 }];
+  const lanes = roadmapLanesForTrack(page.track);
+  const halfW = (ROADMAP_TABLE.w - ROADMAP_TABLE.laneW) / page.halfYears.length;
+  const laneH = (ROADMAP_TABLE.h - ROADMAP_TABLE.headerH) / lanes.length;
+  const chunksByCell: RoadmapGroup[][][] = [];
+
+  for (const lane of lanes) {
+    for (const halfYear of page.halfYears) {
+      const groups = groupsForHalfYear(page.groups, halfYear).filter((group) => groupMatchesRoadmapLane(group, lane));
+      if (groups.length) chunksByCell.push(splitRoadmapCellGroups(groups, halfW, laneH, page.track, lane, halfYear));
+    }
+  }
+
+  const continuationCount = Math.max(1, ...chunksByCell.map((chunks) => chunks.length));
+  return Array.from({ length: continuationCount }, (_, continuationIndex) => ({
+    ...page,
+    groups: chunksByCell.flatMap((chunks) => chunks[continuationIndex] ?? []),
+    continuationIndex,
+    continuationCount,
+  }));
+}
+
+function splitRoadmapCellGroups(
+  groups: RoadmapGroup[],
+  width: number,
+  height: number,
+  track: Track,
+  lane: string,
+  halfYear: string,
+): RoadmapGroup[][] {
+  const chunks: RoadmapGroup[][] = [];
+  let current: RoadmapGroup[] = [];
+  for (const group of groups) {
+    const candidate = [...current, group];
+    try {
+      layoutRoadmapCell(candidate, width, height);
+      current = candidate;
+    } catch {
+      if (current.length) chunks.push(current);
+      try {
+        layoutRoadmapCell([group], width, height);
+      } catch {
+        throw new Error(`PPT 路标单张卡片超过可排版容量：${track}路标 / ${lane} / ${halfYear} / ${group.cardTitle}。请缩短该领域标题或需求标题`);
+      }
+      current = [group];
+    }
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
 function drawRoadmapTable(slide: PptxSlide, page: PptRoadmapPagePlan): void {
