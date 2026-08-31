@@ -8,7 +8,7 @@ import type { IrmEnvironmentStatus, Member, PptAccessPolicy, PptPermissionLevel 
 const execFileAsync = promisify(execFile);
 const MSO_PERMISSION: Record<PptPermissionLevel, number> = { read: 1, change: 15 };
 
-interface PowerShellGrant {
+export interface PowerShellGrant {
   account: string;
   permission: number;
   expirationUtc: string;
@@ -65,6 +65,20 @@ export interface IrmProtectionRequest {
   expiration: Date;
 }
 
+export function verifyPowerPointIrmGrants(actual: PowerShellGrant[], expected: PowerShellGrant[]): void {
+  for (const expectedGrant of expected) {
+    const accountMatches = actual.filter(
+      (item) => item.account.toLocaleLowerCase("en-US") === expectedGrant.account.toLocaleLowerCase("en-US"),
+    );
+    if (!accountMatches.length) throw new Error(`IRM 权限回读缺少账号：${expectedGrant.account}`);
+    const permissionMatch = accountMatches.find((item) => item.permission === expectedGrant.permission);
+    if (!permissionMatch) throw new Error(`IRM 权限回读等级不一致：${expectedGrant.account}`);
+    if (Math.abs(Date.parse(permissionMatch.expirationUtc) - Date.parse(expectedGrant.expirationUtc)) > 60_000) {
+      throw new Error(`IRM 到期时间回读不一致：${expectedGrant.account}`);
+    }
+  }
+}
+
 export async function checkPowerPointIrmEnvironment(platform = process.platform): Promise<IrmEnvironmentStatus> {
   if (platform !== "win32") {
     return {
@@ -119,12 +133,7 @@ export async function protectPowerPointWithIrm(request: IrmProtectionRequest): P
     grants,
   }, 120_000);
   const actual = result.grants ?? [];
-  if (actual.length !== grants.length) throw new Error("IRM 权限回读数量不一致，已终止导出");
-  for (const expected of grants) {
-    const matched = actual.find((item) => item.account.toLocaleLowerCase("en-US") === expected.account.toLocaleLowerCase("en-US"));
-    if (!matched || matched.permission !== expected.permission) throw new Error(`IRM 权限回读不一致：${expected.account}`);
-    if (Math.abs(Date.parse(matched.expirationUtc) - Date.parse(expected.expirationUtc)) > 60_000) throw new Error(`IRM 到期时间回读不一致：${expected.account}`);
-  }
+  verifyPowerPointIrmGrants(actual, grants);
 }
 
 async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promise<PowerShellResult> {
@@ -201,20 +210,17 @@ try {
   if ($payload.action -eq "probe") {
     $presentation = $powerPoint.Presentations.Add()
     $permission = $presentation.Permission
-    $author = [string]$permission.DocumentAuthor
-    $result.signedInAccount = $author
-    if ([string]::IsNullOrWhiteSpace($author)) { throw "PowerPoint 未登录可使用 IRM 的企业账号" }
     $permission.Enabled = $true
     $result.irmReady = [bool]$permission.Enabled
     if (-not $result.irmReady) { throw "PowerPoint 企业 IRM 服务不可用" }
+    $result.signedInAccount = [string]$permission.DocumentAuthor
     $result.ok = $true
   } elseif ($payload.action -eq "protect") {
     $presentation = $powerPoint.Presentations.Open([string]$payload.inputPath, $false, $false, $false)
     $permission = $presentation.Permission
-    $author = [string]$permission.DocumentAuthor
-    if ([string]::IsNullOrWhiteSpace($author)) { throw "PowerPoint 未登录可使用 IRM 的企业账号" }
     $permission.RemoveAll()
     $permission.Enabled = $true
+    if (-not $permission.Enabled) { throw "PowerPoint 企业 IRM 服务不可用" }
     foreach ($grant in $payload.grants) {
       $userPermission = $permission.Add([string]$grant.account, [int]$grant.permission)
       $expirationUtc = [DateTime]::Parse([string]$grant.expirationUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { POWERPOINT_IRM_SCRIPT, checkPowerPointIrmEnvironment, encodeWindowsPowerShellScript, powerShellExecutableCandidates } from "../src/main/pptIrm";
+import {
+  POWERPOINT_IRM_SCRIPT,
+  checkPowerPointIrmEnvironment,
+  encodeWindowsPowerShellScript,
+  powerShellExecutableCandidates,
+  verifyPowerPointIrmGrants,
+} from "../src/main/pptIrm";
 import { addCalendarMonthsClamped, formatPptExpirationDate, pptPermissionExpiration } from "../src/shared/pptAccess";
 
 describe("PPT 企业 IRM 有效期", () => {
@@ -39,5 +45,26 @@ describe("PPT 企业 IRM 有效期", () => {
     expect(encoded.charCodeAt(0)).toBe(0xFEFF);
     expect(encoded.slice(1)).toBe(POWERPOINT_IRM_SCRIPT);
     expect(encodeWindowsPowerShellScript(encoded)).toBe(encoded);
+  });
+
+  it("以实际启用 IRM 为准，不要求新文档预先存在 DocumentAuthor", () => {
+    expect(POWERPOINT_IRM_SCRIPT).not.toContain("IsNullOrWhiteSpace($author)");
+    const enabledAt = POWERPOINT_IRM_SCRIPT.indexOf("$permission.Enabled = $true");
+    const authorAt = POWERPOINT_IRM_SCRIPT.indexOf("$result.signedInAccount = [string]$permission.DocumentAuthor");
+    expect(enabledAt).toBeGreaterThan(-1);
+    expect(authorAt).toBeGreaterThan(enabledAt);
+  });
+
+  it("权限回读允许 PowerPoint 自动保留额外的文档所有者", () => {
+    const expirationUtc = "2027-02-28T00:00:00.000Z";
+    expect(() => verifyPowerPointIrmGrants([
+      { account: "owner@example.com", permission: 64, expirationUtc: "9999-12-31T23:59:59.000Z" },
+      { account: "reader@example.com", permission: 1, expirationUtc },
+    ], [
+      { account: "reader@example.com", permission: 1, expirationUtc },
+    ])).not.toThrow();
+    expect(() => verifyPowerPointIrmGrants([], [
+      { account: "reader@example.com", permission: 1, expirationUtc },
+    ])).toThrow("缺少账号");
   });
 });
