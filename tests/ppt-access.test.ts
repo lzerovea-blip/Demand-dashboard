@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { POWERPOINT_IRM_SCRIPT, checkPowerPointIrmEnvironment, powerShellExecutableCandidates } from "../src/main/pptIrm";
+import { POWERPOINT_IRM_SCRIPT, checkPowerPointIrmEnvironment, encodeWindowsPowerShellScript, powerShellExecutableCandidates } from "../src/main/pptIrm";
 import { addCalendarMonthsClamped, formatPptExpirationDate, pptPermissionExpiration } from "../src/shared/pptAccess";
 
 describe("PPT 企业 IRM 有效期", () => {
@@ -32,5 +32,12 @@ describe("PPT 企业 IRM 有效期", () => {
       "pwsh.exe",
     ]);
     expect(POWERPOINT_IRM_SCRIPT).toContain("未找到桌面版 Microsoft PowerPoint");
+  });
+
+  it("Windows PowerShell 5.1 脚本使用 UTF-8 BOM 保护中文提示", () => {
+    const encoded = encodeWindowsPowerShellScript(POWERPOINT_IRM_SCRIPT);
+    expect(encoded.charCodeAt(0)).toBe(0xFEFF);
+    expect(encoded.slice(1)).toBe(POWERPOINT_IRM_SCRIPT);
+    expect(encodeWindowsPowerShellScript(encoded)).toBe(encoded);
   });
 });
