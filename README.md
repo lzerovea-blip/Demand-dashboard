@@ -10,12 +10,11 @@
 
 ## Windows 版本
 
-构建产物提供 64 位 Windows 两种版本：
+GitHub Release 仅提供 64 位 Windows 便携版：
 
-- `Solution-Requirements-Manager-Setup-<版本号>-x64.exe`：安装版，可选择安装目录。
 - `Solution-Requirements-Manager-Portable-<版本号>-x64.exe`：便携版，无需安装即可运行。
 
-两个版本均包含离线数据库、PPT 共创模板和工作区数据包能力，运行时不依赖网络。当前构建未使用商业代码签名证书，Windows 首次运行时可能显示“未知发布者”或 SmartScreen 提示；应在可信来源下载并核对发布文件。
+便携版包含离线数据库、PPT 共创模板和工作区数据包能力，运行时不依赖网络。后续 GitHub Release 只上传 Windows 便携版，不上传安装版、Mac 或 iOS 产物。当前构建未使用商业代码签名证书，Windows 首次运行时可能显示“未知发布者”或 SmartScreen 提示；应在可信来源下载并核对发布文件。
 
 ## 当前能力
 
