@@ -8,10 +8,14 @@ import type {
   BackupEnvelope,
   DictionaryItem,
   GroupOverride,
+  Member,
+  PptAccessPolicy,
   Requirement,
   SaveDictionaryInput,
   SaveGroupOrderInput,
   SaveGroupOverrideInput,
+  SaveMemberInput,
+  SavePptAccessPolicyInput,
   SaveRequirementInput,
   TemplateProfile,
   WorkspaceData,
@@ -24,15 +28,17 @@ import {
   REQUIREMENT_SCOPES,
   REQUIREMENT_IMAGE_MIME_TYPES,
   SOURCES,
+  MEMBER_ROLES,
 } from "../shared/types.js";
-import { LEGACY_AI_SOURCE, LEGACY_MEDICAL_SUBMISSION_SOURCE, LEGACY_OVERSEAS_SOURCE, LEGACY_UPPERCASE_AI_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement, normalizeRequirementProductIds } from "../shared/requirements.js";
+import { cloneRequirementAsCopy, LEGACY_AI_SOURCE, LEGACY_MEDICAL_SUBMISSION_SOURCE, LEGACY_OVERSEAS_SOURCE, LEGACY_UPPERCASE_AI_SOURCE, normalizeLegacyGroupOverride, normalizeRequirement, normalizeRequirementProductIds } from "../shared/requirements.js";
+import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizeMicrosoftAccount, normalizePptAccessPolicy, normalizePptWhitelistEntries } from "../shared/members.js";
 import { groupKeyFor } from "../shared/roadmap.js";
 import { mergeWorkspaceData } from "../shared/workspace.js";
 import { roundWorkload } from "../shared/workload.js";
 import { applyPreparedWorkspaceWorkbook, type PreparedWorkspaceWorkbookImport } from "./workspaceWorkbook.js";
 
 const BACKUP_SCHEMA_VERSION = 1;
-const DATABASE_SCHEMA_VERSION = 3;
+const DATABASE_SCHEMA_VERSION = 4;
 
 export class LocalDatabase {
   private sql!: SqlJsStatic;
@@ -64,6 +70,8 @@ export class LocalDatabase {
       }),
       products: this.all<{ payload: string }>("SELECT payload FROM products ORDER BY sort_order, name").map((row) => JSON.parse(row.payload) as DictionaryItem),
       groupOverrides: this.all<{ payload: string }>("SELECT payload FROM group_overrides ORDER BY group_key").map((row) => JSON.parse(row.payload) as GroupOverride),
+      members: this.all<{ payload: string }>("SELECT payload FROM members ORDER BY sort_order, name").map((row) => normalizeMember(JSON.parse(row.payload) as Member)),
+      pptAccessPolicy: normalizePptAccessPolicy(this.getPayload<PptAccessPolicy>("settings", "key", "ppt_access_policy") ?? EMPTY_PPT_ACCESS_POLICY),
       templates: this.all<{ payload: string }>("SELECT payload FROM templates ORDER BY imported_at DESC").map((row) => JSON.parse(row.payload) as TemplateProfile),
     };
   }
@@ -111,6 +119,19 @@ export class LocalDatabase {
     return this.getSnapshot();
   }
 
+  async duplicateRequirement(id: string): Promise<AppSnapshot> {
+    const snapshot = this.getSnapshot();
+    const source = snapshot.requirements.find((item) => item.id === id);
+    if (!source) throw new Error("要复制的需求不存在或已被删除");
+    const copy = cloneRequirementAsCopy(source, snapshot.requirements.map((item) => item.title));
+    this.run(
+      "INSERT INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)",
+      [copy.id, copy.updatedAt, JSON.stringify(copy)],
+    );
+    await this.persist();
+    return this.getSnapshot();
+  }
+
   async saveDomain(input: SaveDictionaryInput): Promise<AppSnapshot> {
     return this.saveDictionary("domains", input);
   }
@@ -124,6 +145,7 @@ export class LocalDatabase {
     if (snapshot.domains.some((item) => item.parentId === id)) throw new Error("该领域 L0 下仍有关联的领域 L1，请先迁移或删除子级领域");
     const used = snapshot.requirements.some((item) => item.domainId === id || item.domainL0Id === id);
     if (used) throw new Error("该领域已被需求使用，请先迁移相关需求");
+    if (snapshot.members.some((item) => item.domainL1Ids.includes(id))) throw new Error("该领域 L1 仍由成员负责，请先在人员管理中解除关联");
     this.run("DELETE FROM domains WHERE id = ?", [id]);
     await this.persist();
     return this.getSnapshot();
@@ -133,6 +155,62 @@ export class LocalDatabase {
     const used = this.getSnapshot().requirements.some((item) => item.productIds.includes(id));
     if (used) throw new Error("该产品已被需求使用，请先移除相关产品匹配");
     this.run("DELETE FROM products WHERE id = ?", [id]);
+    await this.persist();
+    return this.getSnapshot();
+  }
+
+  async saveMember(input: SaveMemberInput): Promise<AppSnapshot> {
+    const name = input.name.trim();
+    const employeeNumber = input.employeeNumber.trim();
+    const microsoftAccount = normalizeMicrosoftAccount(input.microsoftAccount);
+    if (!name) throw new Error("成员姓名不能为空");
+    if (!employeeNumber) throw new Error("成员工号不能为空");
+    if (!isValidMicrosoftAccount(microsoftAccount)) throw new Error("请输入完整有效的 Microsoft 365 企业邮箱账号");
+    if (input.role && !MEMBER_ROLES.includes(input.role)) throw new Error("成员岗位角色无效");
+    const snapshot = this.getSnapshot();
+    if (snapshot.members.some((item) => item.id !== input.id && item.employeeNumber.trim().toLocaleLowerCase("zh-CN") === employeeNumber.toLocaleLowerCase("zh-CN"))) {
+      throw new Error(`工号“${employeeNumber}”已存在`);
+    }
+    if (snapshot.members.some((item) => item.id !== input.id && normalizeMicrosoftAccount(item.microsoftAccount) === microsoftAccount)) {
+      throw new Error(`Microsoft 365 账号“${microsoftAccount}”已存在`);
+    }
+    const domainL1Ids = [...new Set(input.domainL1Ids.filter(Boolean))];
+    const domainById = new Map(snapshot.domains.map((item) => [item.id, item]));
+    if (domainL1Ids.some((id) => (domainById.get(id)?.level ?? "L1") !== "L1")) throw new Error("负责领域包含无效的领域 L1");
+    const now = new Date().toISOString();
+    const existing = input.id ? snapshot.members.find((item) => item.id === input.id) : undefined;
+    if (input.id && !existing) throw new Error("要编辑的成员不存在");
+    const member: Member = {
+      id: existing?.id ?? crypto.randomUUID(),
+      name,
+      employeeNumber,
+      microsoftAccount,
+      role: input.role,
+      domainL1Ids,
+      sortOrder: input.sortOrder ?? existing?.sortOrder ?? snapshot.members.length,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.run("INSERT OR REPLACE INTO members (id, sort_order, name, payload) VALUES (?, ?, ?, ?)", [member.id, member.sortOrder, member.name, JSON.stringify(member)]);
+    await this.persist();
+    return this.getSnapshot();
+  }
+
+  async deleteMember(id: string): Promise<AppSnapshot> {
+    const snapshot = this.getSnapshot();
+    if (snapshot.pptAccessPolicy.entries.some((entry) => entry.memberId === id)) throw new Error("该成员仍在 PPT 白名单中，请先从白名单移除");
+    this.run("DELETE FROM members WHERE id = ?", [id]);
+    await this.persist();
+    return this.getSnapshot();
+  }
+
+  async savePptAccessPolicy(input: SavePptAccessPolicyInput): Promise<AppSnapshot> {
+    const entries = normalizePptWhitelistEntries(input.entries);
+    if (entries.length !== input.entries.length) throw new Error("白名单包含重复成员或无效权限");
+    const memberIds = new Set(this.getSnapshot().members.map((item) => item.id));
+    if (entries.some((entry) => !memberIds.has(entry.memberId))) throw new Error("白名单引用了不存在的成员");
+    const policy: PptAccessPolicy = { entries, updatedAt: new Date().toISOString() };
+    this.run("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)", ["ppt_access_policy", JSON.stringify(policy)]);
     await this.persist();
     return this.getSnapshot();
   }
@@ -231,7 +309,7 @@ export class LocalDatabase {
     const data = mode === "merge" ? mergeWorkspaceData(this.getWorkspaceData(), incoming) : incoming;
     this.db.run("BEGIN");
     try {
-      for (const table of ["requirements", "domains", "products", "group_overrides"]) this.db.run(`DELETE FROM ${table}`);
+      for (const table of ["requirements", "domains", "products", "group_overrides", "members"]) this.db.run(`DELETE FROM ${table}`);
       for (const item of data.requirements) {
         const normalized = normalizeRequirement(item);
         this.run("INSERT INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)", [normalized.id, normalized.updatedAt, JSON.stringify(normalized)]);
@@ -247,6 +325,12 @@ export class LocalDatabase {
         const normalized = normalizeLegacyGroupOverride(item);
         this.run("INSERT INTO group_overrides (group_key, updated_at, payload) VALUES (?, ?, ?)", [normalized.groupKey, normalized.updatedAt, JSON.stringify(normalized)]);
       }
+      for (const raw of data.members ?? []) {
+        const item = normalizeMember(raw);
+        this.run("INSERT INTO members (id, sort_order, name, payload) VALUES (?, ?, ?, ?)", [item.id, item.sortOrder, item.name, JSON.stringify(item)]);
+      }
+      const policy = normalizePptAccessPolicy(data.pptAccessPolicy);
+      this.run("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)", ["ppt_access_policy", JSON.stringify(policy)]);
       this.db.run("COMMIT");
     } catch (error) {
       this.db.run("ROLLBACK");
@@ -302,8 +386,13 @@ export class LocalDatabase {
       CREATE TABLE IF NOT EXISTS domains (id TEXT PRIMARY KEY, level TEXT NOT NULL, sort_order INTEGER NOT NULL, name TEXT NOT NULL COLLATE NOCASE, payload TEXT NOT NULL, UNIQUE(level, name));
       CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, sort_order INTEGER NOT NULL, name TEXT NOT NULL COLLATE NOCASE UNIQUE, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS group_overrides (group_key TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS members (id TEXT PRIMARY KEY, sort_order INTEGER NOT NULL, name TEXT NOT NULL COLLATE NOCASE, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, imported_at TEXT NOT NULL, payload TEXT NOT NULL);
     `);
+    if (!this.getPayload<PptAccessPolicy>("settings", "key", "ppt_access_policy")) {
+      this.run("INSERT INTO settings (key, payload) VALUES (?, ?)", ["ppt_access_policy", JSON.stringify(EMPTY_PPT_ACCESS_POLICY)]);
+    }
     this.migrateDomainLevels();
     this.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", [DATABASE_SCHEMA_VERSION]);
     this.migrateLegacySources();
@@ -402,6 +491,7 @@ function validateRequirement(input: SaveRequirementInput): void {
   if (!input.domainL0Id) throw new Error("请选择领域 L0");
   if (!input.domainId) throw new Error("请选择领域 L1");
   if (!REQUIREMENT_SCOPES.includes(input.scope)) throw new Error("请选择有效的适用范围");
+  if (typeof input.allowLatestVersionUpgrade !== "boolean") throw new Error("请选择是否允许最近版本升级");
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetMonth)) throw new Error("上线年月格式应为 YYYY-MM");
   const workloadParts = [input.deviceWorkloadPm, input.appWorkloadPm, input.cloudWorkloadPm];
   if (workloadParts.some((value) => !Number.isFinite(value) || value < 0)) throw new Error("各侧工作量必须是大于或等于0的人月数");

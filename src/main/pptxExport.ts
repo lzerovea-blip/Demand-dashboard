@@ -12,6 +12,7 @@ import { groupMatchesRoadmapLane, roadmapLanesForTrack, type HalfYearSummary, ty
 import { CATEGORIES } from "../shared/types.js";
 import type { AppSnapshot, PptExportRequest, RequirementCategory, Track } from "../shared/types.js";
 import type { WorkloadSide } from "../shared/workload.js";
+import { pptPermissionExpiration } from "../shared/pptAccess.js";
 
 const FONT = "HarmonyOS Sans SC";
 const PX = 1 / 96;
@@ -84,7 +85,21 @@ export interface RoadmapCellLayout {
   cards: RoadmapCardLayout[];
 }
 
-export async function createRoadmapPresentation(snapshot: AppSnapshot, request: PptExportRequest): Promise<Buffer> {
+export interface PptExportSecurityContext {
+  exportedAt: Date;
+  expiration: Date;
+}
+
+function defaultSecurityContext(): PptExportSecurityContext {
+  const exportedAt = new Date();
+  return { exportedAt, expiration: pptPermissionExpiration(exportedAt) };
+}
+
+export async function createRoadmapPresentation(
+  snapshot: AppSnapshot,
+  request: PptExportRequest,
+  security: PptExportSecurityContext = defaultSecurityContext(),
+): Promise<Buffer> {
   const plan = buildPptExportPlan(snapshot, request);
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
@@ -95,7 +110,7 @@ export async function createRoadmapPresentation(snapshot: AppSnapshot, request: 
   pptx.lang = "zh-CN";
   pptx.theme = { headFontFace: FONT, bodyFontFace: FONT, lang: "zh-CN" };
 
-  addCoverSlide(pptx, plan);
+  addCoverSlide(pptx, plan, security);
   for (const section of plan.selectedSections) {
     if (section === "summary") addSummarySlide(pptx, plan);
     else {
@@ -108,7 +123,7 @@ export async function createRoadmapPresentation(snapshot: AppSnapshot, request: 
   return Buffer.from(output as Uint8Array);
 }
 
-function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
+function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan, security: PptExportSecurityContext): void {
   const slide = pptx.addSlide();
   slide.background = { color: C.ink };
   addChrome(slide, 1, "ROADMAP REVIEW", true);
@@ -122,7 +137,7 @@ function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
     ["时间范围", `${plan.halfYears.length} 个半年`],
     ["需求数量", `${plan.requirements.length} 条`],
     ["总工作量", `${formatNumber(total.total + total.unallocated)} PM`],
-    ["生成日期", formatDate(new Date())],
+    ["生成日期", formatDate(security.exportedAt)],
   ];
   stats.forEach(([label, value], index) => {
     const x = 64 + index * 166;
@@ -130,6 +145,7 @@ function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan): void {
     text(slide, label, x, 444, 135, 20, 11, "AFC0CB", true);
     text(slide, value, x, 476, 145, 32, 20, C.white, true);
   });
+  text(slide, `企业 IRM 权限有效期至 ${formatDate(security.expiration)}`, 64, 614, 520, 20, 11, C.mint, true);
 
   roundRect(slide, 760, 116, 457, 471, C.navy, C.navy2, 1, 18);
   text(slide, "MATERIAL WINDOW", 796, 149, 220, 20, 10, C.mint, true);

@@ -40,6 +40,8 @@ const snapshot: AppSnapshot = {
     { id: "p2", name: "产品B", active: true, sortOrder: 1 },
   ],
   groupOverrides: [{ groupKey: "d1::健康基础::2026-05", cardTitle: "分时血压", cardSummary: "早间与午间测量", updatedAt: "2026-01-01" }],
+  members: [],
+  pptAccessPolicy: { entries: [], updatedAt: "1970-01-01T00:00:00.000Z" },
   templates: [],
 };
 
@@ -276,10 +278,10 @@ describe("路标首屏排序", () => {
 });
 
 describe("路标月份列宽", () => {
-  it("空月份固定为72px，有需求月份保持宽列", () => {
+  it("空月份固定为56px，有需求月份保持宽列", () => {
     const months = ["2026-05", "2026-06", "2026-07"];
     expect(roadmapMonthColumnTemplate(months, [{ targetMonth: "2026-06" }])).toBe(
-      "72px minmax(280px, 1fr) 72px",
+      "56px minmax(280px, 1fr) 56px",
     );
   });
 
@@ -287,7 +289,7 @@ describe("路标月份列宽", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
     const months = ["2026-05", "2026-06", "2026-07", "2026-08"];
     expect(roadmapMonthColumnTemplate(months, groups)).toBe(
-      "minmax(280px, 1fr) minmax(280px, 1fr) minmax(280px, 1fr) 72px",
+      "minmax(280px, 1fr) minmax(280px, 1fr) minmax(280px, 1fr) 56px",
     );
   });
 
@@ -295,15 +297,15 @@ describe("路标月份列宽", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
     const months = ["2026-05", "2026-06", "2026-07", "2026-08"];
     expect(roadmapMonthColumnTemplateForTrack(months, groups, "运动")).toBe(
-      "72px 72px minmax(280px, 1fr) 72px",
+      "56px 56px minmax(280px, 1fr) 56px",
     );
     expect(roadmapMonthColumnTemplateForTrack(months, groups, "健康")).toBe(
-      "minmax(280px, 1fr) minmax(280px, 1fr) 72px 72px",
+      "minmax(280px, 1fr) minmax(280px, 1fr) 56px 56px",
     );
   });
 
   it("整段没有需求时全部压缩", () => {
-    expect(roadmapMonthColumnTemplate(["2027-01", "2027-02", "2027-03"], [])).toBe("72px 72px 72px");
+    expect(roadmapMonthColumnTemplate(["2027-01", "2027-02", "2027-03"], [])).toBe("56px 56px 56px");
   });
 });
 
@@ -358,5 +360,5 @@ function requirement(
   workloadPm: number,
   breakdown: Partial<{ device: number; app: number; cloud: number }> = { app: workloadPm },
 ): Requirement {
-  return { id, title, description: "", images: [], domainL0Id: "l0", domainId, source, scope: "全球", overseasRegions: [], category, targetMonth, productIds, deviceWorkloadPm: breakdown.device ?? 0, appWorkloadPm: breakdown.app ?? 0, cloudWorkloadPm: breakdown.cloud ?? 0, unallocatedWorkloadPm: 0, workloadPm, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
+  return { id, title, description: "", images: [], domainL0Id: "l0", domainId, source, scope: "全球", allowLatestVersionUpgrade: false, overseasRegions: [], category, targetMonth, productIds, deviceWorkloadPm: breakdown.device ?? 0, appWorkloadPm: breakdown.app ?? 0, cloudWorkloadPm: breakdown.cloud ?? 0, unallocatedWorkloadPm: 0, workloadPm, createdAt: "2026-01-01", updatedAt: "2026-01-01" };
 }

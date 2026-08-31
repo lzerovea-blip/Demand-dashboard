@@ -20,6 +20,7 @@ export const REQUIREMENT_SCOPES = ["仅国内", "仅海外", "全球"] as const;
 /** 仅用于兼容旧版“海外研究”数据包，当前界面不再提供该字段。 */
 export const OVERSEAS_REGIONS = ["欧州", "亚非拉", "欧亚"] as const;
 export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"] as const;
+export const MEMBER_ROLES = ["规划", "产品经理", "SE", "PM", "开发", "UX"] as const;
 
 export type RequirementSource = (typeof SOURCES)[number];
 export type RequirementCategory = (typeof CATEGORIES)[number];
@@ -36,6 +37,8 @@ export const CATEGORY_META: Record<RequirementCategory, {
 export type RequirementScope = (typeof REQUIREMENT_SCOPES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
 export type Track = (typeof ROADMAP_TRACKS)[number];
+export type MemberRole = (typeof MEMBER_ROLES)[number];
+export type PptPermissionLevel = "read" | "change";
 export type PptExportSectionId = "summary" | Track;
 export interface PptExportRequest extends HalfYearRange {
   materialName: string;
@@ -65,6 +68,7 @@ export interface Requirement {
   domainId: string;
   source: RequirementSource;
   scope: RequirementScope;
+  allowLatestVersionUpgrade: boolean;
   overseasRegions: OverseasRegion[];
   category: RequirementCategory;
   targetMonth: string;
@@ -94,6 +98,28 @@ export interface GroupOverride {
   cardTitle: string;
   cardSummary: string;
   sortOrder?: number;
+  updatedAt: string;
+}
+
+export interface Member {
+  id: string;
+  name: string;
+  employeeNumber: string;
+  microsoftAccount: string;
+  role?: MemberRole;
+  domainL1Ids: string[];
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PptWhitelistEntry {
+  memberId: string;
+  permission: PptPermissionLevel;
+}
+
+export interface PptAccessPolicy {
+  entries: PptWhitelistEntry[];
   updatedAt: string;
 }
 
@@ -137,6 +163,8 @@ export interface AppSnapshot {
   domains: DictionaryItem[];
   products: DictionaryItem[];
   groupOverrides: GroupOverride[];
+  members: Member[];
+  pptAccessPolicy: PptAccessPolicy;
   templates: TemplateProfile[];
 }
 
@@ -149,6 +177,7 @@ export interface SaveRequirementInput {
   domainId: string;
   source: RequirementSource;
   scope: RequirementScope;
+  allowLatestVersionUpgrade: boolean;
   overseasRegions: OverseasRegion[];
   category: RequirementCategory;
   targetMonth: string;
@@ -165,6 +194,29 @@ export interface SaveDictionaryInput {
   active?: boolean;
   level?: DomainLevel;
   parentId?: string;
+}
+
+export interface SaveMemberInput {
+  id?: string;
+  name: string;
+  employeeNumber: string;
+  microsoftAccount: string;
+  role?: MemberRole;
+  domainL1Ids: string[];
+  sortOrder?: number;
+}
+
+export interface SavePptAccessPolicyInput {
+  entries: PptWhitelistEntry[];
+}
+
+export interface IrmEnvironmentStatus {
+  supported: boolean;
+  platform: string;
+  powerPointInstalled: boolean;
+  irmReady: boolean;
+  signedInAccount?: string;
+  message: string;
 }
 
 export interface SaveGroupOverrideInput {
@@ -204,6 +256,24 @@ export interface WorkspacePackageCounts {
   domains: number;
   products: number;
   groupOverrides: number;
+  members: number;
+  whitelistEntries: number;
+}
+
+export type WorkspaceDifferenceChange = "新增" | "修改" | "删除";
+
+export interface WorkspaceFieldDifference {
+  field: string;
+  currentValue: string;
+  incomingValue: string;
+}
+
+export interface WorkspaceImportDifference {
+  entity: "需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单";
+  key: string;
+  title: string;
+  change: WorkspaceDifferenceChange;
+  fields: WorkspaceFieldDifference[];
 }
 
 export interface WorkspaceImportPreview {
@@ -213,6 +283,8 @@ export interface WorkspaceImportPreview {
   exportedAt: string;
   templateVersion: string;
   counts: WorkspacePackageCounts;
+  differences: WorkspaceImportDifference[];
+  differenceDigest: string;
 }
 
 export type WorkspaceWorkbookConflictMode = "local-wins" | "excel-wins";
@@ -242,6 +314,8 @@ export interface WorkspaceWorkbookImportPreview {
   counts: WorkspaceWorkbookImportCounts;
   errors: WorkspaceWorkbookIssue[];
   conflicts: WorkspaceWorkbookIssue[];
+  differences: WorkspaceImportDifference[];
+  differenceDigest: string;
 }
 
 export interface AppInfo {
@@ -258,19 +332,24 @@ export interface ElectronApi {
   setWindowFullscreen(enabled: boolean): Promise<void>;
   onWindowFullscreenChange(listener: (enabled: boolean) => void): () => void;
   saveRequirement(input: SaveRequirementInput): Promise<AppSnapshot>;
+  duplicateRequirement(id: string): Promise<AppSnapshot>;
   deleteRequirement(id: string): Promise<AppSnapshot>;
   saveDomain(input: SaveDictionaryInput): Promise<AppSnapshot>;
   deleteDomain(id: string): Promise<AppSnapshot>;
   saveProduct(input: SaveDictionaryInput): Promise<AppSnapshot>;
   deleteProduct(id: string): Promise<AppSnapshot>;
+  saveMember(input: SaveMemberInput): Promise<AppSnapshot>;
+  deleteMember(id: string): Promise<AppSnapshot>;
+  savePptAccessPolicy(input: SavePptAccessPolicyInput): Promise<AppSnapshot>;
+  checkIrmEnvironment(): Promise<IrmEnvironmentStatus>;
   saveGroupOverride(input: SaveGroupOverrideInput): Promise<AppSnapshot>;
   saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot>;
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspacePackage(): Promise<{ canceled: boolean; preview?: WorkspaceImportPreview }>;
-  applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode }): Promise<{ snapshot: AppSnapshot }>;
+  applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string }): Promise<{ snapshot: AppSnapshot }>;
   exportWorkspaceWorkbook(input: HalfYearRange): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspaceWorkbook(): Promise<{ canceled: boolean; preview?: WorkspaceWorkbookImportPreview }>;
-  applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode }): Promise<{ snapshot: AppSnapshot }>;
+  applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
   exportRoadmapPresentation(input: PptExportRequest): Promise<{ canceled: boolean; path?: string; slideCount?: number }>;
 }

@@ -8,12 +8,14 @@ import type {
   WorkspaceImportPreview,
   WorkspacePackageCounts,
 } from "../shared/types.js";
-import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, REQUIREMENT_IMAGE_MIME_TYPES, REQUIREMENT_SCOPES, SOURCES } from "../shared/types.js";
+import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, MEMBER_ROLES, REQUIREMENT_IMAGE_MIME_TYPES, REQUIREMENT_SCOPES, SOURCES } from "../shared/types.js";
 import { normalizeLegacyGroupOverride, normalizeLegacySource, normalizeRequirement } from "../shared/requirements.js";
-import { workspaceCounts } from "../shared/workspace.js";
+import { mergeWorkspaceData, workspaceCounts } from "../shared/workspace.js";
+import { diffWorkspaceData, workspaceDifferenceDigest } from "../shared/workspaceDiff.js";
+import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizePptAccessPolicy } from "../shared/members.js";
 
 const PACKAGE_FORMAT = "health-roadmap-workspace";
-const PACKAGE_VERSION = 1;
+const PACKAGE_VERSION = 2;
 const TEMPLATE_VERSION = "v0.1";
 const DATA_PATH = "data.json";
 
@@ -24,7 +26,7 @@ interface PackageFileRecord {
 
 interface WorkspacePackageManifest {
   format: typeof PACKAGE_FORMAT;
-  formatVersion: typeof PACKAGE_VERSION;
+  formatVersion: number;
   appVersion: string;
   templateVersion: string;
   exportedAt: string;
@@ -41,8 +43,10 @@ interface PackedRequirement extends Omit<Requirement, "images"> {
   images: PackedRequirementImage[];
 }
 
-interface PackedWorkspaceData extends Omit<WorkspaceData, "requirements"> {
+interface PackedWorkspaceData extends Omit<WorkspaceData, "requirements" | "members" | "pptAccessPolicy"> {
   requirements: PackedRequirement[];
+  members?: WorkspaceData["members"];
+  pptAccessPolicy?: WorkspaceData["pptAccessPolicy"];
 }
 
 export interface PreparedWorkspaceImport {
@@ -82,6 +86,8 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
     domains: normalizeDomains(data.domains),
     products: data.products,
     groupOverrides: data.groupOverrides,
+    members: data.members,
+    pptAccessPolicy: data.pptAccessPolicy,
   };
   const dataBytes = Buffer.from(`${JSON.stringify(packedData, null, 2)}\n`, "utf8");
   zip.file(DATA_PATH, dataBytes);
@@ -101,9 +107,9 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
 }
 
-export async function inspectWorkspacePackage(bytes: Buffer, fileName: string): Promise<PreparedWorkspaceImport> {
+export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, current?: WorkspaceData): Promise<PreparedWorkspaceImport> {
   if (fileName.toLowerCase().endsWith(".json") || firstNonWhitespace(bytes) === "{") {
-    return inspectLegacyBackup(bytes);
+    return withMergeDifferences(inspectLegacyBackup(bytes), current);
   }
 
   const zip = await JSZip.loadAsync(bytes, { checkCRC32: true });
@@ -131,6 +137,8 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string): 
     domains: normalizeDomains(packedData.domains),
     products: packedData.products,
     groupOverrides: packedData.groupOverrides.map(normalizeLegacyGroupOverride),
+    members: (packedData.members ?? []).map(normalizeMember),
+    pptAccessPolicy: normalizePptAccessPolicy(packedData.pptAccessPolicy),
     requirements: packedData.requirements.map((requirement) => ({
       ...normalizeRequirement({ ...requirement, images: [] }),
       images: requirement.images.map((image) => {
@@ -151,15 +159,17 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string): 
   const actualCounts = workspaceCounts(data);
   if (!sameCounts(actualCounts, manifest.counts)) throw new Error("数据包数量清单与实际内容不一致");
 
-  return {
+  return withMergeDifferences({
     data,
     preview: {
       sourceFormat: "roadmap",
       exportedAt: manifest.exportedAt,
       templateVersion: manifest.templateVersion,
       counts: actualCounts,
+      differences: [],
+      differenceDigest: workspaceDifferenceDigest([]),
     },
-  };
+  }, current);
 }
 
 function inspectLegacyBackup(bytes: Buffer): PreparedWorkspaceImport {
@@ -170,6 +180,8 @@ function inspectLegacyBackup(bytes: Buffer): PreparedWorkspaceImport {
     domains: normalizeDomains(backup.data.domains),
     products: backup.data.products,
     groupOverrides: backup.data.groupOverrides.map(normalizeLegacyGroupOverride),
+    members: (backup.data.members ?? []).map(normalizeMember),
+    pptAccessPolicy: normalizePptAccessPolicy(backup.data.pptAccessPolicy),
   };
   validateWorkspaceData(data);
   return {
@@ -179,12 +191,27 @@ function inspectLegacyBackup(bytes: Buffer): PreparedWorkspaceImport {
       exportedAt: backup.exportedAt,
       templateVersion: "旧版备份",
       counts: workspaceCounts(data),
+      differences: [],
+      differenceDigest: workspaceDifferenceDigest([]),
+    },
+  };
+}
+
+function withMergeDifferences(prepared: PreparedWorkspaceImport, current?: WorkspaceData): PreparedWorkspaceImport {
+  if (!current) return prepared;
+  const differences = diffWorkspaceData(current, mergeWorkspaceData(current, prepared.data));
+  return {
+    ...prepared,
+    preview: {
+      ...prepared.preview,
+      differences,
+      differenceDigest: workspaceDifferenceDigest(differences),
     },
   };
 }
 
 function validateManifest(value: WorkspacePackageManifest): void {
-  if (value?.format !== PACKAGE_FORMAT || value.formatVersion !== PACKAGE_VERSION) throw new Error("不支持的数据包版本");
+  if (value?.format !== PACKAGE_FORMAT || ![1, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
   if (value.dataPath !== DATA_PATH || !value.files || !value.files[DATA_PATH]) throw new Error("数据包清单不完整");
   if (!value.exportedAt || !value.templateVersion || !value.counts) throw new Error("数据包元信息不完整");
   for (const record of Object.values(value.files)) {
@@ -195,7 +222,8 @@ function validateManifest(value: WorkspacePackageManifest): void {
 }
 
 export function validateWorkspaceData(data: WorkspaceData): void {
-  if (!data || !Array.isArray(data.requirements) || !Array.isArray(data.domains) || !Array.isArray(data.products) || !Array.isArray(data.groupOverrides)) {
+  if (!data || !Array.isArray(data.requirements) || !Array.isArray(data.domains) || !Array.isArray(data.products) || !Array.isArray(data.groupOverrides)
+    || !Array.isArray(data.members) || !data.pptAccessPolicy) {
     throw new Error("数据包结构无效");
   }
   const domainIds = validateDictionaries(data.domains, "领域");
@@ -215,6 +243,10 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     const rawScope = (raw as Requirement & { scope?: unknown }).scope;
     if (rawScope !== undefined && !REQUIREMENT_SCOPES.includes(rawScope as Requirement["scope"])) {
       throw new Error(`需求“${raw.title}”的适用范围无效`);
+    }
+    const rawAllowLatestVersionUpgrade = (raw as Requirement & { allowLatestVersionUpgrade?: unknown }).allowLatestVersionUpgrade;
+    if (rawAllowLatestVersionUpgrade !== undefined && typeof rawAllowLatestVersionUpgrade !== "boolean") {
+      throw new Error(`需求“${raw.title}”的最近版本升级设置无效`);
     }
     const item = normalizeRequirement(raw);
     if (!item.id || requirementIds.has(item.id) || !item.title.trim()) throw new Error("数据包包含无效或重复需求");
@@ -243,6 +275,29 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (!domainIds.has(domainId) || !SOURCES.includes(normalizeLegacySource(source) as (typeof SOURCES)[number]) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth ?? "")) {
       throw new Error(`路标卡片“${item.cardTitle}”的关联信息无效`);
     }
+  }
+
+  const memberIds = new Set<string>();
+  const employeeNumbers = new Set<string>();
+  const accounts = new Set<string>();
+  for (const raw of data.members) {
+    const item = normalizeMember(raw);
+    const employeeNumber = item.employeeNumber.toLocaleLowerCase("zh-CN");
+    const account = item.microsoftAccount.toLocaleLowerCase("en-US");
+    if (!item.id || memberIds.has(item.id) || !item.name || !item.employeeNumber || !isValidMicrosoftAccount(item.microsoftAccount)) throw new Error("数据包包含无效或重复成员");
+    if (employeeNumbers.has(employeeNumber)) throw new Error(`成员工号“${item.employeeNumber}”重复`);
+    if (accounts.has(account)) throw new Error(`成员账号“${item.microsoftAccount}”重复`);
+    if (item.role && !MEMBER_ROLES.includes(item.role)) throw new Error(`成员“${item.name}”的岗位角色无效`);
+    if (!Number.isInteger(item.sortOrder) || item.sortOrder < 0 || !validTimestamp(item.createdAt) || !validTimestamp(item.updatedAt)) throw new Error(`成员“${item.name}”的排序或时间信息无效`);
+    if (item.domainL1Ids.some((id) => domainsById.get(id)?.level !== "L1")) throw new Error(`成员“${item.name}”引用了不存在的领域 L1`);
+    memberIds.add(item.id);
+    employeeNumbers.add(employeeNumber);
+    accounts.add(account);
+  }
+  const policy = normalizePptAccessPolicy(data.pptAccessPolicy);
+  if (!validTimestamp(policy.updatedAt)) throw new Error("PPT 白名单更新时间无效");
+  if (policy.entries.some((entry) => !memberIds.has(entry.memberId) || !["read", "change"].includes(entry.permission))) {
+    throw new Error("PPT 白名单引用了不存在的成员或无效权限");
   }
 }
 
@@ -334,5 +389,7 @@ function sameCounts(left: WorkspacePackageCounts, right: WorkspacePackageCounts)
     && left.images === right.images
     && left.domains === right.domains
     && left.products === right.products
-    && left.groupOverrides === right.groupOverrides;
+    && left.groupOverrides === right.groupOverrides
+    && (right.members === undefined || left.members === right.members)
+    && (right.whitelistEntries === undefined || left.whitelistEntries === right.whitelistEntries);
 }

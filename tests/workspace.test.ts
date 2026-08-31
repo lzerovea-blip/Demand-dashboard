@@ -40,6 +40,23 @@ describe("工作区合并", () => {
     item.images = [{ id: "i1", name: "a.png", mimeType: "image/png", sizeBytes: 1, dataUrl: "data:image/png;base64,YQ==" }];
     expect(workspaceCounts(data({ requirements: [item] }))).toMatchObject({ requirements: 1, images: 1 });
   });
+
+  it("成员按工号合并、重映射 L1，并由较新的整份白名单生效", () => {
+    const local = data({
+      domains: [{ id: "local-d1", name: "睡眠", sortOrder: 0, active: true, level: "L1" }],
+      members: [{ id: "local-member", name: "旧姓名", employeeNumber: "E001", microsoftAccount: "old@company.com", role: "规划", domainL1Ids: ["local-d1"], sortOrder: 0, createdAt: "2026-08-01", updatedAt: "2026-08-20" }],
+      pptAccessPolicy: { entries: [{ memberId: "local-member", permission: "read" }], updatedAt: "2026-08-20" },
+    });
+    const incoming = data({
+      domains: [{ id: "incoming-d1", name: "睡眠", sortOrder: 0, active: true, level: "L1" }],
+      members: [{ id: "incoming-member", name: "新姓名", employeeNumber: "E001", microsoftAccount: "new@company.com", role: "规划", domainL1Ids: ["incoming-d1"], sortOrder: 0, createdAt: "2026-08-01", updatedAt: "2026-08-28" }],
+      pptAccessPolicy: { entries: [{ memberId: "incoming-member", permission: "change" }], updatedAt: "2026-08-28" },
+    });
+    const merged = mergeWorkspaceData(local, incoming);
+    expect(merged.members).toHaveLength(1);
+    expect(merged.members[0]).toMatchObject({ id: "local-member", name: "新姓名", domainL1Ids: ["local-d1"] });
+    expect(merged.pptAccessPolicy.entries).toEqual([{ memberId: "local-member", permission: "change" }]);
+  });
 });
 
 function data(overrides: Partial<WorkspaceData> = {}): WorkspaceData {
@@ -48,6 +65,8 @@ function data(overrides: Partial<WorkspaceData> = {}): WorkspaceData {
     domains: [{ id: "d1", name: "默认领域", sortOrder: 0, active: true, level: "L1" }],
     products: [],
     groupOverrides: [],
+    members: [],
+    pptAccessPolicy: { entries: [], updatedAt: "1970-01-01T00:00:00.000Z" },
     ...overrides,
   };
 }
@@ -62,6 +81,7 @@ function requirement(id: string, domainId: string, productIds: string[], updated
     domainId,
     source: "健康基础",
     scope: "全球",
+    allowLatestVersionUpgrade: false,
     overseasRegions: [],
     category: productIds.length ? "产品专属" : "体验优化",
     targetMonth: "2027-03",

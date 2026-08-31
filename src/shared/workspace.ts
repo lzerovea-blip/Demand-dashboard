@@ -1,5 +1,6 @@
-import type { DictionaryItem, GroupOverride, Requirement, WorkspaceData } from "./types.js";
+import type { DictionaryItem, GroupOverride, Member, PptAccessPolicy, Requirement, WorkspaceData } from "./types.js";
 import { normalizeLegacyGroupOverride, normalizeRequirement } from "./requirements.js";
+import { EMPTY_PPT_ACCESS_POLICY, normalizeMember, normalizePptAccessPolicy } from "./members.js";
 
 export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData): WorkspaceData {
   const domainMerge = mergeDomainDictionaries(local.domains, incoming.domains);
@@ -25,12 +26,75 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
       groupKey: remapGroupKey(normalized.groupKey, domainMerge.idMap),
     };
   });
+  const memberMerge = mergeMembers(
+    local.members ?? [],
+    incoming.members ?? [],
+    domainMerge.idMap,
+  );
+  const localPolicy = normalizePptAccessPolicy(local.pptAccessPolicy);
+  const incomingPolicy = normalizePptAccessPolicy(incoming.pptAccessPolicy);
+  const pptAccessPolicy = timestamp(incomingPolicy.updatedAt) > timestamp(localPolicy.updatedAt)
+    ? remapPolicy(incomingPolicy, memberMerge.idMap)
+    : localPolicy;
 
   return {
     requirements,
     domains: domainMerge.items,
     products: productMerge.items,
     groupOverrides: mergeByUpdatedAt(local.groupOverrides, remappedOverrides, (item) => item.groupKey),
+    members: memberMerge.items,
+    pptAccessPolicy,
+  };
+}
+
+function mergeMembers(
+  local: Member[],
+  incoming: Member[],
+  domainIds: ReadonlyMap<string, string>,
+): { items: Member[]; idMap: Map<string, string> } {
+  const items = local.map(normalizeMember);
+  const byEmployeeNumber = new Map(items.map((item) => [normalizeName(item.employeeNumber), item]));
+  const usedIds = new Set(items.map((item) => item.id));
+  const idMap = new Map<string, string>();
+
+  for (const raw of incoming) {
+    const normalized = normalizeMember({
+      ...raw,
+      domainL1Ids: raw.domainL1Ids.map((id) => domainIds.get(id) ?? id),
+    });
+    const key = normalizeName(normalized.employeeNumber);
+    const existing = byEmployeeNumber.get(key);
+    if (existing) {
+      idMap.set(normalized.id, existing.id);
+      if (timestamp(normalized.updatedAt) > timestamp(existing.updatedAt)) {
+        Object.assign(existing, normalized, { id: existing.id });
+      }
+      continue;
+    }
+    const id = uniqueId(normalized.id, usedIds);
+    const item = { ...normalized, id, sortOrder: items.length };
+    items.push(item);
+    usedIds.add(id);
+    byEmployeeNumber.set(key, item);
+    idMap.set(normalized.id, id);
+  }
+
+  const accounts = new Set<string>();
+  for (const member of items) {
+    const account = normalizeName(member.microsoftAccount);
+    if (accounts.has(account)) throw new Error(`成员账号“${member.microsoftAccount}”重复，请先处理冲突`);
+    accounts.add(account);
+  }
+  return { items, idMap };
+}
+
+function remapPolicy(policy: PptAccessPolicy, memberIds: ReadonlyMap<string, string>): PptAccessPolicy {
+  return {
+    ...policy,
+    entries: policy.entries.map((entry) => ({
+      ...entry,
+      memberId: memberIds.get(entry.memberId) ?? entry.memberId,
+    })),
   };
 }
 
@@ -118,5 +182,7 @@ export function workspaceCounts(data: WorkspaceData) {
     domains: data.domains.length,
     products: data.products.length,
     groupOverrides: data.groupOverrides.length,
+    members: (data.members ?? []).length,
+    whitelistEntries: normalizePptAccessPolicy(data.pptAccessPolicy ?? EMPTY_PPT_ACCESS_POLICY).entries.length,
   };
 }

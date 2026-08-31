@@ -29,6 +29,7 @@ function requirement(
     domainId,
     source,
     scope: "全球",
+    allowLatestVersionUpgrade: false,
     overseasRegions: [],
     category,
     targetMonth,
@@ -60,6 +61,8 @@ const snapshot: AppSnapshot = {
   ],
   products: [{ id: "p1", name: "手表A", sortOrder: 0, active: true }],
   groupOverrides: [],
+  members: [],
+  pptAccessPolicy: { entries: [], updatedAt: "1970-01-01T00:00:00.000Z" },
   templates: [],
 };
 

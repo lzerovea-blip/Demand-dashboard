@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterRequirements, filterRequirementsForRegion, listTargetMonths, normalizeLegacyGroupOverride, normalizeRequirement, requirementVisibleInRegion } from "../src/shared/requirements";
+import { cloneRequirementAsCopy, filterRequirements, filterRequirementsForRegion, listTargetMonths, nextRequirementCopyTitle, normalizeLegacyGroupOverride, normalizeRequirement, requirementVisibleInRegion } from "../src/shared/requirements";
 import { splitTextIntoLines } from "../src/shared/text";
 import type { Requirement } from "../src/shared/types";
 
@@ -8,6 +8,27 @@ describe("需求池标题分行", () => {
     expect(splitTextIntoLines("字".repeat(20))).toEqual(["字".repeat(20)]);
     expect(splitTextIntoLines("字".repeat(21))).toEqual(["字".repeat(20), "字"]);
     expect(splitTextIntoLines("字".repeat(41))).toEqual(["字".repeat(20), "字".repeat(20), "字"]);
+  });
+});
+
+describe("需求复制", () => {
+  it("连续副本使用首个空闲序号", () => {
+    expect(nextRequirementCopyTitle("睡眠监测", ["睡眠监测", "睡眠监测 副本（1）", "睡眠监测 副本（3）"])).toBe("睡眠监测 副本（2）");
+    expect(nextRequirementCopyTitle("睡眠监测 副本（1）", ["睡眠监测 副本（1）"])).toBe("睡眠监测 副本（2）");
+  });
+
+  it("复制全部业务字段并重新生成需求和图片 ID 与时间", () => {
+    const source = requirement("r1", "睡眠监测", "d1", "健康基础", "产品专属", "2027-03");
+    source.description = "完整描述";
+    source.productIds = ["p1"];
+    source.images = [{ id: "old-image", name: "a.png", mimeType: "image/png", sizeBytes: 1, dataUrl: "data:image/png;base64,YQ==" }];
+    const ids = ["new-requirement", "new-image"];
+    const copy = cloneRequirementAsCopy(source, [source.title], () => ids.shift()!, "2026-08-28T10:00:00.000Z");
+    expect(copy).toMatchObject({ id: "new-requirement", title: "睡眠监测 副本（1）", description: "完整描述", productIds: ["p1"], createdAt: "2026-08-28T10:00:00.000Z", updatedAt: "2026-08-28T10:00:00.000Z" });
+    expect(copy.images[0].id).toBe("new-image");
+    expect(copy.images[0].dataUrl).toBe(source.images[0].dataUrl);
+    expect(copy.images).not.toBe(source.images);
+    expect(copy.productIds).not.toBe(source.productIds);
   });
 });
 
@@ -29,6 +50,7 @@ describe("历史需求兼容", () => {
     expect(normalized.images).toEqual([]);
     expect(normalized.overseasRegions).toEqual([]);
     expect(normalized.scope).toBe("全球");
+    expect(normalized.allowLatestVersionUpgrade).toBe(false);
     expect(normalized).toMatchObject({
       deviceWorkloadPm: 0,
       appWorkloadPm: 0,
@@ -36,6 +58,12 @@ describe("历史需求兼容", () => {
       unallocatedWorkloadPm: 1,
       workloadPm: 1,
     });
+  });
+
+  it("保留最近版本升级设置并兼容旧数据默认否", () => {
+    const source = requirement("upgrade", "允许升级", "d1", "健康基础", "体验优化", "2027-03");
+    expect(normalizeRequirement({ ...source, allowLatestVersionUpgrade: true }).allowLatestVersionUpgrade).toBe(true);
+    expect(normalizeRequirement({ ...source, allowLatestVersionUpgrade: undefined }).allowLatestVersionUpgrade).toBe(false);
   });
 
   it("由设备、App、云侧和待拆分工作量重新计算合计", () => {
@@ -222,6 +250,7 @@ function requirement(id: string, title: string, domainId: string, source: Requir
     domainId,
     source,
     scope: "全球",
+    allowLatestVersionUpgrade: false,
     overseasRegions: [],
     category,
     targetMonth,

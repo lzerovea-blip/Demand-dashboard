@@ -7,9 +7,9 @@ export const LEGACY_AI_SOURCE = "ai" as const;
 export const LEGACY_UPPERCASE_AI_SOURCE = "AI" as const;
 export const LEGACY_MEDICAL_SUBMISSION_SOURCE = "医疗送检" as const;
 
-type LegacyRequirement = Omit<Requirement, "source" | "scope" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
+type LegacyRequirement = Omit<Requirement, "source" | "scope" | "allowLatestVersionUpgrade" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
   { source: RequirementSource | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE } &
-  Partial<Pick<Requirement, "scope" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
+  Partial<Pick<Requirement, "scope" | "allowLatestVersionUpgrade" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
 
 export function normalizeRequirement(input: LegacyRequirement): Requirement {
   const hasBreakdown = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "unallocatedWorkloadPm"]
@@ -28,6 +28,7 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
     ...input,
     source,
     scope: normalizeRequirementScope(input.scope),
+    allowLatestVersionUpgrade: input.allowLatestVersionUpgrade === true,
     description: typeof input.description === "string" ? input.description : "",
     images: Array.isArray(input.images) ? input.images : [],
     domainL0Id: typeof input.domainL0Id === "string" ? input.domainL0Id : "",
@@ -107,4 +108,40 @@ export function filterRequirements(
       && (!filters.category || item.category === filters.category)
       && (!filters.targetMonth || item.targetMonth === filters.targetMonth);
   });
+}
+
+const COPY_TITLE_PATTERN = /^(.*?)\s*副本（([1-9]\d*)）$/u;
+
+export function requirementCopyBaseTitle(title: string): string {
+  return COPY_TITLE_PATTERN.exec(title.trim())?.[1]?.trim() || title.trim();
+}
+
+export function nextRequirementCopyTitle(title: string, existingTitles: Iterable<string>): string {
+  const base = requirementCopyBaseTitle(title);
+  const used = new Set<number>();
+  for (const candidate of existingTitles) {
+    const match = COPY_TITLE_PATTERN.exec(candidate.trim());
+    if (match?.[1]?.trim() === base) used.add(Number(match[2]));
+  }
+  let index = 1;
+  while (used.has(index)) index += 1;
+  return `${base} 副本（${index}）`;
+}
+
+export function cloneRequirementAsCopy(
+  source: Requirement,
+  existingTitles: Iterable<string>,
+  createId: () => string = () => crypto.randomUUID(),
+  now = new Date().toISOString(),
+): Requirement {
+  return {
+    ...source,
+    id: createId(),
+    title: nextRequirementCopyTitle(source.title, existingTitles),
+    images: source.images.map((image) => ({ ...image, id: createId() })),
+    productIds: [...source.productIds],
+    overseasRegions: [...source.overseasRegions],
+    createdAt: now,
+    updatedAt: now,
+  };
 }

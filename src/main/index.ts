@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
-import { basename, join } from "node:path";
-import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { LocalDatabase } from "./database.js";
 import { createWorkspacePackage, inspectWorkspacePackage, type PreparedWorkspaceImport } from "./workspacePackage.js";
 import type {
@@ -10,11 +10,15 @@ import type {
   SaveRequirementInput,
   HalfYearRange,
   PptExportRequest,
+  SaveMemberInput,
+  SavePptAccessPolicyInput,
   WorkspaceImportMode,
 } from "../shared/types.js";
 import { buildPptExportPlan } from "../shared/pptExport.js";
 import { halfYearSequence } from "../shared/roadmap.js";
 import { createRoadmapPresentation } from "./pptxExport.js";
+import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm } from "./pptIrm.js";
+import { pptPermissionExpiration } from "../shared/pptAccess.js";
 import {
   createWorkspaceWorkbook,
   inspectWorkspaceWorkbook,
@@ -23,7 +27,7 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-08-27";
+const APP_RELEASED_AT = "2026-08-31";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
@@ -81,11 +85,16 @@ function registerIpc(): void {
     targetWindow.setFullScreen(enabled);
   });
   ipcMain.handle("requirements:save", (_event, input: SaveRequirementInput) => database.saveRequirement(input));
+  ipcMain.handle("requirements:duplicate", (_event, id: string) => database.duplicateRequirement(id));
   ipcMain.handle("requirements:delete", (_event, id: string) => database.deleteRequirement(id));
   ipcMain.handle("domains:save", (_event, input: SaveDictionaryInput) => database.saveDomain(input));
   ipcMain.handle("domains:delete", (_event, id: string) => database.deleteDomain(id));
   ipcMain.handle("products:save", (_event, input: SaveDictionaryInput) => database.saveProduct(input));
   ipcMain.handle("products:delete", (_event, id: string) => database.deleteProduct(id));
+  ipcMain.handle("members:save", (_event, input: SaveMemberInput) => database.saveMember(input));
+  ipcMain.handle("members:delete", (_event, id: string) => database.deleteMember(id));
+  ipcMain.handle("ppt-access:save", (_event, input: SavePptAccessPolicyInput) => database.savePptAccessPolicy(input));
+  ipcMain.handle("ppt-access:check-environment", () => checkPowerPointIrmEnvironment());
   ipcMain.handle("groups:save", (_event, input: SaveGroupOverrideInput) => database.saveGroupOverride(input));
   ipcMain.handle("groups:reorder", (_event, input: SaveGroupOrderInput) => database.saveGroupOrder(input));
 
@@ -113,17 +122,18 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     const filePath = result.filePaths[0];
-    const prepared = await inspectWorkspacePackage(await readFile(filePath), basename(filePath));
+    const prepared = await inspectWorkspacePackage(await readFile(filePath), basename(filePath), database.getWorkspaceData());
     const token = crypto.randomUUID();
     pendingImports.clear();
     pendingImports.set(token, prepared);
     return { canceled: false, preview: { token, fileName: basename(filePath), ...prepared.preview } };
   });
 
-  ipcMain.handle("workspace:apply", async (_event, input: { token: string; mode: WorkspaceImportMode }) => {
+  ipcMain.handle("workspace:apply", async (_event, input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string }) => {
     if (!input || !["merge", "replace"].includes(input.mode)) throw new Error("请选择有效的导入方式");
     const prepared = pendingImports.get(input.token);
     if (!prepared) throw new Error("导入数据已失效，请重新选择数据包");
+    if (input.mode === "merge" && input.differenceDigest !== prepared.preview.differenceDigest) throw new Error("请先核对并确认全部合并差异");
     pendingImports.delete(input.token);
     return { snapshot: await database.importWorkspace(prepared.data, input.mode) };
   });
@@ -157,10 +167,11 @@ function registerIpc(): void {
     return { canceled: false, preview: { token, fileName: basename(filePath), ...prepared.preview } };
   });
 
-  ipcMain.handle("workbook:apply", async (_event, input: { token: string; conflictMode: WorkspaceWorkbookConflictMode }) => {
+  ipcMain.handle("workbook:apply", async (_event, input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string }) => {
     if (!input || !["local-wins", "excel-wins"].includes(input.conflictMode)) throw new Error("请选择有效的冲突处理方式");
     const prepared = pendingWorkbookImports.get(input.token);
     if (!prepared) throw new Error("Excel 导入数据已失效，请重新选择文件");
+    if (input.differenceDigest !== prepared.preview.differenceDigest) throw new Error("请先核对并确认全部 Excel 差异");
     if (prepared.parsed.errors.length) throw new Error("Excel 存在校验错误，请修正后重新导入");
     pendingWorkbookImports.delete(input.token);
     return { snapshot: await database.importWorkspaceWorkbook(prepared, input.conflictMode) };
@@ -182,7 +193,12 @@ function registerIpc(): void {
 
   ipcMain.handle("presentation:export", async (_event, input: PptExportRequest) => {
     const snapshot = database.getSnapshot();
+    if (!snapshot.pptAccessPolicy.entries.length) throw new Error("请先配置并保存 PPT 成员白名单");
+    const environment = await checkPowerPointIrmEnvironment();
+    if (!environment.supported || !environment.powerPointInstalled || !environment.irmReady) throw new Error(environment.message);
     const plan = buildPptExportPlan(snapshot, input);
+    const exportedAt = new Date();
+    const expiration = pptPermissionExpiration(exportedAt);
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: "导出需求路标PPT",
       defaultPath: `${plan.materialName.replace(/[\\/:*?\"<>|]/g, "-")}-${input.start}-${input.end}-${new Date().toISOString().slice(0, 10)}.pptx`,
@@ -190,7 +206,22 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     const outputPath = result.filePath.toLowerCase().endsWith(".pptx") ? result.filePath : `${result.filePath}.pptx`;
-    await writeFile(outputPath, await createRoadmapPresentation(snapshot, input));
+    const tempDirectory = await mkdtemp(join(dirname(outputPath), ".solution-ppt-"));
+    const editablePath = join(tempDirectory, "roadmap-editable.pptx");
+    const protectedPath = join(tempDirectory, "roadmap-protected.pptx");
+    try {
+      await writeFile(editablePath, await createRoadmapPresentation(snapshot, input, { exportedAt, expiration }));
+      await protectPowerPointWithIrm({
+        inputPath: editablePath,
+        outputPath: protectedPath,
+        members: snapshot.members,
+        policy: snapshot.pptAccessPolicy,
+        expiration,
+      });
+      await copyFile(protectedPath, outputPath);
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
     return { canceled: false, path: outputPath, slideCount: plan.slideCount };
   });
 }

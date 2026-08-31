@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
+import { createHash } from "node:crypto";
 import { createWorkspacePackage, inspectWorkspacePackage } from "../src/main/workspacePackage";
 import type { RequirementImage, WorkspaceData } from "../src/shared/types";
 
@@ -22,6 +23,7 @@ const workspace: WorkspaceData = {
     domainId: "d1",
     source: "健康基础",
     scope: "全球",
+    allowLatestVersionUpgrade: false,
     overseasRegions: [],
     category: "产品专属",
     targetMonth: "2027-03",
@@ -40,6 +42,8 @@ const workspace: WorkspaceData = {
   ],
   products: [{ id: "p1", name: "手表", sortOrder: 0, active: true }],
   groupOverrides: [{ groupKey: "d1::健康基础::2027-03", cardTitle: "睡眠", cardSummary: "摘要", sortOrder: 2, updatedAt: "2026-08-20T00:00:00.000Z" }],
+  members: [],
+  pptAccessPolicy: { entries: [], updatedAt: "1970-01-01T00:00:00.000Z" },
 };
 
 describe(".roadmap 数据包", () => {
@@ -52,6 +56,30 @@ describe(".roadmap 数据包", () => {
       exportedAt: "2026-08-20T08:00:00.000Z",
       counts: { requirements: 1, images: 1, domains: 2, products: 1, groupOverrides: 1 },
     });
+  });
+
+  it("合并检查返回全部逐字段差异和确认摘要", async () => {
+    const incoming: WorkspaceData = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({ ...item, title: "社交时差升级", scope: "仅国内" as const, updatedAt: "2026-08-30T00:00:00.000Z" })),
+    };
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(incoming, "0.7.28"), "差异.roadmap", workspace);
+    expect(inspected.preview.differences).toHaveLength(1);
+    expect(inspected.preview.differences[0]).toMatchObject({ entity: "需求", title: "社交时差升级", change: "修改" });
+    expect(inspected.preview.differences[0].fields.map((item) => item.field)).toEqual(expect.arrayContaining(["需求标题", "适用范围", "更新时间"]));
+    expect(inspected.preview.differenceDigest).toMatch(/^diff-/);
+  });
+
+  it("完整往返人员责任矩阵和 PPT 白名单", async () => {
+    const withMembers: WorkspaceData = {
+      ...workspace,
+      members: [{ id: "m1", name: "林规划", employeeNumber: "E001", microsoftAccount: "planner@company.com", role: "规划", domainL1Ids: ["d1"], sortOrder: 0, createdAt: "2026-08-20T00:00:00.000Z", updatedAt: "2026-08-28T00:00:00.000Z" }],
+      pptAccessPolicy: { entries: [{ memberId: "m1", permission: "read" }], updatedAt: "2026-08-28T00:00:00.000Z" },
+    };
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(withMembers, "0.7.23"), "人员.roadmap");
+    expect(inspected.data.members).toEqual(withMembers.members);
+    expect(inspected.data.pptAccessPolicy).toEqual(withMembers.pptAccessPolicy);
+    expect(inspected.preview.counts).toMatchObject({ members: 1, whitelistEntries: 1 });
   });
 
   it("允许三端工作量全部为零的数据完整往返", async () => {
@@ -125,6 +153,24 @@ describe(".roadmap 数据包", () => {
     expect(inspected.data.requirements[0].domainL0Id).toBe("");
     expect(inspected.data.requirements[0].scope).toBe("全球");
     expect(inspected.data.domains[0]).toMatchObject({ id: "d1", level: "L1" });
+  });
+
+  it("兼容缺少人员与白名单的 v1 roadmap 包", async () => {
+    const zip = await JSZip.loadAsync(await createWorkspacePackage(workspace, "0.7.22"));
+    const data = JSON.parse(await zip.file("data.json")!.async("string"));
+    delete data.members;
+    delete data.pptAccessPolicy;
+    const dataBytes = Buffer.from(`${JSON.stringify(data, null, 2)}\n`);
+    zip.file("data.json", dataBytes);
+    const manifest = JSON.parse(await zip.file("manifest.json")!.async("string"));
+    manifest.formatVersion = 1;
+    delete manifest.counts.members;
+    delete manifest.counts.whitelistEntries;
+    manifest.files["data.json"] = { sha256: createHash("sha256").update(dataBytes).digest("hex"), sizeBytes: dataBytes.length };
+    zip.file("manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+    const inspected = await inspectWorkspacePackage(await zip.generateAsync({ type: "nodebuffer" }), "v1.roadmap");
+    expect(inspected.data.members).toEqual([]);
+    expect(inspected.data.pptAccessPolicy.entries).toEqual([]);
   });
 
   it("旧数据包中的 AI 来源和卡片键迁移为 AI综合", async () => {

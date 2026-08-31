@@ -23,6 +23,7 @@ import {
 import { latestRequirementSelections } from "../shared/entryDefaults";
 import { ALL_DICTIONARY_PARENTS, filterDictionaryItemsByParent } from "../shared/dictionaries";
 import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type RoadmapRegion } from "../shared/requirements";
+import { requirementMatchesResponsibleMember, responsibleMembers, visibleMembersForRole } from "../shared/members";
 import { splitTextIntoLines } from "../shared/text";
 import { restoreFocusAfterConfirmation } from "./confirmation";
 import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS } from "../shared/pptExport";
@@ -31,6 +32,7 @@ import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftFor
 import {
   CATEGORY_META,
   CATEGORIES,
+  MEMBER_ROLES,
   MAX_REQUIREMENT_IMAGE_BYTES,
   MAX_REQUIREMENT_IMAGES,
   ROADMAP_TRACKS,
@@ -40,6 +42,9 @@ import {
   type AppInfo,
   type AppSnapshot,
   type DictionaryItem,
+  type IrmEnvironmentStatus,
+  type Member,
+  type MemberRole,
   type Requirement,
   type RequirementCategory,
   type RequirementImage,
@@ -47,6 +52,8 @@ import {
   type RequirementSource,
   type PptExportSectionId,
   type SaveDictionaryInput,
+  type SaveMemberInput,
+  type SavePptAccessPolicyInput,
   type SaveRequirementInput,
   type Track,
   type WorkspaceImportMode,
@@ -83,8 +90,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.22",
-  releasedAt: "2026-08-27",
+  version: "0.7.29",
+  releasedAt: "2026-08-31",
   author: "林忠维",
 };
 
@@ -93,6 +100,8 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
   domains: [],
   products: [],
   groupOverrides: [],
+  members: [],
+  pptAccessPolicy: { entries: [], updatedAt: "1970-01-01T00:00:00.000Z" },
   templates: [],
 };
 
@@ -380,6 +389,7 @@ export default function App() {
             <RequirementsPage
               snapshot={snapshot}
               onEdit={setEditor}
+              onDuplicate={(id) => update(() => window.roadmapApi.duplicateRequirement(id), "需求副本已创建").then(() => undefined)}
               onDelete={(id) => update(() => window.roadmapApi.deleteRequirement(id), "需求已删除").then(() => undefined)}
               requestConfirmation={requestConfirmation}
             />
@@ -407,10 +417,13 @@ export default function App() {
             <DictionariesPage
               domains={snapshot.domains}
               products={snapshot.products}
+              members={snapshot.members}
               onSaveDomain={async (input) => { await update(() => window.roadmapApi.saveDomain(input), "领域已保存"); }}
               onSaveProduct={async (input) => { await update(() => window.roadmapApi.saveProduct(input), "产品已保存"); }}
               onDeleteDomain={async (id) => { await update(() => window.roadmapApi.deleteDomain(id), "领域已删除"); }}
               onDeleteProduct={async (id) => { await update(() => window.roadmapApi.deleteProduct(id), "产品已删除"); }}
+              onSaveMember={async (input) => { await update(() => window.roadmapApi.saveMember(input), "成员已保存"); }}
+              onDeleteMember={async (id) => { await update(() => window.roadmapApi.deleteMember(id), "成员已删除"); }}
               requestConfirmation={requestConfirmation}
             />
           )}
@@ -444,9 +457,9 @@ export default function App() {
                   return undefined;
                 }
               }}
-              onApplyWorkspace={async (token, mode) => {
+              onApplyWorkspace={async (token, mode, differenceDigest) => {
                 try {
-                  const result = await window.roadmapApi.applyWorkspacePackage({ token, mode });
+                  const result = await window.roadmapApi.applyWorkspacePackage({ token, mode, differenceDigest });
                   setSnapshot(result.snapshot);
                   setNotice(mode === "merge" ? "数据包已合并导入" : "数据包已整体替换导入");
                   return true;
@@ -472,9 +485,9 @@ export default function App() {
                   return undefined;
                 }
               }}
-              onApplyWorkbook={async (token, conflictMode) => {
+              onApplyWorkbook={async (token, conflictMode, differenceDigest) => {
                 try {
-                  const result = await window.roadmapApi.applyWorkspaceWorkbook({ token, conflictMode });
+                  const result = await window.roadmapApi.applyWorkspaceWorkbook({ token, conflictMode, differenceDigest });
                   setSnapshot(result.snapshot);
                   setNotice(conflictMode === "local-wins" ? "协作 Excel 已合并，冲突保留本机版本" : "协作 Excel 已合并，冲突采用 Excel 版本");
                   return true;
@@ -483,6 +496,10 @@ export default function App() {
                   return false;
                 }
               }}
+              onSavePptAccessPolicy={async (input) => {
+                await update(() => window.roadmapApi.savePptAccessPolicy(input), "PPT 白名单已保存");
+              }}
+              onCheckIrm={() => window.roadmapApi.checkIrmEnvironment()}
             />
           )}
         </section>
@@ -615,11 +632,15 @@ function PeriodSelector({ start, end, onStart, onEnd }: { start: string; end: st
   );
 }
 
-function RequirementsPage({ snapshot, onEdit, onDelete, requestConfirmation }: { snapshot: AppSnapshot; onEdit: (value: Requirement) => void; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
+function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConfirmation }: { snapshot: AppSnapshot; onEdit: (value: Requirement) => void; onDuplicate: (id: string) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<RequirementSource | "">("");
   const [category, setCategory] = useState<RequirementCategory | "">("");
   const [targetMonth, setTargetMonth] = useState("");
+  const [planningMemberId, setPlanningMemberId] = useState("");
+  const [productManagerMemberId, setProductManagerMemberId] = useState("");
+  const [seMemberId, setSeMemberId] = useState("");
+  const [copyingId, setCopyingId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const domains = new Map(snapshot.domains.map((item) => [item.id, item.name]));
   const products = new Map(snapshot.products.map((item) => [item.id, item.name]));
@@ -627,7 +648,29 @@ function RequirementsPage({ snapshot, onEdit, onDelete, requestConfirmation }: {
   useEffect(() => {
     if (targetMonth && !targetMonths.includes(targetMonth)) setTargetMonth("");
   }, [targetMonth, targetMonths.join("|")]);
-  const rows = filterRequirements(snapshot.requirements, domains, { query, source, category, targetMonth });
+  const baseRows = filterRequirements(snapshot.requirements, domains, { query, source, category, targetMonth });
+  const visibleDomainIds = new Set(baseRows.map((item) => item.domainId));
+  const planningMembers = visibleMembersForRole(snapshot.members, visibleDomainIds, "规划");
+  const productManagers = visibleMembersForRole(snapshot.members, visibleDomainIds, "产品经理");
+  const seMembers = visibleMembersForRole(snapshot.members, visibleDomainIds, "SE");
+  useEffect(() => {
+    if (planningMemberId && !planningMembers.some((item) => item.id === planningMemberId)) setPlanningMemberId("");
+    if (productManagerMemberId && !productManagers.some((item) => item.id === productManagerMemberId)) setProductManagerMemberId("");
+    if (seMemberId && !seMembers.some((item) => item.id === seMemberId)) setSeMemberId("");
+  }, [planningMemberId, productManagerMemberId, seMemberId, planningMembers.map((item) => item.id).join("|"), productManagers.map((item) => item.id).join("|"), seMembers.map((item) => item.id).join("|")]);
+  const rows = baseRows.filter((item) => requirementMatchesResponsibleMember(item, snapshot.members, "规划", planningMemberId)
+    && requirementMatchesResponsibleMember(item, snapshot.members, "产品经理", productManagerMemberId)
+    && requirementMatchesResponsibleMember(item, snapshot.members, "SE", seMemberId));
+
+  async function duplicate(id: string) {
+    if (copyingId) return;
+    setCopyingId(id);
+    try {
+      await onDuplicate(id);
+    } finally {
+      setCopyingId(null);
+    }
+  }
 
   return (
     <>
@@ -637,25 +680,40 @@ function RequirementsPage({ snapshot, onEdit, onDelete, requestConfirmation }: {
           <select value={source} onChange={(event) => setSource(event.target.value as RequirementSource | "")}><option value="">全部来源</option>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={category} onChange={(event) => setCategory(event.target.value as RequirementCategory | "")}><option value="">全部分类</option>{CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={targetMonth} onChange={(event) => setTargetMonth(event.target.value)}><option value="">全部月份</option>{targetMonths.map((item) => <option key={item} value={item}>{formatMonth(item)}</option>)}</select>
+          <select value={planningMemberId} onChange={(event) => setPlanningMemberId(event.target.value)}><option value="">全部规划</option>{planningMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          <select value={productManagerMemberId} onChange={(event) => setProductManagerMemberId(event.target.value)}><option value="">全部产品经理</option>{productManagers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          <select value={seMemberId} onChange={(event) => setSeMemberId(event.target.value)}><option value="">全部 SE</option>{seMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
           <span className="toolbar-count">显示 {rows.length} / {snapshot.requirements.length}</span>
         </div>
         {rows.length ? (
-          <div className="table-wrap">
+          <div className="table-wrap requirements-table-wrap">
             <table className="requirements-table">
-              <thead><tr><th>需求标题</th><th>领域 L0</th><th>领域 L1</th><th>来源</th><th>适用范围</th><th>分类</th><th>上线月份</th><th>匹配产品</th><th className="numeric">工作量</th><th /></tr></thead>
+              <colgroup>
+                <col className="requirement-col-title" />
+                <col className="requirement-col-domain" />
+                <col className="requirement-col-source" />
+                <col className="requirement-col-month" />
+                <col className="requirement-col-product" />
+                <col className="requirement-col-owner" />
+                <col className="requirement-col-owner" />
+                <col className="requirement-col-owner" />
+                <col className="requirement-col-workload" />
+                <col className="requirement-col-actions" />
+              </colgroup>
+              <thead><tr><th>需求标题</th><th>领域 L1</th><th>来源</th><th>上线月份</th><th>匹配产品</th><th>规划</th><th>产品经理</th><th>SE</th><th className="numeric">工作量</th><th /></tr></thead>
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
                     <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={item.title}>{splitTextIntoLines(item.title).map((line, index) => <span key={`${index}-${line}`}>{line}</span>)}</strong>{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></td>
-                    <td>{domains.get(item.domainL0Id) ?? "—"}</td>
                     <td>{domains.get(item.domainId) ?? "未命名"}</td>
                     <td><SourceBadge source={item.source} /></td>
-                    <td><ScopeBadge scope={item.scope} /></td>
-                    <td><span className={`category ${CATEGORY_META[item.category].className}`}>{item.category}</span></td>
                     <td>{formatMonth(item.targetMonth)}</td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
+                    <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "规划")} /></td>
+                    <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "产品经理")} /></td>
+                    <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "SE")} /></td>
                     <td className="numeric workload-cell"><b>{formatNumber(item.workloadPm)} PM</b><span>{formatWorkloadBreakdown(workloadBreakdownOf(item))}</span></td>
-                    <td className="row-actions"><button onClick={() => onEdit(item)}>编辑</button><button className="danger-text" onClick={(event) => requestConfirmation({ title: "删除需求", message: "确定删除这条需求？此操作可通过完整需求包恢复。", confirmLabel: "确认删除", action: () => onDelete(item.id) }, event.currentTarget, searchInputRef.current)}>删除</button></td>
+                    <td className="row-actions"><button onClick={() => onEdit(item)}>编辑</button><button disabled={Boolean(copyingId)} onClick={() => void duplicate(item.id)}>{copyingId === item.id ? "复制中…" : "复制"}</button><button className="danger-text" onClick={(event) => requestConfirmation({ title: "删除需求", message: "确定删除这条需求？此操作可通过完整需求包恢复。", confirmLabel: "确认删除", action: () => onDelete(item.id) }, event.currentTarget, searchInputRef.current)}>删除</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -1242,6 +1300,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       domainId: value.domainId,
       source: value.source,
       scope: value.scope,
+      allowLatestVersionUpgrade: value.allowLatestVersionUpgrade,
       overseasRegions: value.overseasRegions ?? [],
       category: value.category,
       targetMonth: value.targetMonth,
@@ -1261,6 +1320,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
       domainId: linkedDomainL1s.some((item) => item.id === previous?.domainId) ? previous?.domainId ?? "" : linkedDomainL1s[0]?.id ?? "",
       source: previous?.source ?? "运动基础",
       scope: previous?.scope ?? "全球",
+      allowLatestVersionUpgrade: false,
       overseasRegions: previous?.overseasRegions ?? [],
       category: previous?.category ?? "体验优化",
       targetMonth: previous?.targetMonth ?? new Date().toISOString().slice(0, 7),
@@ -1385,20 +1445,36 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
             }}>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select></Field>
             <Field label="上线年月" required><input type="month" value={form.targetMonth} onChange={(event) => setForm({ ...form, targetMonth: event.target.value })} /></Field>
           </div>
-          <Field label="适用范围" required>
-            <div className="segmented scope-segmented" role="radiogroup" aria-label="适用范围">
-              {REQUIREMENT_SCOPES.map((item) => (
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={form.scope === item}
-                  key={item}
-                  className={form.scope === item ? "active" : ""}
-                  onClick={() => setForm({ ...form, scope: item })}
-                >{item}</button>
-              ))}
-            </div>
-          </Field>
+          <div className="form-row-pair">
+            <Field label="适用范围" required>
+              <div className="segmented scope-segmented" role="radiogroup" aria-label="适用范围">
+                {REQUIREMENT_SCOPES.map((item) => (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={form.scope === item}
+                    key={item}
+                    className={form.scope === item ? "active" : ""}
+                    onClick={() => setForm({ ...form, scope: item })}
+                  >{item}</button>
+                ))}
+              </div>
+            </Field>
+            <Field label="允许最近版本升级" required>
+              <div className="segmented" role="radiogroup" aria-label="允许最近版本升级">
+                {[{ label: "是", value: true }, { label: "否", value: false }].map((item) => (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={form.allowLatestVersionUpgrade === item.value}
+                    key={item.label}
+                    className={form.allowLatestVersionUpgrade === item.value ? "active" : ""}
+                    onClick={() => setForm({ ...form, allowLatestVersionUpgrade: item.value })}
+                  >{item.label}</button>
+                ))}
+              </div>
+            </Field>
+          </div>
           <div className="form-row-pair category-product-row">
             <Field label="分类" required><div className="segmented category-segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "体验优化" ? [] : form.productIds.slice(0, 1) })}>{item}</button>)}</div></Field>
             <Field label="匹配产品" required={form.category === "产品专属"}>
@@ -1584,7 +1660,7 @@ function ImageViewer({ images, index, closeButtonRef, onSelect, onClose }: {
   );
 }
 
-function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDeleteDomain, onDeleteProduct, requestConfirmation }: { domains: DictionaryItem[]; products: DictionaryItem[]; onSaveDomain: (input: SaveDictionaryInput) => Promise<void>; onSaveProduct: (input: SaveDictionaryInput) => Promise<void>; onDeleteDomain: (id: string) => Promise<void>; onDeleteProduct: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
+function DictionariesPage({ domains, products, members, onSaveDomain, onSaveProduct, onDeleteDomain, onDeleteProduct, onSaveMember, onDeleteMember, requestConfirmation }: { domains: DictionaryItem[]; products: DictionaryItem[]; members: Member[]; onSaveDomain: (input: SaveDictionaryInput) => Promise<void>; onSaveProduct: (input: SaveDictionaryInput) => Promise<void>; onDeleteDomain: (id: string) => Promise<void>; onDeleteProduct: (id: string) => Promise<void>; onSaveMember: (input: SaveMemberInput) => Promise<void>; onDeleteMember: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const domainL0s = domains.filter((item) => item.level === "L0");
   const domainL1s = domains.filter((item) => (item.level ?? "L1") === "L1");
   return (
@@ -1592,8 +1668,93 @@ function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDe
       <DictionaryPanel title="领域 L0 字典" subtitle="上游领域；一个 L0 可以关联多个 L1" items={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L0", parentId: undefined })} onDelete={onDeleteDomain} requestConfirmation={requestConfirmation} />
       <DictionaryPanel title="领域 L1 字典" subtitle="新增或调整 L1 时必须指定所属 L0；路标仅显示 L1" items={domainL1s} parentOptions={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L1" })} onDelete={onDeleteDomain} requestConfirmation={requestConfirmation} />
       <DictionaryPanel title="产品字典" subtitle="平台演进可选一个产品，产品专属必须选择；体验优化不匹配产品" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} requestConfirmation={requestConfirmation} />
+      <MembersPanel domains={domains} members={members} onSave={onSaveMember} onDelete={onDeleteMember} requestConfirmation={requestConfirmation} />
     </div>
   );
+}
+
+function MembersPanel({ domains, members, onSave, onDelete, requestConfirmation }: { domains: DictionaryItem[]; members: Member[]; onSave: (input: SaveMemberInput) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
+  const domainL1s = domains.filter((item) => (item.level ?? "L1") === "L1");
+  const [editingId, setEditingId] = useState<string | undefined>();
+  const [name, setName] = useState("");
+  const [employeeNumber, setEmployeeNumber] = useState("");
+  const [microsoftAccount, setMicrosoftAccount] = useState("");
+  const [role, setRole] = useState<MemberRole | "">("");
+  const [domainL1Ids, setDomainL1Ids] = useState<string[]>([]);
+  const [roleFilter, setRoleFilter] = useState<MemberRole | "">("");
+  const [domainFilter, setDomainFilter] = useState("");
+  const [saving, setSaving] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const domainNames = new Map(domains.map((item) => [item.id, item.name]));
+  const visibleMembers = members.filter((item) => (!roleFilter || item.role === roleFilter) && (!domainFilter || item.domainL1Ids.includes(domainFilter)));
+
+  function reset() {
+    setEditingId(undefined);
+    setName("");
+    setEmployeeNumber("");
+    setMicrosoftAccount("");
+    setRole("");
+    setDomainL1Ids([]);
+  }
+
+  function edit(member: Member) {
+    setEditingId(member.id);
+    setName(member.name);
+    setEmployeeNumber(member.employeeNumber);
+    setMicrosoftAccount(member.microsoftAccount);
+    setRole(member.role ?? "");
+    setDomainL1Ids([...member.domainL1Ids]);
+    nameInputRef.current?.focus();
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onSave({ id: editingId, name, employeeNumber, microsoftAccount, role: role || undefined, domainL1Ids });
+      reset();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <section className="panel members-panel">
+    <PanelTitle title="人员管理" subtitle="按领域 L1 自动建立规划、产品经理和 SE 责任矩阵；账号用于企业 PPT 权限。" />
+    <form className="member-editor" onSubmit={submit}>
+      <div className="member-fields">
+        <Field label="成员姓名" required><input ref={nameInputRef} value={name} onChange={(event) => setName(event.target.value)} placeholder="请输入姓名" /></Field>
+        <Field label="工号" required><input value={employeeNumber} onChange={(event) => setEmployeeNumber(event.target.value)} placeholder="唯一工号" /></Field>
+        <Field label="Microsoft 365 账号" required><input type="email" value={microsoftAccount} onChange={(event) => setMicrosoftAccount(event.target.value)} placeholder="name@company.com" /></Field>
+        <Field label="岗位角色"><select value={role} onChange={(event) => setRole(event.target.value as MemberRole | "")}><option value="">未填写</option>{MEMBER_ROLES.map((item) => <option key={item}>{item}</option>)}</select></Field>
+        <div className="field member-domain-field">
+          <span>负责领域 L1</span>
+          <details className="member-domain-select">
+            <summary>{domainL1Ids.length ? `已选择 ${domainL1Ids.length} 个领域` : "选择负责领域"}</summary>
+            <div className="member-domain-menu">
+              {domainL1s.map((item) => <label key={item.id}><input type="checkbox" checked={domainL1Ids.includes(item.id)} onChange={(event) => setDomainL1Ids((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><span>{item.name}</span></label>)}
+              {!domainL1s.length && <em>请先新增领域 L1</em>}
+            </div>
+          </details>
+        </div>
+      </div>
+      <div className="member-editor-actions">{editingId && <button type="button" className="button ghost" onClick={reset}>取消编辑</button>}<button className="button primary" disabled={saving || !name.trim() || !employeeNumber.trim() || !microsoftAccount.trim()}>{saving ? "保存中…" : editingId ? "保存修改" : "新增成员"}</button></div>
+    </form>
+    <div className="member-list-toolbar">
+      <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as MemberRole | "")}><option value="">全部角色</option>{MEMBER_ROLES.map((item) => <option key={item}>{item}</option>)}</select>
+      <select value={domainFilter} onChange={(event) => setDomainFilter(event.target.value)}><option value="">全部领域 L1</option>{domainL1s.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+      <span>{visibleMembers.length} 名成员</span>
+    </div>
+    <div className="member-list">
+      {visibleMembers.map((member) => <div className="member-item" key={member.id}>
+        <div><strong>{member.name}</strong><span>{member.role || "未填写角色"}</span></div>
+        <div><b>{member.employeeNumber}</b><small>{member.microsoftAccount}</small></div>
+        <div className="member-domains">{member.domainL1Ids.length ? member.domainL1Ids.map((id) => <span key={id}>{domainNames.get(id) ?? "已删除领域"}</span>) : <em>未配置负责领域</em>}</div>
+        <div className="row-actions"><button type="button" onClick={() => edit(member)}>编辑</button><button type="button" className="danger-text" onClick={(event) => requestConfirmation({ title: "删除成员", message: `确定删除“${member.name}”？`, confirmLabel: "确认删除", action: () => onDelete(member.id) }, event.currentTarget, nameInputRef.current)}>删除</button></div>
+      </div>)}
+      {!visibleMembers.length && <Empty title="暂无符合条件的成员" body="可在上方录入姓名、工号、企业账号、角色和负责领域。" />}
+    </div>
+  </section>;
 }
 
 function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDelete, requestConfirmation }: { title: string; subtitle: string; items: DictionaryItem[]; parentOptions?: DictionaryItem[]; onSave: (input: SaveDictionaryInput) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
@@ -1686,17 +1847,19 @@ function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDele
   );
 }
 
-function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook }: {
+function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook, onSavePptAccessPolicy, onCheckIrm }: {
   snapshot: AppSnapshot;
   start: string;
   end: string;
   onExportPpt: (config: { materialName: string; sections: PptExportSectionId[] }) => Promise<void>;
   onExportWorkspace: () => Promise<void>;
   onInspectWorkspace: () => Promise<WorkspaceImportPreview | undefined>;
-  onApplyWorkspace: (token: string, mode: WorkspaceImportMode) => Promise<boolean>;
+  onApplyWorkspace: (token: string, mode: WorkspaceImportMode, differenceDigest?: string) => Promise<boolean>;
   onExportWorkbook: () => Promise<void>;
   onInspectWorkbook: () => Promise<WorkspaceWorkbookImportPreview | undefined>;
-  onApplyWorkbook: (token: string, conflictMode: WorkspaceWorkbookConflictMode) => Promise<boolean>;
+  onApplyWorkbook: (token: string, conflictMode: WorkspaceWorkbookConflictMode, differenceDigest: string) => Promise<boolean>;
+  onSavePptAccessPolicy: (input: SavePptAccessPolicyInput) => Promise<void>;
+  onCheckIrm: () => Promise<IrmEnvironmentStatus>;
 }) {
   const [preview, setPreview] = useState<WorkspaceImportPreview | null>(null);
   const [workbookPreview, setWorkbookPreview] = useState<WorkspaceWorkbookImportPreview | null>(null);
@@ -1704,17 +1867,37 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   const [workbookInspecting, setWorkbookInspecting] = useState(false);
   const [applying, setApplying] = useState<WorkspaceImportMode | null>(null);
   const [workbookApplying, setWorkbookApplying] = useState<WorkspaceWorkbookConflictMode | null>(null);
+  const [packageDifferencesConfirmed, setPackageDifferencesConfirmed] = useState(false);
+  const [workbookDifferencesConfirmed, setWorkbookDifferencesConfirmed] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [pptMaterialName, setPptMaterialName] = useState("解决方案需求路标");
   const [pptSections, setPptSections] = useState<PptExportSectionId[]>([...DEFAULT_PPT_EXPORT_SECTIONS]);
+  const [whitelistEntries, setWhitelistEntries] = useState(snapshot.pptAccessPolicy.entries);
+  const [candidateMemberId, setCandidateMemberId] = useState("");
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [checkingIrm, setCheckingIrm] = useState(false);
+  const [irmStatus, setIrmStatus] = useState<IrmEnvironmentStatus | null>(null);
+  const [securityMessage, setSecurityMessage] = useState("");
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
   const workbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).length;
+  const memberById = new Map(snapshot.members.map((item) => [item.id, item]));
+  const availableMembers = snapshot.members.filter((item) => !whitelistEntries.some((entry) => entry.memberId === item.id));
+  const policyDirty = JSON.stringify(whitelistEntries) !== JSON.stringify(snapshot.pptAccessPolicy.entries);
+  useEffect(() => {
+    setWhitelistEntries(snapshot.pptAccessPolicy.entries);
+  }, [snapshot.pptAccessPolicy.updatedAt]);
+  useEffect(() => {
+    if (candidateMemberId && !availableMembers.some((item) => item.id === candidateMemberId)) setCandidateMemberId("");
+  }, [candidateMemberId, availableMembers.map((item) => item.id).join("|")]);
 
   async function inspectPackage() {
     setInspecting(true);
     try {
       const result = await onInspectWorkspace();
-      if (result) setPreview(result);
+      if (result) {
+        setPreview(result);
+        setPackageDifferencesConfirmed(false);
+      }
     } finally {
       setInspecting(false);
     }
@@ -1722,9 +1905,10 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
 
   async function applyPackage(mode: WorkspaceImportMode) {
     if (!preview) return;
+    if (mode === "merge" && preview.differences.length > 0 && !packageDifferencesConfirmed) return;
     setApplying(mode);
     try {
-      if (await onApplyWorkspace(preview.token, mode)) setPreview(null);
+      if (await onApplyWorkspace(preview.token, mode, mode === "merge" ? preview.differenceDigest : undefined)) setPreview(null);
     } finally {
       setApplying(null);
     }
@@ -1734,28 +1918,72 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
     setWorkbookInspecting(true);
     try {
       const result = await onInspectWorkbook();
-      if (result) setWorkbookPreview(result);
+      if (result) {
+        setWorkbookPreview(result);
+        setWorkbookDifferencesConfirmed(false);
+      }
     } finally {
       setWorkbookInspecting(false);
     }
   }
 
   async function applyWorkbook(conflictMode: WorkspaceWorkbookConflictMode) {
-    if (!workbookPreview || workbookPreview.errors.length) return;
+    if (!workbookPreview || workbookPreview.errors.length || (workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed)) return;
     setWorkbookApplying(conflictMode);
     try {
-      if (await onApplyWorkbook(workbookPreview.token, conflictMode)) setWorkbookPreview(null);
+      if (await onApplyWorkbook(workbookPreview.token, conflictMode, workbookPreview.differenceDigest)) setWorkbookPreview(null);
     } finally {
       setWorkbookApplying(null);
     }
   }
 
   async function exportPpt() {
+    if (!whitelistEntries.length) {
+      setSecurityMessage("请至少添加一名成员到白名单。");
+      return;
+    }
     setExporting(true);
     try {
+      if (policyDirty) {
+        setSavingPolicy(true);
+        await onSavePptAccessPolicy({ entries: whitelistEntries });
+        setSavingPolicy(false);
+      }
+      setCheckingIrm(true);
+      const environment = await onCheckIrm();
+      setIrmStatus(environment);
+      setCheckingIrm(false);
+      if (!environment.irmReady) {
+        setSecurityMessage(environment.message);
+        return;
+      }
+      setSecurityMessage("");
       await onExportPpt({ materialName: pptMaterialName, sections: pptSections });
     } finally {
+      setSavingPolicy(false);
+      setCheckingIrm(false);
       setExporting(false);
+    }
+  }
+
+  async function savePolicy() {
+    setSavingPolicy(true);
+    try {
+      await onSavePptAccessPolicy({ entries: whitelistEntries });
+      setSecurityMessage("白名单已保存，完整需求包会携带该策略。Excel 不会修改它。");
+    } finally {
+      setSavingPolicy(false);
+    }
+  }
+
+  async function checkIrm() {
+    setCheckingIrm(true);
+    try {
+      const status = await onCheckIrm();
+      setIrmStatus(status);
+      setSecurityMessage(status.message);
+    } finally {
+      setCheckingIrm(false);
     }
   }
 
@@ -1795,7 +2023,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
               {halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS && <p className="ppt-range-warning">PPT 一次最多支持 {MAX_PPT_HALF_YEARS} 个连续半年，请缩短导出区间。</p>}
             </div>
             <div className="export-card-actions">
-              <button className="button primary" onClick={exportPpt} disabled={exporting || !pptMaterialName.trim() || halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS}>{exporting ? "正在生成…" : `生成 ${1 + pptSections.length} 页 PPT`}</button>
+              <button className="button primary" onClick={exportPpt} disabled={exporting || !whitelistEntries.length || !pptMaterialName.trim() || halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS}>{exporting ? (checkingIrm ? "正在检测 IRM…" : "正在生成并保护…") : `生成 ${1 + pptSections.length} 页受保护 PPT`}</button>
             </div>
           </section>
 
@@ -1829,6 +2057,30 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           </section>
         </div>
 
+        <section className="panel ppt-access-panel">
+          <PanelTitle title="PPT 成员白名单与权限" subtitle="只影响受保护 PPT；权限配置会随完整需求包交接。" action={<span className="ppt-access-rule">未加入者默认不可读</span>} />
+          <div className="ppt-access-content">
+            <div className="ppt-access-summary">
+              <p className="ppt-expiry-notice"><b>固定有效期：导出日起半年</b><span>按六个日历月计算，月末自动收敛；实际到期日期会显示在 PPT 封面。</span></p>
+              <div className="ppt-security-actions"><button type="button" className="button ghost" disabled={savingPolicy || !policyDirty} onClick={() => void savePolicy()}>{savingPolicy ? "保存中…" : "保存白名单"}</button><button type="button" className="button ghost" disabled={checkingIrm} onClick={() => void checkIrm()}>{checkingIrm ? "检测中…" : "检测 PowerPoint / IRM"}</button></div>
+              {(securityMessage || irmStatus) && <p className={`ppt-irm-status ${irmStatus?.irmReady ? "ready" : ""}`}>{securityMessage || irmStatus?.message}</p>}
+            </div>
+            <div className="ppt-access-editor">
+              <div className="ppt-whitelist-add">
+                <select value={candidateMemberId} onChange={(event) => setCandidateMemberId(event.target.value)}><option value="">选择人员字典成员</option>{availableMembers.map((member) => <option key={member.id} value={member.id}>{member.name} · {member.microsoftAccount}</option>)}</select>
+                <button type="button" className="button ghost" disabled={!candidateMemberId} onClick={() => { setWhitelistEntries((current) => [...current, { memberId: candidateMemberId, permission: "read" }]); setCandidateMemberId(""); }}>加入白名单</button>
+              </div>
+              <div className="ppt-whitelist-list">
+                {whitelistEntries.map((entry) => {
+                  const member = memberById.get(entry.memberId);
+                  return <div key={entry.memberId} className="ppt-whitelist-item"><div><b>{member?.name ?? "成员已不存在"}</b><span>{member?.microsoftAccount ?? entry.memberId}</span></div><select value={entry.permission} onChange={(event) => setWhitelistEntries((current) => current.map((item) => item.memberId === entry.memberId ? { ...item, permission: event.target.value as "read" | "change" } : item))}><option value="read">只读</option><option value="change">可读可写</option></select><button type="button" className="danger-text" onClick={() => setWhitelistEntries((current) => current.filter((item) => item.memberId !== entry.memberId))}>移除</button></div>;
+                })}
+                {!whitelistEntries.length && <span className="ppt-whitelist-empty">尚未配置成员，受保护 PPT 暂不可导出。</span>}
+              </div>
+            </div>
+          </div>
+        </section>
+
         <p className="export-footnote">Excel 适合多人协作编辑；完整需求包适合跨电脑无损交接，并兼容旧版 JSON 备份。</p>
       </div>
       {workbookPreview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !workbookApplying && setWorkbookPreview(null)}>
@@ -1838,17 +2090,21 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           <dl className="import-counts workbook-counts"><div><dt>新增需求</dt><dd>{workbookPreview.counts.added} 条</dd></div><div><dt>修改需求</dt><dd>{workbookPreview.counts.updated} 条</dd></div><div><dt>删除需求</dt><dd>{workbookPreview.counts.deleted} 条</dd></div><div><dt>未变化</dt><dd>{workbookPreview.counts.unchanged} 条</dd></div><div><dt>领域 / 产品调整</dt><dd>{workbookPreview.counts.domainsChanged} / {workbookPreview.counts.productsChanged}</dd></div><div><dt>卡片调整</dt><dd>{workbookPreview.counts.groupOverridesChanged} 项</dd></div><div><dt>冲突</dt><dd>{workbookPreview.counts.conflicts} 项</dd></div><div><dt>校验错误</dt><dd>{workbookPreview.errors.length} 项</dd></div></dl>
           {workbookPreview.errors.length > 0 && <ImportIssueList title="需要先修正的错误" tone="error" items={workbookPreview.errors} />}
           {workbookPreview.errors.length === 0 && workbookPreview.conflicts.length > 0 && <ImportIssueList title="本机与 Excel 同时修改" tone="warning" items={workbookPreview.conflicts} />}
+          {workbookPreview.errors.length === 0 && <ImportDifferenceList differences={workbookPreview.differences} />}
+          {workbookPreview.errors.length === 0 && workbookPreview.differences.length > 0 && <label className="import-difference-confirm"><input type="checkbox" checked={workbookDifferencesConfirmed} onChange={(event) => setWorkbookDifferencesConfirmed(event.target.checked)} /><span>我已逐项核对以上全部差异，确认按所选冲突策略合并。</span></label>}
           {workbookPreview.errors.length === 0 && <div className="import-guidance"><b>图片处理</b><span>同 ID 需求保留本机图片；Excel 新增需求不带图片。默认按钮会保留发生冲突的本机版本。</span></div>}
-          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setWorkbookPreview(null)} disabled={Boolean(workbookApplying)}>取消</button><button className="button dark" onClick={() => applyWorkbook("local-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0}>{workbookApplying === "local-wins" ? "合并中…" : "合并并保留本机冲突"}</button>{workbookPreview.conflicts.length > 0 && <button className="button danger" onClick={() => applyWorkbook("excel-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0}>{workbookApplying === "excel-wins" ? "合并中…" : "Excel 覆盖冲突"}</button>}</div>
+          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setWorkbookPreview(null)} disabled={Boolean(workbookApplying)}>取消</button><button className="button dark" onClick={() => applyWorkbook("local-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0 || (workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed)}>{workbookApplying === "local-wins" ? "合并中…" : "合并并保留本机冲突"}</button>{workbookPreview.conflicts.length > 0 && <button className="button danger" onClick={() => applyWorkbook("excel-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0 || (workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed)}>{workbookApplying === "excel-wins" ? "合并中…" : "Excel 覆盖冲突"}</button>}</div>
         </div>
       </div>}
       {preview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !applying && setPreview(null)}>
         <div className="import-dialog panel" role="dialog" aria-modal="true" aria-labelledby="import-title">
           <div className="import-dialog-head"><div><span className="eyebrow">WORKSPACE IMPORT</span><h2 id="import-title">确认导入数据包</h2></div><button className="icon-button" onClick={() => setPreview(null)} disabled={Boolean(applying)}>×</button></div>
           <div className="import-file"><b>{preview.fileName}</b><span>{preview.sourceFormat === "roadmap" ? `.roadmap · 模板 ${preview.templateVersion}` : "旧版 JSON 备份"}</span></div>
-          <dl className="import-counts"><div><dt>需求</dt><dd>{preview.counts.requirements} 条</dd></div><div><dt>图片</dt><dd>{preview.counts.images} 张</dd></div><div><dt>领域</dt><dd>{preview.counts.domains} 个</dd></div><div><dt>产品</dt><dd>{preview.counts.products} 个</dd></div><div><dt>卡片编辑</dt><dd>{preview.counts.groupOverrides} 项</dd></div><div><dt>导出时间</dt><dd>{formatDateTime(preview.exportedAt)}</dd></div></dl>
+          <dl className="import-counts"><div><dt>需求</dt><dd>{preview.counts.requirements} 条</dd></div><div><dt>图片</dt><dd>{preview.counts.images} 张</dd></div><div><dt>领域</dt><dd>{preview.counts.domains} 个</dd></div><div><dt>产品</dt><dd>{preview.counts.products} 个</dd></div><div><dt>人员</dt><dd>{preview.counts.members} 名</dd></div><div><dt>PPT 白名单</dt><dd>{preview.counts.whitelistEntries} 人</dd></div><div><dt>卡片编辑</dt><dd>{preview.counts.groupOverrides} 项</dd></div><div><dt>导出时间</dt><dd>{formatDateTime(preview.exportedAt)}</dd></div></dl>
           <div className="import-guidance"><b>选择导入方式</b><span>合并导入会按名称合并字典，并保留更新时间较新的同 ID 需求；整体替换会用数据包完整覆盖当前业务数据。</span></div>
-          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setPreview(null)} disabled={Boolean(applying)}>取消</button><button className="button dark" onClick={() => applyPackage("merge")} disabled={Boolean(applying)}>{applying === "merge" ? "合并中…" : "合并导入"}</button><button className="button danger" onClick={() => applyPackage("replace")} disabled={Boolean(applying)}>{applying === "replace" ? "替换中…" : "整体替换"}</button></div>
+          <ImportDifferenceList differences={preview.differences} />
+          {preview.differences.length > 0 && <label className="import-difference-confirm"><input type="checkbox" checked={packageDifferencesConfirmed} onChange={(event) => setPackageDifferencesConfirmed(event.target.checked)} /><span>我已逐项核对以上全部差异，确认合并这些变化。</span></label>}
+          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setPreview(null)} disabled={Boolean(applying)}>取消</button><button className="button dark" onClick={() => applyPackage("merge")} disabled={Boolean(applying) || (preview.differences.length > 0 && !packageDifferencesConfirmed)}>{applying === "merge" ? "合并中…" : "确认差异并合并"}</button><button className="button danger" onClick={() => applyPackage("replace")} disabled={Boolean(applying)}>{applying === "replace" ? "替换中…" : "整体替换"}</button></div>
         </div>
       </div>}
     </>
@@ -1857,6 +2113,11 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
 
 function ImportIssueList({ title, tone, items }: { title: string; tone: "error" | "warning"; items: WorkspaceWorkbookImportPreview["errors"] }) {
   return <div className={`import-issues ${tone}`}><b>{title}</b><ul>{items.slice(0, 8).map((item, index) => <li key={`${item.sheet}-${item.cell}-${index}`}><span>{item.sheet}!{item.cell}</span>{item.message}</li>)}</ul>{items.length > 8 && <small>另有 {items.length - 8} 项，请修正后重新选择文件检查。</small>}</div>;
+}
+
+function ImportDifferenceList({ differences }: { differences: WorkspaceImportPreview["differences"] }) {
+  if (!differences.length) return <div className="import-differences empty-differences"><b>合并差异</b><span>当前文件与本机数据没有会被合入的差异。</span></div>;
+  return <div className="import-differences"><div className="import-differences-head"><b>全部合并差异</b><span>{differences.length} 项记录变化</span></div><div className="import-difference-scroll">{differences.map((difference) => <details key={`${difference.entity}-${difference.key}`} open><summary><span className={`difference-change ${difference.change}`}>{difference.change}</span><b>{difference.entity} · {difference.title}</b><small>{difference.fields.length} 个字段</small></summary><table><thead><tr><th>字段</th><th>本机值</th><th>导入后</th></tr></thead><tbody>{difference.fields.map((field) => <tr key={field.field}><th>{field.field}</th><td>{field.currentValue || "—"}</td><td>{field.incomingValue || "—"}</td></tr>)}</tbody></table></details>)}</div></div>;
 }
 
 function Metric({ label, value, suffix, accent = "plain" }: { label: string; value: string | number; suffix: string; accent?: string }) {
@@ -1876,6 +2137,11 @@ function ScopeBadge({ scope }: { scope: RequirementScope }) {
   return <span className={`scope-badge ${tone}`}>{scope}</span>;
 }
 
+function ResponsibilityCell({ members }: { members: Member[] }) {
+  if (!members.length) return <span className="responsibility-empty">—</span>;
+  return <div className="responsibility-cell">{members.map((member) => <span key={member.id}><b>{member.name}</b><small>{member.employeeNumber} · {member.microsoftAccount}</small></span>)}</div>;
+}
+
 function Field({ label, required, children }: { label: string; required?: boolean; children: ReactNode }) {
   return <label className="field"><span>{label}{required && <b>*</b>}</span>{children}</label>;
 }
@@ -1889,7 +2155,7 @@ function pageTitle(page: Page): string {
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", dictionaries: "维护领域与产品的统一口径", template: "导出需求路标、协作表格与完整需求包" })[page];
+  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {

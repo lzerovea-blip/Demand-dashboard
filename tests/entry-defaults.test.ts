@@ -40,6 +40,7 @@ function requirement(
     domainId: "d1",
     source,
     scope: "全球",
+    allowLatestVersionUpgrade: false,
     overseasRegions: [],
     category,
     targetMonth,

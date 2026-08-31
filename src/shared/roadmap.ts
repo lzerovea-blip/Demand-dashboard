@@ -225,7 +225,7 @@ export function roadmapMonthColumnTemplate(
 ): string {
   const occupiedMonths = new Set(groups.map((item) => item.targetMonth));
   return months
-    .map((month) => occupiedMonths.has(month) ? "minmax(280px, 1fr)" : "72px")
+    .map((month) => occupiedMonths.has(month) ? "minmax(280px, 1fr)" : "56px")
     .join(" ");
 }
 
