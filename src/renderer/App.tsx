@@ -4,8 +4,10 @@ import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
   categoryPercentagesForSide,
+  formatHalfYearWithHmos,
   groupMatchesRoadmapLane,
   halfYearSequence,
+  hmosVersionForMonth,
   monthsForHalfYear,
   roadmapCardLabel,
   roadmapCardDisplayParts,
@@ -22,7 +24,7 @@ import {
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
 import { ALL_DICTIONARY_PARENTS, filterDictionaryItemsByParent } from "../shared/dictionaries";
-import { filterRequirements, filterRequirementsForRegion, listTargetMonths, type RoadmapRegion } from "../shared/requirements";
+import { filterRequirements, filterRequirementsForRegion, listReleaseVersionOptions, type RoadmapRegion } from "../shared/requirements";
 import { requirementMatchesResponsibleMember, responsibleMembers, visibleMembersForRole } from "../shared/members";
 import { splitTextIntoLines } from "../shared/text";
 import { restoreFocusAfterConfirmation } from "./confirmation";
@@ -90,7 +92,7 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.31",
+  version: "0.7.33",
   releasedAt: "2026-08-31",
   author: "林忠维",
 };
@@ -636,7 +638,7 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<RequirementSource | "">("");
   const [category, setCategory] = useState<RequirementCategory | "">("");
-  const [targetMonth, setTargetMonth] = useState("");
+  const [targetHalfYear, setTargetHalfYear] = useState("");
   const [planningMemberId, setPlanningMemberId] = useState("");
   const [productManagerMemberId, setProductManagerMemberId] = useState("");
   const [seMemberId, setSeMemberId] = useState("");
@@ -644,11 +646,11 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
   const searchInputRef = useRef<HTMLInputElement>(null);
   const domains = new Map(snapshot.domains.map((item) => [item.id, item.name]));
   const products = new Map(snapshot.products.map((item) => [item.id, item.name]));
-  const targetMonths = listTargetMonths(snapshot.requirements);
+  const releaseVersions = listReleaseVersionOptions(snapshot.requirements);
   useEffect(() => {
-    if (targetMonth && !targetMonths.includes(targetMonth)) setTargetMonth("");
-  }, [targetMonth, targetMonths.join("|")]);
-  const baseRows = filterRequirements(snapshot.requirements, domains, { query, source, category, targetMonth });
+    if (targetHalfYear && !releaseVersions.some((item) => item.halfYear === targetHalfYear)) setTargetHalfYear("");
+  }, [targetHalfYear, releaseVersions.map((item) => item.halfYear).join("|")]);
+  const baseRows = filterRequirements(snapshot.requirements, domains, { query, source, category, targetHalfYear });
   const visibleDomainIds = new Set(baseRows.map((item) => item.domainId));
   const planningMembers = visibleMembersForRole(snapshot.members, visibleDomainIds, "规划");
   const productManagers = visibleMembersForRole(snapshot.members, visibleDomainIds, "产品经理");
@@ -679,7 +681,7 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
           <label className="search"><span>⌕</span><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题或领域" /></label>
           <select value={source} onChange={(event) => setSource(event.target.value as RequirementSource | "")}><option value="">全部来源</option>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={category} onChange={(event) => setCategory(event.target.value as RequirementCategory | "")}><option value="">全部分类</option>{CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select>
-          <select value={targetMonth} onChange={(event) => setTargetMonth(event.target.value)}><option value="">全部月份</option>{targetMonths.map((item) => <option key={item} value={item}>{formatMonth(item)}</option>)}</select>
+          <select value={targetHalfYear} onChange={(event) => setTargetHalfYear(event.target.value)}><option value="">全部版本</option>{releaseVersions.map((item) => <option key={item.halfYear} value={item.halfYear}>{item.version}（{shortHalf(item.halfYear)}）</option>)}</select>
           <select value={planningMemberId} onChange={(event) => setPlanningMemberId(event.target.value)}><option value="">全部规划</option>{planningMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
           <select value={productManagerMemberId} onChange={(event) => setProductManagerMemberId(event.target.value)}><option value="">全部产品经理</option>{productManagers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
           <select value={seMemberId} onChange={(event) => setSeMemberId(event.target.value)}><option value="">全部 SE</option>{seMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
@@ -700,14 +702,14 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
                 <col className="requirement-col-workload" />
                 <col className="requirement-col-actions" />
               </colgroup>
-              <thead><tr><th>需求标题</th><th>领域 L1</th><th>来源</th><th>上线月份</th><th>匹配产品</th><th>规划</th><th>产品经理</th><th>SE</th><th className="numeric">工作量</th><th /></tr></thead>
+              <thead><tr><th>需求标题</th><th>领域 L1</th><th>来源</th><th>上线月份 / 版本</th><th>匹配产品</th><th>规划</th><th>产品经理</th><th>SE</th><th className="numeric">工作量</th><th /></tr></thead>
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
                     <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={item.title}>{splitTextIntoLines(item.title).map((line, index) => <span key={`${index}-${line}`}>{line}</span>)}</strong>{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></td>
                     <td>{domains.get(item.domainId) ?? "未命名"}</td>
                     <td><SourceBadge source={item.source} /></td>
-                    <td>{formatMonth(item.targetMonth)}</td>
+                    <td><div className="release-cell"><b>{formatMonth(item.targetMonth)}</b><small>{hmosVersionForMonth(item.targetMonth)}</small></div></td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
                     <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "规划")} /></td>
                     <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "产品经理")} /></td>
@@ -719,7 +721,7 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
               </tbody>
             </table>
           </div>
-        ) : <Empty title="还没有符合条件的需求" body={snapshot.requirements.length ? "尝试清空搜索或调整来源、分类、上线月份。" : "先维护领域与产品字典，再新建第一条需求。"} />}
+        ) : <Empty title="还没有符合条件的需求" body={snapshot.requirements.length ? "尝试清空搜索或调整来源、分类、上线版本。" : "先维护领域与产品字典，再新建第一条需求。"} />}
       </div>
     </>
   );
@@ -1051,7 +1053,7 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
               >{region === "domestic" ? "切换海外" : "切换国内"}</button>
               : "来源泳道"}
           </div>
-          {halves.map((half) => <div key={half} className="half-header" style={{ gridColumn: "span 6" }}>{shortHalf(half)}</div>)}
+          {halves.map((half) => <div key={half} className="half-header" style={{ gridColumn: "span 6" }}>{formatHalfYearWithHmos(half)}</div>)}
           <div className="lane-corner muted">上线月份</div>
           {months.map((month) => <div key={month} className="month-header" data-roadmap-month-header={month}>{Number(month.slice(5))}月</div>)}
           {lanes.map((lane) => (

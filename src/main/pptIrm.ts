@@ -46,6 +46,13 @@ export function powerShellExecutableCandidates(environment: NodeJS.ProcessEnv = 
   return [...new Set(candidates)];
 }
 
+export function encodeWindowsPowerShellScript(script: string): string {
+  // Windows PowerShell 5.1 treats UTF-8 files without a BOM as the active ANSI
+  // code page. The generated script contains Chinese diagnostics, so a BOM is
+  // required to prevent corrupted quotes and parser errors on Chinese Windows.
+  return script.startsWith("\uFEFF") ? script : `\uFEFF${script}`;
+}
+
 function isMissingExecutableError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
@@ -127,7 +134,7 @@ async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promis
   const resultPath = join(directory, "result.json");
   try {
     await Promise.all([
-      writeFile(scriptPath, POWERPOINT_IRM_SCRIPT, "utf8"),
+      writeFile(scriptPath, encodeWindowsPowerShellScript(POWERPOINT_IRM_SCRIPT), "utf8"),
       writeFile(payloadPath, JSON.stringify(payload), "utf8"),
     ]);
     const arguments_ = [
