@@ -47,12 +47,22 @@ describe("PPT 企业 IRM 有效期", () => {
     expect(encodeWindowsPowerShellScript(encoded)).toBe(encoded);
   });
 
-  it("以实际启用 IRM 为准，不要求新文档预先存在 DocumentAuthor", () => {
-    expect(POWERPOINT_IRM_SCRIPT).not.toContain("IsNullOrWhiteSpace($author)");
+  it("探测允许新文档没有作者，保护时从 Office 身份识别并保留导出者所有权", () => {
+    expect(POWERPOINT_IRM_SCRIPT).toContain("Find-OfficeIdentity");
     const enabledAt = POWERPOINT_IRM_SCRIPT.indexOf("$permission.Enabled = $true");
-    const authorAt = POWERPOINT_IRM_SCRIPT.indexOf("$result.signedInAccount = [string]$permission.DocumentAuthor");
+    const authorAt = POWERPOINT_IRM_SCRIPT.indexOf("$result.signedInAccount = Find-OfficeIdentity");
     expect(enabledAt).toBeGreaterThan(-1);
     expect(authorAt).toBeGreaterThan(enabledAt);
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.DocumentAuthor = $author");
+  });
+
+  it("以 OpenXML 格式保存并等待文件稳定，回读失败时尝试可见窗口", () => {
+    expect(POWERPOINT_IRM_SCRIPT).toContain("SaveAs([string]$payload.outputPath, 24)");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("Wait-PowerPointFileReady");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("隐藏回读失败，转为可见窗口回读");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Visible = $true");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$result.stage = $stage");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$result.diagnostics = $diagnostics");
   });
 
   it("权限回读允许 PowerPoint 自动保留额外的文档所有者", () => {

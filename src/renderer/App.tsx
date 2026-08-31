@@ -51,6 +51,7 @@ import {
   type RequirementScope,
   type RequirementSource,
   type PptExportSectionId,
+  type PptDiagnosticLog,
   type SaveDictionaryInput,
   type SaveMemberInput,
   type SavePptAccessPolicyInput,
@@ -90,7 +91,7 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.35",
+  version: "0.7.36",
   releasedAt: "2026-08-31",
   author: "林忠维",
 };
@@ -500,6 +501,7 @@ export default function App() {
                 await update(() => window.roadmapApi.savePptAccessPolicy(input), "PPT 白名单已保存");
               }}
               onCheckIrm={() => window.roadmapApi.checkIrmEnvironment()}
+              onGetPptDiagnostic={() => window.roadmapApi.getPptDiagnosticLog()}
             />
           )}
         </section>
@@ -1847,7 +1849,7 @@ function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDele
   );
 }
 
-function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook, onSavePptAccessPolicy, onCheckIrm }: {
+function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook, onSavePptAccessPolicy, onCheckIrm, onGetPptDiagnostic }: {
   snapshot: AppSnapshot;
   start: string;
   end: string;
@@ -1860,6 +1862,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   onApplyWorkbook: (token: string, conflictMode: WorkspaceWorkbookConflictMode, differenceDigest: string) => Promise<boolean>;
   onSavePptAccessPolicy: (input: SavePptAccessPolicyInput) => Promise<void>;
   onCheckIrm: () => Promise<IrmEnvironmentStatus>;
+  onGetPptDiagnostic: () => Promise<PptDiagnosticLog | null>;
 }) {
   const [preview, setPreview] = useState<WorkspaceImportPreview | null>(null);
   const [workbookPreview, setWorkbookPreview] = useState<WorkspaceWorkbookImportPreview | null>(null);
@@ -1878,6 +1881,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   const [checkingIrm, setCheckingIrm] = useState(false);
   const [irmStatus, setIrmStatus] = useState<IrmEnvironmentStatus | null>(null);
   const [securityMessage, setSecurityMessage] = useState("");
+  const [pptDiagnostic, setPptDiagnostic] = useState<PptDiagnosticLog | null>(null);
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
   const workbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).length;
   const memberById = new Map(snapshot.members.map((item) => [item.id, item]));
@@ -1889,6 +1893,9 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   useEffect(() => {
     if (candidateMemberId && !availableMembers.some((item) => item.id === candidateMemberId)) setCandidateMemberId("");
   }, [candidateMemberId, availableMembers.map((item) => item.id).join("|")]);
+  useEffect(() => {
+    void onGetPptDiagnostic().then(setPptDiagnostic).catch(() => undefined);
+  }, [onGetPptDiagnostic]);
 
   async function inspectPackage() {
     setInspecting(true);
@@ -1960,6 +1967,11 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
       setSecurityMessage("");
       await onExportPpt({ materialName: pptMaterialName, sections: pptSections });
     } finally {
+      try {
+        setPptDiagnostic(await onGetPptDiagnostic());
+      } catch {
+        // Diagnostics are optional; the export result remains authoritative.
+      }
       setSavingPolicy(false);
       setCheckingIrm(false);
       setExporting(false);
@@ -2080,6 +2092,14 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
             </div>
           </div>
         </section>
+
+        {pptDiagnostic && <section className="panel ppt-diagnostic-panel">
+          <details>
+            <summary><span><b>最近一次 PPT 导出诊断</b><small>简洁纯文本 · 共 {pptDiagnostic.content.split("\n").length} 行</small></span><span>展开查看</span></summary>
+            <pre className="ppt-diagnostic-text">{pptDiagnostic.content}</pre>
+            <div className="ppt-diagnostic-actions"><span>{pptDiagnostic.path}</span><button type="button" className="button ghost" onClick={() => { void navigator.clipboard.writeText(pptDiagnostic.content); setSecurityMessage("诊断日志文字已复制。"); }}>复制文字</button></div>
+          </details>
+        </section>}
 
         <p className="export-footnote">Excel 适合多人协作编辑；完整需求包适合跨电脑无损交接，并兼容旧版 JSON 备份。</p>
       </div>

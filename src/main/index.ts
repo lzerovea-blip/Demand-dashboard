@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
 import { basename, dirname, join } from "node:path";
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { LocalDatabase } from "./database.js";
 import { createWorkspacePackage, inspectWorkspacePackage, type PreparedWorkspaceImport } from "./workspacePackage.js";
 import type {
@@ -10,6 +10,7 @@ import type {
   SaveRequirementInput,
   HalfYearRange,
   PptExportRequest,
+  PptDiagnosticLog,
   SaveMemberInput,
   SavePptAccessPolicyInput,
   WorkspaceImportMode,
@@ -17,8 +18,9 @@ import type {
 import { buildPptExportPlan } from "../shared/pptExport.js";
 import { halfYearSequence } from "../shared/roadmap.js";
 import { createRoadmapPresentation, presentationSlideCount } from "./pptxExport.js";
-import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm } from "./pptIrm.js";
+import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm, type PowerPointIrmErrorDetails } from "./pptIrm.js";
 import { pptPermissionExpiration } from "../shared/pptAccess.js";
+import { compactPptDiagnosticValue, formatPptDiagnosticText } from "../shared/pptDiagnostic.js";
 import {
   createWorkspaceWorkbook,
   inspectWorkspaceWorkbook,
@@ -30,12 +32,65 @@ const PRODUCT_NAME = "解决方案需求管理";
 const APP_RELEASED_AT = "2026-08-31";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
+const PPT_DIAGNOSTIC_FILE = "ppt-export-last-error.txt";
 
 let database: LocalDatabase;
 let mainWindow: BrowserWindow | null = null;
 const BUILTIN_TEMPLATE_FILE = "需求路标模板-共创版-v0.1.pptx";
 const pendingImports = new Map<string, PreparedWorkspaceImport>();
 const pendingWorkbookImports = new Map<string, PreparedWorkspaceWorkbookImport>();
+
+async function optionalFileSize(path: string | undefined): Promise<string> {
+  if (!path) return "未生成";
+  try {
+    return `${(await stat(path)).size} 字节`;
+  } catch {
+    return "未生成";
+  }
+}
+
+async function writePptDiagnosticLog(input: {
+  error: unknown;
+  stage: string;
+  environment?: Awaited<ReturnType<typeof checkPowerPointIrmEnvironment>>;
+  editablePath?: string;
+  protectedPath?: string;
+}): Promise<PptDiagnosticLog> {
+  const createdAt = new Date().toISOString();
+  const details = input.error as Partial<PowerPointIrmErrorDetails>;
+  const path = join(app.getPath("userData"), "logs", PPT_DIAGNOSTIC_FILE);
+  const message = input.error instanceof Error ? input.error.message : String(input.error);
+  const content = formatPptDiagnosticText({
+    createdAt,
+    appVersion: `v${app.getVersion()}`,
+    stage: details.stage || input.stage,
+    powerPointStatus: input.environment?.powerPointInstalled ? "已检测" : "未确认",
+    irmStatus: input.environment?.irmReady ? "可用" : "未确认",
+    signedInAccount: input.environment?.signedInAccount || "未识别",
+    editableFileSize: await optionalFileSize(input.editablePath),
+    protectedFileSize: await optionalFileSize(input.protectedPath),
+    completedSteps: details.diagnostics ?? [],
+    errorMessage: message,
+  });
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content, "utf8");
+  return { createdAt, path, content };
+}
+
+async function readPptDiagnosticLog(): Promise<PptDiagnosticLog | null> {
+  const path = join(app.getPath("userData"), "logs", PPT_DIAGNOSTIC_FILE);
+  try {
+    const content = await readFile(path, "utf8");
+    const createdAt = /^时间：(.+)$/m.exec(content)?.[1] ?? "";
+    return { createdAt, path, content };
+  } catch {
+    return null;
+  }
+}
+
+async function clearPptDiagnosticLog(): Promise<void> {
+  await rm(join(app.getPath("userData"), "logs", PPT_DIAGNOSTIC_FILE), { force: true });
+}
 
 async function createWindow(): Promise<void> {
   const appWindow = new BrowserWindow({
@@ -95,6 +150,7 @@ function registerIpc(): void {
   ipcMain.handle("members:delete", (_event, id: string) => database.deleteMember(id));
   ipcMain.handle("ppt-access:save", (_event, input: SavePptAccessPolicyInput) => database.savePptAccessPolicy(input));
   ipcMain.handle("ppt-access:check-environment", () => checkPowerPointIrmEnvironment());
+  ipcMain.handle("ppt-access:diagnostic-log", () => readPptDiagnosticLog());
   ipcMain.handle("groups:save", (_event, input: SaveGroupOverrideInput) => database.saveGroupOverride(input));
   ipcMain.handle("groups:reorder", (_event, input: SaveGroupOrderInput) => database.saveGroupOrder(input));
 
@@ -192,26 +248,35 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("presentation:export", async (_event, input: PptExportRequest) => {
-    const snapshot = database.getSnapshot();
-    if (!snapshot.pptAccessPolicy.entries.length) throw new Error("请先配置并保存 PPT 成员白名单");
-    const environment = await checkPowerPointIrmEnvironment();
-    if (!environment.supported || !environment.powerPointInstalled || !environment.irmReady) throw new Error(environment.message);
-    const plan = buildPptExportPlan(snapshot, input);
-    const slideCount = presentationSlideCount(plan);
-    const exportedAt = new Date();
-    const expiration = pptPermissionExpiration(exportedAt);
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      title: "导出需求路标PPT",
-      defaultPath: `${plan.materialName.replace(/[\\/:*?\"<>|]/g, "-")}-${input.start}-${input.end}-${new Date().toISOString().slice(0, 10)}.pptx`,
-      filters: [{ name: "PowerPoint演示文稿", extensions: ["pptx"] }],
-    });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    const outputPath = result.filePath.toLowerCase().endsWith(".pptx") ? result.filePath : `${result.filePath}.pptx`;
-    const tempDirectory = await mkdtemp(join(dirname(outputPath), ".solution-ppt-"));
-    const editablePath = join(tempDirectory, "roadmap-editable.pptx");
-    const protectedPath = join(tempDirectory, "roadmap-protected.pptx");
+    let stage = "准备导出";
+    let environment: Awaited<ReturnType<typeof checkPowerPointIrmEnvironment>> | undefined;
+    let tempDirectory: string | undefined;
+    let editablePath: string | undefined;
+    let protectedPath: string | undefined;
     try {
+      const snapshot = database.getSnapshot();
+      if (!snapshot.pptAccessPolicy.entries.length) throw new Error("请先配置并保存 PPT 成员白名单");
+      stage = "检测 PowerPoint 与 IRM";
+      environment = await checkPowerPointIrmEnvironment();
+      if (!environment.supported || !environment.powerPointInstalled || !environment.irmReady) throw new Error(environment.message);
+      stage = "计算 PPT 页面";
+      const plan = buildPptExportPlan(snapshot, input);
+      const slideCount = presentationSlideCount(plan);
+      const exportedAt = new Date();
+      const expiration = pptPermissionExpiration(exportedAt);
+      const result = await dialog.showSaveDialog(mainWindow!, {
+        title: "导出需求路标PPT",
+        defaultPath: `${plan.materialName.replace(/[\\/:*?\"<>|]/g, "-")}-${input.start}-${input.end}-${new Date().toISOString().slice(0, 10)}.pptx`,
+        filters: [{ name: "PowerPoint演示文稿", extensions: ["pptx"] }],
+      });
+      if (result.canceled || !result.filePath) return { canceled: true };
+      const outputPath = result.filePath.toLowerCase().endsWith(".pptx") ? result.filePath : `${result.filePath}.pptx`;
+      tempDirectory = await mkdtemp(join(dirname(outputPath), ".solution-ppt-"));
+      editablePath = join(tempDirectory, "roadmap-editable.pptx");
+      protectedPath = join(tempDirectory, "roadmap-protected.pptx");
+      stage = "生成原始 PPT";
       await writeFile(editablePath, await createRoadmapPresentation(snapshot, input, { exportedAt, expiration }));
+      stage = "写入并校验 IRM 权限";
       await protectPowerPointWithIrm({
         inputPath: editablePath,
         outputPath: protectedPath,
@@ -219,11 +284,17 @@ function registerIpc(): void {
         policy: snapshot.pptAccessPolicy,
         expiration,
       });
+      stage = "复制最终 PPT";
       await copyFile(protectedPath, outputPath);
+      await clearPptDiagnosticLog();
+      return { canceled: false, path: outputPath, slideCount };
+    } catch (error) {
+      const diagnostic = await writePptDiagnosticLog({ error, stage, environment, editablePath, protectedPath });
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${compactPptDiagnosticValue(message)}\n诊断日志：${diagnostic.path}`);
     } finally {
-      await rm(tempDirectory, { recursive: true, force: true });
+      if (tempDirectory) await rm(tempDirectory, { recursive: true, force: true });
     }
-    return { canceled: false, path: outputPath, slideCount };
   });
 }
 

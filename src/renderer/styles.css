@@ -352,6 +352,16 @@ td strong { color: #1b2832; font-weight: 700; }
 .ppt-security-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .ppt-irm-status { margin: 0; padding: 10px 12px; border-radius: 8px; background: #fff0ec; color: #b14432; font-size: 12px; line-height: 1.5; }
 .ppt-irm-status.ready { background: #eaf8f1; color: #18704d; }
+.ppt-diagnostic-panel { overflow: hidden; }
+.ppt-diagnostic-panel details { padding: 0; }
+.ppt-diagnostic-panel summary { min-height: 66px; padding: 0 26px; display: flex; align-items: center; justify-content: space-between; gap: 18px; color: #26333d; cursor: pointer; list-style: none; }
+.ppt-diagnostic-panel summary::-webkit-details-marker { display: none; }
+.ppt-diagnostic-panel summary > span:first-child { display: grid; gap: 3px; }
+.ppt-diagnostic-panel summary b { font-size: 14px; }
+.ppt-diagnostic-panel summary small, .ppt-diagnostic-panel summary > span:last-child { color: #89959d; font-size: 11px; font-weight: 500; }
+.ppt-diagnostic-text { max-height: 240px; margin: 0 26px; padding: 16px; overflow: auto; border: 1px solid #e1e7ea; border-radius: 10px; background: #f7f9fa; color: #283740; font-family: inherit; font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ppt-diagnostic-actions { padding: 12px 26px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.ppt-diagnostic-actions span { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #8a969e; font-size: 10px; white-space: nowrap; }
 
 @media (max-width: 1280px) {
   .member-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }

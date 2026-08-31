@@ -219,6 +219,12 @@ export interface IrmEnvironmentStatus {
   message: string;
 }
 
+export interface PptDiagnosticLog {
+  createdAt: string;
+  path: string;
+  content: string;
+}
+
 export interface SaveGroupOverrideInput {
   groupKey: string;
   cardTitle: string;
@@ -342,6 +348,7 @@ export interface ElectronApi {
   deleteMember(id: string): Promise<AppSnapshot>;
   savePptAccessPolicy(input: SavePptAccessPolicyInput): Promise<AppSnapshot>;
   checkIrmEnvironment(): Promise<IrmEnvironmentStatus>;
+  getPptDiagnosticLog(): Promise<PptDiagnosticLog | null>;
   saveGroupOverride(input: SaveGroupOverrideInput): Promise<AppSnapshot>;
   saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot>;
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
