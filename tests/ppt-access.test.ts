@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { POWERPOINT_IRM_SCRIPT, checkPowerPointIrmEnvironment } from "../src/main/pptIrm";
+import { POWERPOINT_IRM_SCRIPT, checkPowerPointIrmEnvironment, powerShellExecutableCandidates } from "../src/main/pptIrm";
 import { addCalendarMonthsClamped, formatPptExpirationDate, pptPermissionExpiration } from "../src/shared/pptAccess";
 
 describe("PPT 企业 IRM 有效期", () => {
@@ -21,5 +21,16 @@ describe("PPT 企业 IRM 有效期", () => {
     expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.Add");
     expect(POWERPOINT_IRM_SCRIPT).toContain("ExpirationDate");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.Item($index)");
+  });
+
+  it("便携版优先检查 Windows 系统 PowerShell 并兼容 PowerShell 7 与 PATH", () => {
+    expect(powerShellExecutableCandidates({ SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files" })).toEqual([
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "C:\\Windows\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      "powershell.exe",
+      "pwsh.exe",
+    ]);
+    expect(POWERPOINT_IRM_SCRIPT).toContain("未找到桌面版 Microsoft PowerPoint");
   });
 });

@@ -41,3 +41,4 @@ d48462d7988b651e21b6d993c2d9399fa595d0d8274f1eee654b5ea2d315fc29  解决方案�
 0302cb8341d0e58814ac6cd2c62cb316e71f93199c4a87d58981a90899d4fe05  Solution-Requirements-Manager-Setup-0.7.29-x64.exe
 01d349694664f785600828abfdbc57d679a371755119c5dd60672ade492f8ed1  Solution-Requirements-Manager-Portable-0.7.29-x64.exe
 38d4dbee21ec0707a41860761a97cf7c8da8315b64e8840bd2f21455d5b5cc59  Solution-Requirements-Manager-Portable-0.7.30-x64.exe
+eb4f7e357dddf8dcd2f313b7b59607d3183fd1bec4855230e811ff656e65064a  Solution-Requirements-Manager-Portable-0.7.31-x64.exe

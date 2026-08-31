@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { promisify } from "node:util";
 import type { IrmEnvironmentStatus, Member, PptAccessPolicy, PptPermissionLevel } from "../shared/types.js";
 
@@ -21,6 +21,33 @@ interface PowerShellResult {
   signedInAccount?: string;
   grants?: PowerShellGrant[];
   error?: string;
+}
+
+function firstEnvironmentValue(environment: NodeJS.ProcessEnv, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = environment[key];
+    if (value?.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+export function powerShellExecutableCandidates(environment: NodeJS.ProcessEnv = process.env): string[] {
+  const candidates: string[] = [];
+  const windowsRoot = firstEnvironmentValue(environment, ["SystemRoot", "SYSTEMROOT", "windir", "WINDIR"]);
+  if (windowsRoot) {
+    candidates.push(
+      win32.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      win32.join(windowsRoot, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    );
+  }
+  const programFiles = firstEnvironmentValue(environment, ["ProgramW6432", "PROGRAMW6432", "ProgramFiles", "PROGRAMFILES"]);
+  if (programFiles) candidates.push(win32.join(programFiles, "PowerShell", "7", "pwsh.exe"));
+  candidates.push("powershell.exe", "pwsh.exe");
+  return [...new Set(candidates)];
+}
+
+function isMissingExecutableError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 export interface IrmProtectionRequest {
@@ -103,8 +130,7 @@ async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promis
       writeFile(scriptPath, POWERPOINT_IRM_SCRIPT, "utf8"),
       writeFile(payloadPath, JSON.stringify(payload), "utf8"),
     ]);
-    try {
-      await execFileAsync("powershell.exe", [
+    const arguments_ = [
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
@@ -112,15 +138,37 @@ async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promis
         "-File", scriptPath,
         "-PayloadPath", payloadPath,
         "-ResultPath", resultPath,
-      ], { timeout, windowsHide: true, maxBuffer: 1024 * 1024 });
-    } catch {
-      // The script always writes a structured result before returning a failure code.
+      ];
+    let launchError: unknown;
+    let commandFound = false;
+    for (const executable of powerShellExecutableCandidates()) {
+      try {
+        await execFileAsync(executable, arguments_, { timeout, windowsHide: true, maxBuffer: 1024 * 1024 });
+        commandFound = true;
+        launchError = undefined;
+        break;
+      } catch (error) {
+        launchError = error;
+        if (isMissingExecutableError(error)) continue;
+        // The script writes a structured result before returning a failure code.
+        commandFound = true;
+        break;
+      }
     }
-    const result = JSON.parse((await readFile(resultPath, "utf8")).replace(/^\uFEFF/u, "")) as PowerShellResult;
+    if (!commandFound) {
+      throw new Error("未找到 Windows PowerShell（已检查系统目录、PowerShell 7 和 PATH）");
+    }
+    let rawResult: string;
+    try {
+      rawResult = await readFile(resultPath, "utf8");
+    } catch {
+      const detail = launchError instanceof Error ? launchError.message : "PowerShell 未返回检测结果";
+      throw new Error(`PowerShell 未能完成 PowerPoint 检测：${detail}`);
+    }
+    const result = JSON.parse(rawResult.replace(/^\uFEFF/u, "")) as PowerShellResult;
     if (!result.ok) throw new Error(result.error || "PowerPoint 企业 IRM 操作失败");
     return result;
   } catch (error) {
-    if (error instanceof Error && error.message.includes("ENOENT")) throw new Error("未找到 Windows PowerShell 或桌面版 PowerPoint");
     throw error;
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -137,7 +185,11 @@ $presentation = $null
 $result = @{ ok = $false; powerPointInstalled = $false; irmReady = $false }
 try {
   $payload = Get-Content -LiteralPath $PayloadPath -Raw -Encoding UTF8 | ConvertFrom-Json
-  $powerPoint = New-Object -ComObject PowerPoint.Application
+  try {
+    $powerPoint = New-Object -ComObject PowerPoint.Application
+  } catch {
+    throw "未找到桌面版 Microsoft PowerPoint，或 PowerPoint COM 组件未正确注册：$($_.Exception.Message)"
+  }
   $result.powerPointInstalled = $true
   if ($payload.action -eq "probe") {
     $presentation = $powerPoint.Presentations.Add()
