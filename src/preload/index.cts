@@ -15,6 +15,7 @@ import type {
 const api: ElectronApi = {
   getAppInfo: () => ipcRenderer.invoke("app:info"),
   getSnapshot: () => ipcRenderer.invoke("snapshot:get"),
+  openLocalStorageDirectory: () => ipcRenderer.invoke("storage:open-local-directory"),
   getWindowFullscreen: () => ipcRenderer.invoke("window:fullscreen:get"),
   setWindowFullscreen: (enabled: boolean) => ipcRenderer.invoke("window:fullscreen:set", enabled),
   onWindowFullscreenChange: (listener: (enabled: boolean) => void) => {

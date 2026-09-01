@@ -34,6 +34,9 @@ button { cursor: pointer; }
 .nav-button.active b { color: #10221c; background: #84e9bc; }
 .sidebar-foot { margin-top: auto; border-top: 1px solid #26333e; padding: 20px 10px 0; }
 .sidebar-foot small { display: block; margin-top: 10px; color: #63727e; font-size: 11px; }
+.local-storage-trigger { width: 100%; height: 38px; margin-top: 12px; padding: 0 10px; display: flex; align-items: center; gap: 9px; border: 1px solid #2b3a45; border-radius: 8px; background: #17212a; color: #aeb9c1; font-family: inherit; font-size: 11px; font-weight: 600; text-align: left; }
+.local-storage-trigger span { color: #85e8b8; font-size: 13px; }
+.local-storage-trigger:hover { border-color: #476071; background: #202d37; color: #fff; }
 .sidebar-version { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 15px; color: #85939d; font-size: 10px; }
 .sidebar-version b { color: #d3dbe0; font-size: 11px; }
 .about-trigger { width: 100%; min-height: 34px; margin-top: 13px; padding: 0 9px; border: 1px solid #2d3a44; border-radius: 8px; background: #17212a; color: #aab6be; font-size: 10px; font-weight: 650; text-align: left; }

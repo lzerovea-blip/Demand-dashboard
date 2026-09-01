@@ -58,11 +58,20 @@ describe("PPT 企业 IRM 有效期", () => {
 
   it("以 OpenXML 格式保存并等待文件稳定，回读失败时尝试可见窗口", () => {
     expect(POWERPOINT_IRM_SCRIPT).toContain("SaveAs([string]$payload.outputPath, 24)");
-    expect(POWERPOINT_IRM_SCRIPT).toContain("Wait-PowerPointFileReady");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("Wait-PowerPointFileReady ([string]$payload.outputPath) \"受保护 PPT\"");
     expect(POWERPOINT_IRM_SCRIPT).toContain("隐藏回读失败，转为可见窗口回读");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Visible = $true");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$result.stage = $stage");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$result.diagnostics = $diagnostics");
+  });
+
+  it("原始 PPT 使用可见窗口打开并在失败时进入 PowerPoint 修复模式", () => {
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Visible = $true");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Presentations.Open([string]$payload.inputPath, $false, $false, $true)");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.ProtectedViewWindows.Open([string]$payload.inputPath, \"\", $true)");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$presentation = $protectedViewWindow.Edit()");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("Unblock-File");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("Wait-PowerPointFileReady ([string]$payload.inputPath) \"原始 PPT\"");
   });
 
   it("权限回读允许 PowerPoint 自动保留额外的文档所有者", () => {

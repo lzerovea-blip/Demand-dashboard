@@ -210,6 +210,7 @@ export const POWERPOINT_IRM_SCRIPT = String.raw`param(
 $ErrorActionPreference = "Stop"
 $powerPoint = $null
 $presentation = $null
+$protectedViewWindow = $null
 $result = @{ ok = $false; powerPointInstalled = $false; irmReady = $false }
 $stage = "初始化"
 $diagnostics = @()
@@ -241,7 +242,7 @@ function Find-OfficeIdentity([string]$DocumentAuthor) {
   }
   return ""
 }
-function Wait-PowerPointFileReady([string]$Path) {
+function Wait-PowerPointFileReady([string]$Path, [string]$Label) {
   $lastLength = -1
   $stableChecks = 0
   for ($attempt = 0; $attempt -lt 40; $attempt++) {
@@ -253,7 +254,7 @@ function Wait-PowerPointFileReady([string]$Path) {
     }
     Start-Sleep -Milliseconds 250
   }
-  throw "PowerPoint 保存受保护文件后未能完成写入"
+  throw "$Label 文件未完成写入"
 }
 try {
   $stage = "读取请求"
@@ -279,8 +280,25 @@ try {
     $result.ok = $true
   } elseif ($payload.action -eq "protect") {
     $stage = "打开原始 PPT"
-    $presentation = $powerPoint.Presentations.Open([string]$payload.inputPath, $false, $false, $false)
-    $diagnostics += "原始 PPT 已打开"
+    Wait-PowerPointFileReady ([string]$payload.inputPath) "原始 PPT"
+    $diagnostics += "原始 PPT ZIP/XML 已校验"
+    try { Unblock-File -LiteralPath ([string]$payload.inputPath) -ErrorAction SilentlyContinue } catch {}
+    $regularOpenError = ""
+    try {
+      $powerPoint.Visible = $true
+      $presentation = $powerPoint.Presentations.Open([string]$payload.inputPath, $false, $false, $true)
+      $diagnostics += "原始 PPT 常规打开成功"
+    } catch {
+      $regularOpenError = $_.Exception.Message
+      $diagnostics += "常规打开失败，尝试修复模式"
+      try {
+        $protectedViewWindow = $powerPoint.ProtectedViewWindows.Open([string]$payload.inputPath, "", $true)
+        $presentation = $protectedViewWindow.Edit()
+        $diagnostics += "原始 PPT 修复模式打开成功"
+      } catch {
+        throw "原始 PPT 已通过 ZIP/XML 校验，但 PowerPoint 仍无法打开。常规打开：$regularOpenError；修复模式：$($_.Exception.Message)"
+      }
+    }
     $permission = $presentation.Permission
     $stage = "识别 Office 账号"
     $author = Find-OfficeIdentity ([string]$permission.DocumentAuthor)
@@ -317,7 +335,7 @@ try {
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
     $stage = "等待文件写入"
-    Wait-PowerPointFileReady ([string]$payload.outputPath)
+    Wait-PowerPointFileReady ([string]$payload.outputPath) "受保护 PPT"
     $diagnostics += "受保护文件已稳定"
 
     $stage = "重新打开受保护 PPT"
@@ -365,6 +383,9 @@ try {
   if ($presentation -ne $null) {
     try { $presentation.Close() } catch {}
     try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($presentation) | Out-Null } catch {}
+  }
+  if ($protectedViewWindow -ne $null) {
+    try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($protectedViewWindow) | Out-Null } catch {}
   }
   if ($powerPoint -ne $null) {
     try { $powerPoint.Quit() } catch {}

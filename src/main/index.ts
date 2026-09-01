@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
 import { basename, dirname, join } from "node:path";
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { LocalDatabase } from "./database.js";
 import { createWorkspacePackage, inspectWorkspacePackage, type PreparedWorkspaceImport } from "./workspacePackage.js";
 import type {
@@ -21,6 +22,7 @@ import { createRoadmapPresentation, presentationSlideCount } from "./pptxExport.
 import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm, type PowerPointIrmErrorDetails } from "./pptIrm.js";
 import { pptPermissionExpiration } from "../shared/pptAccess.js";
 import { compactPptDiagnosticValue, formatPptDiagnosticText } from "../shared/pptDiagnostic.js";
+import { validateGeneratedPptx } from "./pptxValidation.js";
 import {
   createWorkspaceWorkbook,
   inspectWorkspaceWorkbook,
@@ -29,7 +31,7 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-08-31";
+const APP_RELEASED_AT = "2026-09-01";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 const PPT_DIAGNOSTIC_FILE = "ppt-export-last-error.txt";
@@ -132,6 +134,13 @@ function registerIpc(): void {
     author: APP_AUTHOR,
   }));
   ipcMain.handle("snapshot:get", () => database.getSnapshot());
+  ipcMain.handle("storage:open-local-directory", async () => {
+    const directory = app.getPath("userData");
+    await mkdir(directory, { recursive: true });
+    const error = await shell.openPath(directory);
+    if (error) throw new Error(`无法打开本地数据目录：${error}`);
+    return { path: directory };
+  });
   ipcMain.handle("window:fullscreen:get", (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false);
   ipcMain.handle("window:fullscreen:set", (event, enabled: boolean) => {
     if (typeof enabled !== "boolean") throw new Error("请提供有效的全屏状态");
@@ -271,11 +280,14 @@ function registerIpc(): void {
       });
       if (result.canceled || !result.filePath) return { canceled: true };
       const outputPath = result.filePath.toLowerCase().endsWith(".pptx") ? result.filePath : `${result.filePath}.pptx`;
-      tempDirectory = await mkdtemp(join(dirname(outputPath), ".solution-ppt-"));
+      tempDirectory = await mkdtemp(join(tmpdir(), "solution-ppt-export-"));
       editablePath = join(tempDirectory, "roadmap-editable.pptx");
       protectedPath = join(tempDirectory, "roadmap-protected.pptx");
       stage = "生成原始 PPT";
-      await writeFile(editablePath, await createRoadmapPresentation(snapshot, input, { exportedAt, expiration }));
+      const editableBytes = await createRoadmapPresentation(snapshot, input, { exportedAt, expiration });
+      stage = "校验原始 PPT";
+      await validateGeneratedPptx(editableBytes, slideCount);
+      await writeFile(editablePath, editableBytes);
       stage = "写入并校验 IRM 权限";
       await protectPowerPointWithIrm({
         inputPath: editablePath,

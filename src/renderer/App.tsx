@@ -91,8 +91,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.36",
-  releasedAt: "2026-08-31",
+  version: "0.7.37",
+  releasedAt: "2026-09-01",
   author: "林忠维",
 };
 
@@ -357,6 +357,14 @@ export default function App() {
         </nav>
         <div className="sidebar-foot">
           <div className="offline-dot"><i /> 全程本地处理</div>
+          <button type="button" className="local-storage-trigger" onClick={async () => {
+            try {
+              const result = await window.roadmapApi.openLocalStorageDirectory();
+              setNotice(`已打开本地数据目录：${result.path}`);
+            } catch (reason) {
+              setError(messageOf(reason));
+            }
+          }}><span>▣</span>打开本地数据目录</button>
           <div className="sidebar-version">
             <b>v{appInfo.version}</b>
             <span>{formatReleaseDate(appInfo.releasedAt)}</span>

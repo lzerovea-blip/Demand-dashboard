@@ -334,6 +334,7 @@ export interface AppInfo {
 export interface ElectronApi {
   getAppInfo(): Promise<AppInfo>;
   getSnapshot(): Promise<AppSnapshot>;
+  openLocalStorageDirectory(): Promise<{ path: string }>;
   getWindowFullscreen(): Promise<boolean>;
   setWindowFullscreen(enabled: boolean): Promise<void>;
   onWindowFullscreenChange(listener: (enabled: boolean) => void): () => void;

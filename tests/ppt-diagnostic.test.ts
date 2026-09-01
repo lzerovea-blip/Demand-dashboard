@@ -5,7 +5,7 @@ describe("PPT 简洁诊断日志", () => {
   it("固定为十二行纯文本并只保留最近六个步骤", () => {
     const content = formatPptDiagnosticText({
       createdAt: "2026-08-31T12:34:56.000Z",
-      appVersion: "v0.7.36",
+      appVersion: "v0.7.37",
       stage: "重新打开受保护 PPT",
       powerPointStatus: "已检测",
       irmStatus: "可用",
