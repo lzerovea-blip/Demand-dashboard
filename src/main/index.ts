@@ -21,6 +21,7 @@ import { halfYearSequence } from "../shared/roadmap.js";
 import { createRoadmapPresentation, presentationSlideCount } from "./pptxExport.js";
 import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm, type PowerPointIrmErrorDetails } from "./pptIrm.js";
 import { pptPermissionExpiration } from "../shared/pptAccess.js";
+import { resolvePptDocumentOwnerAccount } from "../shared/members.js";
 import { compactPptDiagnosticValue, formatPptDiagnosticText } from "../shared/pptDiagnostic.js";
 import { validateGeneratedPptx } from "./pptxValidation.js";
 import {
@@ -55,6 +56,7 @@ async function writePptDiagnosticLog(input: {
   error: unknown;
   stage: string;
   environment?: Awaited<ReturnType<typeof checkPowerPointIrmEnvironment>>;
+  documentOwnerAccount?: string;
   editablePath?: string;
   protectedPath?: string;
 }): Promise<PptDiagnosticLog> {
@@ -68,7 +70,7 @@ async function writePptDiagnosticLog(input: {
     stage: details.stage || input.stage,
     powerPointStatus: input.environment?.powerPointInstalled ? "已检测" : "未确认",
     irmStatus: input.environment?.irmReady ? "可用" : "未确认",
-    signedInAccount: input.environment?.signedInAccount || "未识别",
+    documentOwnerAccount: input.documentOwnerAccount || details.signedInAccount || input.environment?.signedInAccount || "未识别",
     editableFileSize: await optionalFileSize(input.editablePath),
     protectedFileSize: await optionalFileSize(input.protectedPath),
     completedSteps: details.diagnostics ?? [],
@@ -158,7 +160,17 @@ function registerIpc(): void {
   ipcMain.handle("members:save", (_event, input: SaveMemberInput) => database.saveMember(input));
   ipcMain.handle("members:delete", (_event, id: string) => database.deleteMember(id));
   ipcMain.handle("ppt-access:save", (_event, input: SavePptAccessPolicyInput) => database.savePptAccessPolicy(input));
-  ipcMain.handle("ppt-access:check-environment", () => checkPowerPointIrmEnvironment());
+  ipcMain.handle("ppt-access:check-environment", async () => {
+    const status = await checkPowerPointIrmEnvironment();
+    const documentOwnerAccount = resolvePptDocumentOwnerAccount(status.signedInAccount, database.getSnapshot().members);
+    return {
+      ...status,
+      documentOwnerAccount,
+      message: status.irmReady && documentOwnerAccount
+        ? `PowerPoint 企业 IRM 可用；文档所有者：${documentOwnerAccount}`
+        : status.message,
+    };
+  });
   ipcMain.handle("ppt-access:diagnostic-log", () => readPptDiagnosticLog());
   ipcMain.handle("groups:save", (_event, input: SaveGroupOverrideInput) => database.saveGroupOverride(input));
   ipcMain.handle("groups:reorder", (_event, input: SaveGroupOrderInput) => database.saveGroupOrder(input));
@@ -259,6 +271,7 @@ function registerIpc(): void {
   ipcMain.handle("presentation:export", async (_event, input: PptExportRequest) => {
     let stage = "准备导出";
     let environment: Awaited<ReturnType<typeof checkPowerPointIrmEnvironment>> | undefined;
+    let documentOwnerAccount: string | undefined;
     let tempDirectory: string | undefined;
     let editablePath: string | undefined;
     let protectedPath: string | undefined;
@@ -268,6 +281,7 @@ function registerIpc(): void {
       stage = "检测 PowerPoint 与 IRM";
       environment = await checkPowerPointIrmEnvironment();
       if (!environment.supported || !environment.powerPointInstalled || !environment.irmReady) throw new Error(environment.message);
+      documentOwnerAccount = resolvePptDocumentOwnerAccount(environment.signedInAccount, snapshot.members);
       stage = "计算 PPT 页面";
       const plan = buildPptExportPlan(snapshot, input);
       const slideCount = presentationSlideCount(plan);
@@ -295,13 +309,21 @@ function registerIpc(): void {
         members: snapshot.members,
         policy: snapshot.pptAccessPolicy,
         expiration,
+        signedInAccount: environment.signedInAccount,
       });
       stage = "复制最终 PPT";
       await copyFile(protectedPath, outputPath);
       await clearPptDiagnosticLog();
       return { canceled: false, path: outputPath, slideCount };
     } catch (error) {
-      const diagnostic = await writePptDiagnosticLog({ error, stage, environment, editablePath, protectedPath });
+      const diagnostic = await writePptDiagnosticLog({
+        error,
+        stage,
+        environment,
+        documentOwnerAccount,
+        editablePath,
+        protectedPath,
+      });
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`${compactPptDiagnosticValue(message)}\n诊断日志：${diagnostic.path}`);
     } finally {

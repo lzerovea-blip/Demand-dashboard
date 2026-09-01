@@ -4,7 +4,7 @@ export interface PptDiagnosticTextInput {
   stage: string;
   powerPointStatus: string;
   irmStatus: string;
-  signedInAccount: string;
+  documentOwnerAccount: string;
   editableFileSize: string;
   protectedFileSize: string;
   completedSteps: string[];
@@ -25,7 +25,7 @@ export function formatPptDiagnosticText(input: PptDiagnosticTextInput): string {
     `失败阶段：${compactPptDiagnosticValue(input.stage, 80)}`,
     `PowerPoint：${compactPptDiagnosticValue(input.powerPointStatus, 40)}`,
     `企业 IRM：${compactPptDiagnosticValue(input.irmStatus, 40)}`,
-    `当前账号：${compactPptDiagnosticValue(input.signedInAccount, 120)}`,
+    `文档所有者：${compactPptDiagnosticValue(input.documentOwnerAccount, 120)}`,
     `原始 PPT：${compactPptDiagnosticValue(input.editableFileSize, 40)}`,
     `受保护 PPT：${compactPptDiagnosticValue(input.protectedFileSize, 40)}`,
     `已完成步骤：${steps.length ? steps.join(" → ") : "无"}`,

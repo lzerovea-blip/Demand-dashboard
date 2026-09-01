@@ -216,6 +216,7 @@ export interface IrmEnvironmentStatus {
   powerPointInstalled: boolean;
   irmReady: boolean;
   signedInAccount?: string;
+  documentOwnerAccount?: string;
   message: string;
 }
 

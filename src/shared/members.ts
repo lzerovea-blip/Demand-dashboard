@@ -15,6 +15,31 @@ export function isValidMicrosoftAccount(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(account);
 }
 
+export function resolvePptDocumentOwnerAccount(
+  signedInAccount: string | undefined,
+  members: readonly Member[],
+): string | undefined {
+  if (!signedInAccount?.trim()) return undefined;
+  const normalizedAccount = normalizeMicrosoftAccount(signedInAccount);
+  const exactMember = members.find(
+    (member) => normalizeMicrosoftAccount(member.microsoftAccount) === normalizedAccount,
+  );
+  if (exactMember) return normalizeMicrosoftAccount(exactMember.microsoftAccount);
+
+  const localIdentity = normalizedAccount
+    .split("@")[0]
+    ?.split("\\")
+    .at(-1)
+    ?.trim()
+    .toLocaleLowerCase("en-US");
+  const employeeMember = members.find(
+    (member) => member.employeeNumber.trim().toLocaleLowerCase("en-US") === localIdentity,
+  );
+  if (employeeMember) return normalizeMicrosoftAccount(employeeMember.microsoftAccount);
+
+  return isValidMicrosoftAccount(normalizedAccount) ? normalizedAccount : undefined;
+}
+
 export function normalizeMember(input: Member): Member {
   return {
     ...input,

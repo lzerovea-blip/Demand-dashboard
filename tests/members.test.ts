@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidMicrosoftAccount, normalizePptAccessPolicy, requirementMatchesResponsibleMember, responsibleMembers, visibleMembersForRole } from "../src/shared/members";
+import { isValidMicrosoftAccount, normalizePptAccessPolicy, requirementMatchesResponsibleMember, resolvePptDocumentOwnerAccount, responsibleMembers, visibleMembersForRole } from "../src/shared/members";
 import type { Member, Requirement } from "../src/shared/types";
 
 const members: Member[] = [
@@ -25,6 +25,15 @@ describe("人员责任矩阵", () => {
     expect(isValidMicrosoftAccount("user@company.com")).toBe(true);
     expect(isValidMicrosoftAccount("10086")).toBe(false);
     expect(normalizePptAccessPolicy({ entries: [{ memberId: "m1", permission: "read" }, { memberId: "m1", permission: "change" }], updatedAt: "2026-08-28" }).entries).toEqual([{ memberId: "m1", permission: "change" }]);
+  });
+
+  it("按 Office 身份中的工号映射人员字典企业邮箱作为 PPT 所有者", () => {
+    const owner = member("owner", "林忠维", "规划", ["d1"], 0);
+    owner.employeeNumber = "l00860412";
+    owner.microsoftAccount = "zw.lin@huawei.com";
+    expect(resolvePptDocumentOwnerAccount("l00860412@china.huawei.com", [owner])).toBe("zw.lin@huawei.com");
+    expect(resolvePptDocumentOwnerAccount("ZW.LIN@HUAWEI.COM", [owner])).toBe("zw.lin@huawei.com");
+    expect(resolvePptDocumentOwnerAccount("other@huawei.com", [owner])).toBe("other@huawei.com");
   });
 });
 

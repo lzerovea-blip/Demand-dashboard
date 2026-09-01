@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { promisify } from "node:util";
+import { resolvePptDocumentOwnerAccount } from "../shared/members.js";
 import type { IrmEnvironmentStatus, Member, PptAccessPolicy, PptPermissionLevel } from "../shared/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -28,6 +29,7 @@ interface PowerShellResult {
 export interface PowerPointIrmErrorDetails {
   stage?: string;
   diagnostics: string[];
+  signedInAccount?: string;
 }
 
 function firstEnvironmentValue(environment: NodeJS.ProcessEnv, keys: string[]): string | undefined {
@@ -70,6 +72,7 @@ export interface IrmProtectionRequest {
   members: Member[];
   policy: PptAccessPolicy;
   expiration: Date;
+  signedInAccount?: string;
 }
 
 export function verifyPowerPointIrmGrants(actual: PowerShellGrant[], expected: PowerShellGrant[]): void {
@@ -105,7 +108,7 @@ export async function checkPowerPointIrmEnvironment(platform = process.platform)
       irmReady: Boolean(result.irmReady),
       signedInAccount: result.signedInAccount || undefined,
       message: result.irmReady
-        ? `PowerPoint 企业 IRM 可用${result.signedInAccount ? `，当前作者：${result.signedInAccount}` : ""}`
+        ? `PowerPoint 企业 IRM 可用${result.signedInAccount ? `，检测到 Office 身份：${result.signedInAccount}` : ""}`
         : (result.error || "PowerPoint 未登录可使用 IRM 的企业账号。"),
     };
   } catch (error) {
@@ -132,12 +135,14 @@ export async function protectPowerPointWithIrm(request: IrmProtectionRequest): P
     };
   });
   if (!grants.length) throw new Error("请至少添加一名成员到 PPT 白名单");
+  const authorAccount = resolvePptDocumentOwnerAccount(request.signedInAccount, request.members);
 
   const result = await runPowerPointIrmScript({
     action: "protect",
     inputPath: request.inputPath,
     outputPath: request.outputPath,
     grants,
+    authorAccount,
   }, 120_000);
   const actual = result.grants ?? [];
   verifyPowerPointIrmGrants(actual, grants);
@@ -193,6 +198,7 @@ async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promis
       const error = new Error(result.error || "PowerPoint 企业 IRM 操作失败") as Error & PowerPointIrmErrorDetails;
       error.stage = result.stage;
       error.diagnostics = result.diagnostics ?? [];
+      error.signedInAccount = result.signedInAccount;
       throw error;
     }
     return result;
@@ -285,14 +291,14 @@ try {
     try { Unblock-File -LiteralPath ([string]$payload.inputPath) -ErrorAction SilentlyContinue } catch {}
     $regularOpenError = ""
     try {
-      $powerPoint.Visible = $true
-      $presentation = $powerPoint.Presentations.Open([string]$payload.inputPath, $false, $false, $true)
+      $powerPoint.Visible = -1
+      $presentation = $powerPoint.Presentations.Open([string]$payload.inputPath, 0, 0, -1)
       $diagnostics += "原始 PPT 常规打开成功"
     } catch {
       $regularOpenError = $_.Exception.Message
       $diagnostics += "常规打开失败，尝试修复模式"
       try {
-        $protectedViewWindow = $powerPoint.ProtectedViewWindows.Open([string]$payload.inputPath, "", $true)
+        $protectedViewWindow = $powerPoint.ProtectedViewWindows.Open([string]$payload.inputPath, "", -1)
         $presentation = $protectedViewWindow.Edit()
         $diagnostics += "原始 PPT 修复模式打开成功"
       } catch {
@@ -301,7 +307,13 @@ try {
     }
     $permission = $presentation.Permission
     $stage = "识别 Office 账号"
-    $author = Find-OfficeIdentity ([string]$permission.DocumentAuthor)
+    $author = ""
+    if (-not [string]::IsNullOrWhiteSpace([string]$payload.authorAccount)) {
+      $author = ([string]$payload.authorAccount).Trim().ToLowerInvariant()
+    }
+    if ([string]::IsNullOrWhiteSpace($author)) {
+      $author = Find-OfficeIdentity ([string]$permission.DocumentAuthor)
+    }
     $permission.RemoveAll()
     $permission.Enabled = $true
     if (-not $permission.Enabled) { throw "PowerPoint 企业 IRM 服务不可用" }
@@ -311,6 +323,7 @@ try {
     if ([string]::IsNullOrWhiteSpace($author)) {
       throw "无法识别当前 PowerPoint 企业账号，不能为导出者保留所有者权限。请先在 PowerPoint 的账户页面确认已登录企业邮箱"
     }
+    $result.signedInAccount = $author
     try {
       $permission.DocumentAuthor = $author
     } catch {
@@ -342,14 +355,14 @@ try {
     $powerPoint = New-Object -ComObject PowerPoint.Application
     $hiddenOpenError = ""
     try {
-      $presentation = $powerPoint.Presentations.Open([string]$payload.outputPath, $true, $false, $false)
+      $presentation = $powerPoint.Presentations.Open([string]$payload.outputPath, -1, 0, 0)
       $diagnostics += "隐藏回读成功"
     } catch {
       $hiddenOpenError = $_.Exception.Message
       $diagnostics += "隐藏回读失败，转为可见窗口回读"
       try {
-        $powerPoint.Visible = $true
-        $presentation = $powerPoint.Presentations.Open([string]$payload.outputPath, $true, $false, $true)
+        $powerPoint.Visible = -1
+        $presentation = $powerPoint.Presentations.Open([string]$payload.outputPath, -1, 0, -1)
         $diagnostics += "可见窗口回读成功"
       } catch {
         throw "保护后的 PPT 已保存，但 PowerPoint 无法重新打开。隐藏验证：$hiddenOpenError；可见窗口验证：$($_.Exception.Message)。请确认当前 Office 账号 $author 有权使用企业 IRM"
