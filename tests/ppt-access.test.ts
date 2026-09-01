@@ -5,6 +5,7 @@ import {
   checkPowerPointIrmEnvironment,
   encodeWindowsPowerShellScript,
   powerShellExecutableCandidates,
+  shouldRetryWithOfficeIdentity,
   verifyPowerPointIrmGrants,
 } from "../src/main/pptIrm";
 import { addCalendarMonthsClamped, formatPptExpirationDate, pptPermissionExpiration } from "../src/shared/pptAccess";
@@ -55,11 +56,13 @@ describe("PPT 企业 IRM 有效期", () => {
   it("探测允许新文档没有作者，保护时优先使用人员字典映射的文档所有者", () => {
     expect(POWERPOINT_IRM_SCRIPT).toContain("Find-OfficeIdentity");
     const enabledAt = POWERPOINT_IRM_SCRIPT.indexOf("$permission.Enabled = $true");
-    const authorAt = POWERPOINT_IRM_SCRIPT.indexOf("$result.signedInAccount = Find-OfficeIdentity");
+    const authorAt = POWERPOINT_IRM_SCRIPT.indexOf("$result.officeIdentity = Find-OfficeIdentity");
     expect(enabledAt).toBeGreaterThan(-1);
     expect(authorAt).toBeGreaterThan(enabledAt);
+    expect(POWERPOINT_IRM_SCRIPT).toContain("@china.huawei.com");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("Where-Object { $_.ToLowerInvariant().EndsWith");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.DocumentAuthor = $author");
-    expect(POWERPOINT_IRM_SCRIPT).toContain("$payload.authorAccount");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$payload.ownerAccount");
   });
 
   it("文档所有者保留完全控制且不重复写入白名单", () => {
@@ -76,9 +79,10 @@ describe("PPT 企业 IRM 有效期", () => {
       members: [owner, reader],
       policy,
       expiration: new Date("2027-03-01T00:00:00.000Z"),
-      signedInAccount: "l00860412@china.huawei.com",
+      officeIdentity: "l00860412@china.huawei.com",
     });
-    expect(access.authorAccount).toBe("zw.lin@huawei.com");
+    expect(access.officeIdentity).toBe("l00860412@china.huawei.com");
+    expect(access.preferredDocumentOwner).toBe("zw.lin@huawei.com");
     expect(access.grants).toEqual([{
       account: "reader@huawei.com",
       permission: 15,
@@ -88,8 +92,28 @@ describe("PPT 企业 IRM 有效期", () => {
       members: [owner],
       policy: { ...policy, entries: [{ memberId: owner.id, permission: "read" }] },
       expiration: new Date("2027-03-01T00:00:00.000Z"),
-      signedInAccount: "l00860412@china.huawei.com",
+      officeIdentity: "l00860412@china.huawei.com",
     }).grants).toEqual([]);
+  });
+
+  it("导出者的 Office 身份和显示账号都不会重复加入普通白名单", () => {
+    const office = pptMember("office", "other", "l00860412@china.huawei.com");
+    const alias = pptMember("alias", "l00860412", "zw.lin@huawei.com");
+    const reader = pptMember("reader", "l10000000", "reader@huawei.com");
+    const access = buildPowerPointIrmAccess({
+      members: [office, alias, reader],
+      policy: {
+        entries: [
+          { memberId: office.id, permission: "read" },
+          { memberId: alias.id, permission: "change" },
+          { memberId: reader.id, permission: "read" },
+        ],
+        updatedAt: "2026-09-01T00:00:00.000Z",
+      },
+      expiration: new Date("2027-03-01T00:00:00.000Z"),
+      officeIdentity: "l00860412@china.huawei.com",
+    });
+    expect(access.grants.map((item) => item.account)).toEqual(["reader@huawei.com"]);
   });
 
   it("以 OpenXML 格式保存并等待文件稳定，回读失败时尝试可见窗口", () => {
@@ -104,13 +128,25 @@ describe("PPT 企业 IRM 有效期", () => {
     expect(POWERPOINT_IRM_SCRIPT).toContain("$result.diagnostics = $diagnostics");
   });
 
-  it("原始 PPT 使用可见窗口打开并在失败时进入 PowerPoint 修复模式", () => {
+  it("原始 PPT 修复后另存为标准 PPT，并由新的 PowerPoint 实例常规重开", () => {
     expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Visible = -1");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Presentations.Open([string]$payload.inputPath, 0, 0, -1)");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.ProtectedViewWindows.Open([string]$payload.inputPath, \"\", -1)");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$presentation = $protectedViewWindow.Edit()");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$presentation.SaveCopyAs([string]$payload.normalizedPath, 24)");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$stage = \"常规重开标准化 PPT\"");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("标准化 PPT 常规重开成功");
     expect(POWERPOINT_IRM_SCRIPT).toContain("Unblock-File");
     expect(POWERPOINT_IRM_SCRIPT).toContain("Wait-PowerPointFileReady ([string]$payload.inputPath) \"原始 PPT\"");
+  });
+
+  it("只对所有者认证、保存和回读类失败回退 Office 登录身份", () => {
+    for (const stage of ["设置文档所有者", "保存受保护 PPT", "重新打开受保护 PPT", "校验 IRM 权限"]) {
+      expect(shouldRetryWithOfficeIdentity(stage)).toBe(true);
+    }
+    expect(shouldRetryWithOfficeIdentity("添加白名单权限（第 1 项）")).toBe(false);
+    expect(shouldRetryWithOfficeIdentity("设置白名单有效期（第 1 项）")).toBe(false);
+    expect(shouldRetryWithOfficeIdentity("常规重开标准化 PPT")).toBe(false);
   });
 
   it("权限回读允许 PowerPoint 自动保留额外的文档所有者", () => {
@@ -123,7 +159,7 @@ describe("PPT 企业 IRM 有效期", () => {
     ])).not.toThrow();
     expect(() => verifyPowerPointIrmGrants([], [
       { account: "reader@example.com", permission: 1, expirationUtc },
-    ])).toThrow("缺少账号");
+    ])).toThrow("缺少白名单第 1 项");
   });
 });
 

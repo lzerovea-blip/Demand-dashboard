@@ -35,6 +35,7 @@ const api: ElectronApi = {
   savePptAccessPolicy: (input: SavePptAccessPolicyInput) => ipcRenderer.invoke("ppt-access:save", input),
   checkIrmEnvironment: () => ipcRenderer.invoke("ppt-access:check-environment"),
   getPptDiagnosticLog: () => ipcRenderer.invoke("ppt-access:diagnostic-log"),
+  openPptDiagnosticDirectory: () => ipcRenderer.invoke("ppt-access:open-diagnostic-directory"),
   saveGroupOverride: (input: SaveGroupOverrideInput) => ipcRenderer.invoke("groups:save", input),
   saveGroupOrder: (input: SaveGroupOrderInput) => ipcRenderer.invoke("groups:reorder", input),
   exportWorkspacePackage: () => ipcRenderer.invoke("workspace:export"),

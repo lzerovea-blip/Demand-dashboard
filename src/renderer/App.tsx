@@ -91,7 +91,7 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.39",
+  version: "0.7.40",
   releasedAt: "2026-09-01",
   author: "林忠维",
 };
@@ -444,7 +444,11 @@ export default function App() {
               onExportPpt={async (config) => {
                 try {
                   const result = await window.roadmapApi.exportRoadmapPresentation({ start: exportStartHalf, end: exportEndHalf, ...config });
-                  if (!result.canceled) setNotice(`PPT 已导出（${result.slideCount} 页）：${result.path}`);
+                  if (!result.canceled) {
+                    setNotice(result.fallbackUsed
+                      ? `PPT 已导出（${result.slideCount} 页）；已回退使用 Office 登录账号作为文档所有者：${result.effectiveDocumentOwner || "未识别"}`
+                      : `PPT 已导出（${result.slideCount} 页）：${result.path}`);
+                  }
                 } catch (reason) {
                   setError(messageOf(reason));
                 }
@@ -510,6 +514,7 @@ export default function App() {
               }}
               onCheckIrm={() => window.roadmapApi.checkIrmEnvironment()}
               onGetPptDiagnostic={() => window.roadmapApi.getPptDiagnosticLog()}
+              onOpenPptDiagnostic={() => window.roadmapApi.openPptDiagnosticDirectory()}
             />
           )}
         </section>
@@ -1857,7 +1862,7 @@ function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDele
   );
 }
 
-function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook, onSavePptAccessPolicy, onCheckIrm, onGetPptDiagnostic }: {
+function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook, onSavePptAccessPolicy, onCheckIrm, onGetPptDiagnostic, onOpenPptDiagnostic }: {
   snapshot: AppSnapshot;
   start: string;
   end: string;
@@ -1871,6 +1876,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   onSavePptAccessPolicy: (input: SavePptAccessPolicyInput) => Promise<void>;
   onCheckIrm: () => Promise<IrmEnvironmentStatus>;
   onGetPptDiagnostic: () => Promise<PptDiagnosticLog | null>;
+  onOpenPptDiagnostic: () => Promise<{ path: string }>;
 }) {
   const [preview, setPreview] = useState<WorkspaceImportPreview | null>(null);
   const [workbookPreview, setWorkbookPreview] = useState<WorkspaceWorkbookImportPreview | null>(null);
@@ -2105,7 +2111,11 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           <details>
             <summary><span><b>最近一次 PPT 导出诊断</b><small>简洁纯文本 · 共 {pptDiagnostic.content.split("\n").length} 行</small></span><span>展开查看</span></summary>
             <pre className="ppt-diagnostic-text">{pptDiagnostic.content}</pre>
-            <div className="ppt-diagnostic-actions"><span>{pptDiagnostic.path}</span><button type="button" className="button ghost" onClick={() => { void navigator.clipboard.writeText(pptDiagnostic.content); setSecurityMessage("诊断日志文字已复制。"); }}>复制文字</button></div>
+            <div className="ppt-diagnostic-actions">
+              <span>{pptDiagnostic.directoryPath ?? pptDiagnostic.path}</span>
+              {pptDiagnostic.directoryPath && <button type="button" className="button ghost" onClick={() => { void onOpenPptDiagnostic().then((result) => setSecurityMessage(`已打开诊断目录：${result.path}`)).catch((reason) => setSecurityMessage(messageOf(reason))); }}>打开本次诊断目录</button>}
+              <button type="button" className="button ghost" onClick={() => { void navigator.clipboard.writeText(pptDiagnostic.content); setSecurityMessage("诊断日志文字已复制。"); }}>复制文字</button>
+            </div>
           </details>
         </section>}
 

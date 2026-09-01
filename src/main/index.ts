@@ -23,6 +23,7 @@ import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm, type PowerPoin
 import { pptPermissionExpiration } from "../shared/pptAccess.js";
 import { resolvePptDocumentOwnerAccount } from "../shared/members.js";
 import { compactPptDiagnosticValue, formatPptDiagnosticText } from "../shared/pptDiagnostic.js";
+import { preservePptDiagnosticArtifacts } from "./pptDiagnosticArtifacts.js";
 import { validateGeneratedPptx } from "./pptxValidation.js";
 import {
   createWorkspaceWorkbook,
@@ -36,6 +37,7 @@ const APP_RELEASED_AT = "2026-09-01";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 const PPT_DIAGNOSTIC_FILE = "ppt-export-last-error.txt";
+const PPT_DIAGNOSTIC_POINTER_FILE = "ppt-export-last-error.json";
 
 let database: LocalDatabase;
 let mainWindow: BrowserWindow | null = null;
@@ -56,44 +58,90 @@ async function writePptDiagnosticLog(input: {
   error: unknown;
   stage: string;
   environment?: Awaited<ReturnType<typeof checkPowerPointIrmEnvironment>>;
-  documentOwnerAccount?: string;
+  preferredDocumentOwner?: string;
+  effectiveDocumentOwner?: string;
+  fallbackUsed?: boolean;
   editablePath?: string;
-  protectedPath?: string;
+  normalizedPath?: string;
+  preferredProtectedPath?: string;
+  fallbackProtectedPath?: string;
 }): Promise<PptDiagnosticLog> {
   const createdAt = new Date().toISOString();
   const details = input.error as Partial<PowerPointIrmErrorDetails>;
-  const path = join(app.getPath("userData"), "logs", PPT_DIAGNOSTIC_FILE);
+  const userDataPath = app.getPath("userData");
+  const logsPath = join(userDataPath, "logs");
+  const path = join(logsPath, PPT_DIAGNOSTIC_FILE);
+  const pointerPath = join(logsPath, PPT_DIAGNOSTIC_POINTER_FILE);
   const message = input.error instanceof Error ? input.error.message : String(input.error);
+  const fallbackUsed = input.fallbackUsed ?? details.fallbackUsed ?? false;
+  const protectedPath = fallbackUsed ? input.fallbackProtectedPath : input.preferredProtectedPath;
+  const standardizationStatus = details.normalized
+    ? "已完成修复/标准化并由新 PowerPoint 实例常规重开"
+    : input.normalizedPath
+      ? "未完成或未通过常规重开"
+      : "未开始";
   const content = formatPptDiagnosticText({
     createdAt,
     appVersion: `v${app.getVersion()}`,
     stage: details.stage || input.stage,
-    powerPointStatus: input.environment?.powerPointInstalled ? "已检测" : "未确认",
-    irmStatus: input.environment?.irmReady ? "可用" : "未确认",
-    documentOwnerAccount: input.documentOwnerAccount || details.signedInAccount || input.environment?.signedInAccount || "未识别",
+    powerPointAndIrmStatus: `PowerPoint ${input.environment?.powerPointInstalled ? "已检测" : "未确认"}；企业 IRM ${input.environment?.irmReady ? "可用" : "未确认"}`,
+    officeIdentity: details.officeIdentity || input.environment?.officeIdentity || "未识别",
+    preferredDocumentOwner: details.preferredDocumentOwner || input.preferredDocumentOwner || input.environment?.preferredDocumentOwner || "未识别",
+    effectiveDocumentOwner: details.effectiveDocumentOwner || input.effectiveDocumentOwner || "未生成",
+    fallbackUsed,
+    standardizationStatus,
     editableFileSize: await optionalFileSize(input.editablePath),
-    protectedFileSize: await optionalFileSize(input.protectedPath),
+    normalizedFileSize: await optionalFileSize(input.normalizedPath),
+    protectedFileSize: await optionalFileSize(protectedPath),
     completedSteps: details.diagnostics ?? [],
     errorMessage: message,
   });
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, content, "utf8");
-  return { createdAt, path, content };
+  const directoryPath = await preservePptDiagnosticArtifacts({
+    userDataPath,
+    createdAt,
+    appVersion: `v${app.getVersion()}`,
+    stage: details.stage || input.stage,
+    logContent: content,
+    files: [
+      { sourcePath: input.editablePath, fileName: "01-generated-original.pptx", label: "原始生成 PPT" },
+      { sourcePath: input.normalizedPath, fileName: "02-powerpoint-normalized.pptx", label: "PowerPoint 标准化 PPT" },
+      { sourcePath: input.preferredProtectedPath, fileName: "03-preferred-owner-protected.pptx", label: "首选账号保护结果" },
+      { sourcePath: input.fallbackProtectedPath, fileName: "04-office-owner-fallback-protected.pptx", label: "Office 账号回退保护结果" },
+    ],
+  });
+  await mkdir(logsPath, { recursive: true });
+  await Promise.all([
+    writeFile(path, content, "utf8"),
+    writeFile(pointerPath, JSON.stringify({ createdAt, directoryPath }), "utf8"),
+  ]);
+  return { createdAt, path, content, directoryPath };
 }
 
 async function readPptDiagnosticLog(): Promise<PptDiagnosticLog | null> {
-  const path = join(app.getPath("userData"), "logs", PPT_DIAGNOSTIC_FILE);
+  const logsPath = join(app.getPath("userData"), "logs");
+  const path = join(logsPath, PPT_DIAGNOSTIC_FILE);
   try {
     const content = await readFile(path, "utf8");
     const createdAt = /^时间：(.+)$/m.exec(content)?.[1] ?? "";
-    return { createdAt, path, content };
+    let directoryPath: string | undefined;
+    try {
+      const pointer = JSON.parse(await readFile(join(logsPath, PPT_DIAGNOSTIC_POINTER_FILE), "utf8")) as { directoryPath?: string };
+      directoryPath = pointer.directoryPath;
+    } catch {
+      directoryPath = undefined;
+    }
+    return { createdAt, path, content, directoryPath };
   } catch {
     return null;
   }
 }
 
 async function clearPptDiagnosticLog(): Promise<void> {
-  await rm(join(app.getPath("userData"), "logs", PPT_DIAGNOSTIC_FILE), { force: true });
+  const logsPath = join(app.getPath("userData"), "logs");
+  await Promise.all([
+    rm(join(logsPath, PPT_DIAGNOSTIC_FILE), { force: true }),
+    rm(join(logsPath, PPT_DIAGNOSTIC_POINTER_FILE), { force: true }),
+  ]);
 }
 
 async function createWindow(): Promise<void> {
@@ -162,16 +210,25 @@ function registerIpc(): void {
   ipcMain.handle("ppt-access:save", (_event, input: SavePptAccessPolicyInput) => database.savePptAccessPolicy(input));
   ipcMain.handle("ppt-access:check-environment", async () => {
     const status = await checkPowerPointIrmEnvironment();
-    const documentOwnerAccount = resolvePptDocumentOwnerAccount(status.signedInAccount, database.getSnapshot().members);
+    const preferredDocumentOwner = resolvePptDocumentOwnerAccount(status.officeIdentity, database.getSnapshot().members);
     return {
       ...status,
-      documentOwnerAccount,
-      message: status.irmReady && documentOwnerAccount
-        ? `PowerPoint 企业 IRM 可用；文档所有者：${documentOwnerAccount}`
+      preferredDocumentOwner,
+      message: status.irmReady && preferredDocumentOwner
+        ? `PowerPoint 企业 IRM 可用；Office 登录身份：${status.officeIdentity || "未识别"}；首选文档所有者：${preferredDocumentOwner}；必要时会自动回退为 Office 登录身份。`
         : status.message,
     };
   });
   ipcMain.handle("ppt-access:diagnostic-log", () => readPptDiagnosticLog());
+  ipcMain.handle("ppt-access:open-diagnostic-directory", async () => {
+    const diagnostic = await readPptDiagnosticLog();
+    if (!diagnostic) throw new Error("当前没有可打开的 PPT 诊断记录");
+    const directory = diagnostic.directoryPath ?? dirname(diagnostic.path);
+    await mkdir(directory, { recursive: true });
+    const error = await shell.openPath(directory);
+    if (error) throw new Error(`无法打开 PPT 诊断目录：${error}`);
+    return { path: directory };
+  });
   ipcMain.handle("groups:save", (_event, input: SaveGroupOverrideInput) => database.saveGroupOverride(input));
   ipcMain.handle("groups:reorder", (_event, input: SaveGroupOrderInput) => database.saveGroupOrder(input));
 
@@ -271,17 +328,21 @@ function registerIpc(): void {
   ipcMain.handle("presentation:export", async (_event, input: PptExportRequest) => {
     let stage = "准备导出";
     let environment: Awaited<ReturnType<typeof checkPowerPointIrmEnvironment>> | undefined;
-    let documentOwnerAccount: string | undefined;
+    let preferredDocumentOwner: string | undefined;
+    let effectiveDocumentOwner: string | undefined;
+    let fallbackUsed = false;
     let tempDirectory: string | undefined;
     let editablePath: string | undefined;
-    let protectedPath: string | undefined;
+    let normalizedPath: string | undefined;
+    let preferredProtectedPath: string | undefined;
+    let fallbackProtectedPath: string | undefined;
     try {
       const snapshot = database.getSnapshot();
       if (!snapshot.pptAccessPolicy.entries.length) throw new Error("请先配置并保存 PPT 成员白名单");
       stage = "检测 PowerPoint 与 IRM";
       environment = await checkPowerPointIrmEnvironment();
       if (!environment.supported || !environment.powerPointInstalled || !environment.irmReady) throw new Error(environment.message);
-      documentOwnerAccount = resolvePptDocumentOwnerAccount(environment.signedInAccount, snapshot.members);
+      preferredDocumentOwner = resolvePptDocumentOwnerAccount(environment.officeIdentity, snapshot.members);
       stage = "计算 PPT 页面";
       const plan = buildPptExportPlan(snapshot, input);
       const slideCount = presentationSlideCount(plan);
@@ -296,36 +357,51 @@ function registerIpc(): void {
       const outputPath = result.filePath.toLowerCase().endsWith(".pptx") ? result.filePath : `${result.filePath}.pptx`;
       tempDirectory = await mkdtemp(join(tmpdir(), "solution-ppt-export-"));
       editablePath = join(tempDirectory, "roadmap-editable.pptx");
-      protectedPath = join(tempDirectory, "roadmap-protected.pptx");
+      normalizedPath = join(tempDirectory, "roadmap-normalized.pptx");
+      preferredProtectedPath = join(tempDirectory, "roadmap-protected-preferred-owner.pptx");
+      fallbackProtectedPath = join(tempDirectory, "roadmap-protected-office-owner.pptx");
       stage = "生成原始 PPT";
       const editableBytes = await createRoadmapPresentation(snapshot, input, { exportedAt, expiration });
       stage = "校验原始 PPT";
       await validateGeneratedPptx(editableBytes, slideCount);
       await writeFile(editablePath, editableBytes);
-      stage = "写入并校验 IRM 权限";
-      await protectPowerPointWithIrm({
+      stage = "标准化并写入 IRM 权限";
+      const protection = await protectPowerPointWithIrm({
         inputPath: editablePath,
-        outputPath: protectedPath,
+        normalizedPath,
+        preferredOutputPath: preferredProtectedPath,
+        fallbackOutputPath: fallbackProtectedPath,
         members: snapshot.members,
         policy: snapshot.pptAccessPolicy,
         expiration,
-        signedInAccount: environment.signedInAccount,
+        officeIdentity: environment.officeIdentity,
       });
+      effectiveDocumentOwner = protection.effectiveDocumentOwner;
+      fallbackUsed = protection.fallbackUsed;
       stage = "复制最终 PPT";
-      await copyFile(protectedPath, outputPath);
+      await copyFile(protection.outputPath, outputPath);
       await clearPptDiagnosticLog();
-      return { canceled: false, path: outputPath, slideCount };
+      return {
+        canceled: false,
+        path: outputPath,
+        slideCount,
+        effectiveDocumentOwner,
+        fallbackUsed,
+      };
     } catch (error) {
       const diagnostic = await writePptDiagnosticLog({
         error,
         stage,
         environment,
-        documentOwnerAccount,
+        preferredDocumentOwner,
+        effectiveDocumentOwner,
         editablePath,
-        protectedPath,
+        normalizedPath,
+        preferredProtectedPath,
+        fallbackProtectedPath,
       });
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`${compactPptDiagnosticValue(message)}\n诊断日志：${diagnostic.path}`);
+      throw new Error(`${compactPptDiagnosticValue(message)}\n诊断日志：${diagnostic.path}\n诊断目录：${diagnostic.directoryPath}`);
     } finally {
       if (tempDirectory) await rm(tempDirectory, { recursive: true, force: true });
     }

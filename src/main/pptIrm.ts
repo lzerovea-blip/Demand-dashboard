@@ -19,7 +19,10 @@ interface PowerShellResult {
   ok: boolean;
   powerPointInstalled?: boolean;
   irmReady?: boolean;
-  signedInAccount?: string;
+  officeIdentity?: string;
+  normalized?: boolean;
+  effectiveDocumentOwner?: string;
+  verifiedGrantCount?: number;
   grants?: PowerShellGrant[];
   stage?: string;
   diagnostics?: string[];
@@ -29,7 +32,11 @@ interface PowerShellResult {
 export interface PowerPointIrmErrorDetails {
   stage?: string;
   diagnostics: string[];
-  signedInAccount?: string;
+  officeIdentity?: string;
+  preferredDocumentOwner?: string;
+  effectiveDocumentOwner?: string;
+  fallbackUsed?: boolean;
+  normalized?: boolean;
 }
 
 function firstEnvironmentValue(environment: NodeJS.ProcessEnv, keys: string[]): string | undefined {
@@ -68,16 +75,28 @@ function isMissingExecutableError(error: unknown): boolean {
 
 export interface IrmProtectionRequest {
   inputPath: string;
-  outputPath: string;
+  normalizedPath: string;
+  preferredOutputPath: string;
+  fallbackOutputPath: string;
   members: Member[];
   policy: PptAccessPolicy;
   expiration: Date;
-  signedInAccount?: string;
+  officeIdentity?: string;
+}
+
+export interface IrmProtectionResult {
+  outputPath: string;
+  officeIdentity?: string;
+  preferredDocumentOwner?: string;
+  effectiveDocumentOwner?: string;
+  fallbackUsed: boolean;
+  normalized: boolean;
+  verifiedGrantCount: number;
 }
 
 export function buildPowerPointIrmAccess(
-  request: Pick<IrmProtectionRequest, "members" | "policy" | "expiration" | "signedInAccount">,
-): { authorAccount?: string; grants: PowerShellGrant[] } {
+  request: Pick<IrmProtectionRequest, "members" | "policy" | "expiration" | "officeIdentity">,
+): { officeIdentity?: string; preferredDocumentOwner?: string; grants: PowerShellGrant[] } {
   const memberById = new Map(request.members.map((member) => [member.id, member]));
   const requestedGrants = request.policy.entries.map((entry) => {
     const member = memberById.get(entry.memberId);
@@ -90,29 +109,31 @@ export function buildPowerPointIrmAccess(
   });
   if (!requestedGrants.length) throw new Error("请至少添加一名成员到 PPT 白名单");
 
-  const authorAccount = resolvePptDocumentOwnerAccount(request.signedInAccount, request.members);
-  const normalizedAuthor = authorAccount?.toLocaleLowerCase("en-US");
+  const officeIdentity = request.officeIdentity?.trim().toLocaleLowerCase("en-US");
+  const preferredDocumentOwner = resolvePptDocumentOwnerAccount(officeIdentity, request.members);
+  const ownerIdentities = new Set(
+    [officeIdentity, preferredDocumentOwner].filter((value): value is string => Boolean(value)),
+  );
   return {
-    authorAccount,
+    officeIdentity,
+    preferredDocumentOwner,
     // PowerPoint already grants DocumentAuthor full control. Adding that same
     // identity again through Permission.Add raises E_INVALIDARG in some Office
     // enterprise builds, so the owner must not be duplicated as a whitelist grant.
-    grants: requestedGrants.filter(
-      (grant) => grant.account.toLocaleLowerCase("en-US") !== normalizedAuthor,
-    ),
+    grants: requestedGrants.filter((grant) => !ownerIdentities.has(grant.account.toLocaleLowerCase("en-US"))),
   };
 }
 
 export function verifyPowerPointIrmGrants(actual: PowerShellGrant[], expected: PowerShellGrant[]): void {
-  for (const expectedGrant of expected) {
+  for (const [index, expectedGrant] of expected.entries()) {
     const accountMatches = actual.filter(
       (item) => item.account.toLocaleLowerCase("en-US") === expectedGrant.account.toLocaleLowerCase("en-US"),
     );
-    if (!accountMatches.length) throw new Error(`IRM 权限回读缺少账号：${expectedGrant.account}`);
+    if (!accountMatches.length) throw new Error(`IRM 权限回读缺少白名单第 ${index + 1} 项`);
     const permissionMatch = accountMatches.find((item) => item.permission === expectedGrant.permission);
-    if (!permissionMatch) throw new Error(`IRM 权限回读等级不一致：${expectedGrant.account}`);
+    if (!permissionMatch) throw new Error(`IRM 权限回读等级不一致（白名单第 ${index + 1} 项）`);
     if (Math.abs(Date.parse(permissionMatch.expirationUtc) - Date.parse(expectedGrant.expirationUtc)) > 60_000) {
-      throw new Error(`IRM 到期时间回读不一致：${expectedGrant.account}`);
+      throw new Error(`IRM 到期时间回读不一致（白名单第 ${index + 1} 项）`);
     }
   }
 }
@@ -134,9 +155,9 @@ export async function checkPowerPointIrmEnvironment(platform = process.platform)
       platform,
       powerPointInstalled: Boolean(result.powerPointInstalled),
       irmReady: Boolean(result.irmReady),
-      signedInAccount: result.signedInAccount || undefined,
+      officeIdentity: result.officeIdentity || undefined,
       message: result.irmReady
-        ? `PowerPoint 企业 IRM 可用${result.signedInAccount ? `，检测到 Office 身份：${result.signedInAccount}` : ""}`
+        ? `PowerPoint 企业 IRM 可用${result.officeIdentity ? `，Office 登录身份：${result.officeIdentity}` : ""}`
         : (result.error || "PowerPoint 未登录可使用 IRM 的企业账号。"),
     };
   } catch (error) {
@@ -150,19 +171,107 @@ export async function checkPowerPointIrmEnvironment(platform = process.platform)
   }
 }
 
-export async function protectPowerPointWithIrm(request: IrmProtectionRequest): Promise<void> {
+export async function protectPowerPointWithIrm(request: IrmProtectionRequest): Promise<IrmProtectionResult> {
   if (process.platform !== "win32") throw new Error("受保护 PPT 只能在 Windows 桌面版 PowerPoint 企业 IRM 环境中导出");
-  const { authorAccount, grants } = buildPowerPointIrmAccess(request);
+  const { officeIdentity, preferredDocumentOwner, grants } = buildPowerPointIrmAccess(request);
+  const primaryOwner = preferredDocumentOwner || officeIdentity;
+  if (!primaryOwner) throw new Error("无法识别 Office 登录身份，也无法从人员字典确定文档所有者");
 
-  const result = await runPowerPointIrmScript({
+  let normalization: PowerShellResult;
+  try {
+    normalization = await runPowerPointIrmScript({
+      action: "normalize",
+      inputPath: request.inputPath,
+      normalizedPath: request.normalizedPath,
+    }, 120_000);
+  } catch (error) {
+    const details = asPowerPointIrmError(error);
+    details.officeIdentity = officeIdentity;
+    details.preferredDocumentOwner = preferredDocumentOwner;
+    details.normalized = false;
+    throw error;
+  }
+
+  const protectAttempt = (ownerAccount: string, outputPath: string) => runPowerPointIrmScript({
     action: "protect",
-    inputPath: request.inputPath,
-    outputPath: request.outputPath,
+    inputPath: request.normalizedPath,
+    outputPath,
     grants,
-    authorAccount,
+    ownerAccount,
+    officeIdentity,
   }, 120_000);
-  const actual = result.grants ?? [];
-  verifyPowerPointIrmGrants(actual, grants);
+
+  try {
+    const result = await protectAttempt(primaryOwner, request.preferredOutputPath);
+    const actual = result.grants ?? [];
+    verifyPowerPointIrmGrants(actual, grants);
+    return {
+      outputPath: request.preferredOutputPath,
+      officeIdentity,
+      preferredDocumentOwner,
+      effectiveDocumentOwner: result.effectiveDocumentOwner || primaryOwner,
+      fallbackUsed: false,
+      normalized: Boolean(normalization.normalized),
+      verifiedGrantCount: result.verifiedGrantCount ?? actual.length,
+    };
+  } catch (primaryError) {
+    const primaryDetails = asPowerPointIrmError(primaryError);
+    primaryDetails.diagnostics = [...(normalization.diagnostics ?? []), ...primaryDetails.diagnostics];
+    const canFallback = Boolean(
+      officeIdentity
+      && officeIdentity !== primaryOwner.toLocaleLowerCase("en-US")
+      && shouldRetryWithOfficeIdentity(primaryDetails.stage),
+    );
+    if (!canFallback || !officeIdentity) {
+      primaryDetails.officeIdentity = officeIdentity;
+      primaryDetails.preferredDocumentOwner = preferredDocumentOwner;
+      primaryDetails.effectiveDocumentOwner = primaryDetails.effectiveDocumentOwner || primaryOwner;
+      primaryDetails.fallbackUsed = false;
+      primaryDetails.normalized = Boolean(normalization.normalized);
+      throw primaryError;
+    }
+    try {
+      const fallback = await protectAttempt(officeIdentity, request.fallbackOutputPath);
+      const actual = fallback.grants ?? [];
+      verifyPowerPointIrmGrants(actual, grants);
+      return {
+        outputPath: request.fallbackOutputPath,
+        officeIdentity,
+        preferredDocumentOwner,
+        effectiveDocumentOwner: fallback.effectiveDocumentOwner || officeIdentity,
+        fallbackUsed: true,
+        normalized: Boolean(normalization.normalized),
+        verifiedGrantCount: fallback.verifiedGrantCount ?? actual.length,
+      };
+    } catch (fallbackError) {
+      const fallbackDetails = asPowerPointIrmError(fallbackError);
+      fallbackDetails.diagnostics = [
+        ...primaryDetails.diagnostics,
+        "首选文档所有者保护失败，已使用 Office 登录身份重试",
+        ...fallbackDetails.diagnostics,
+      ];
+      fallbackDetails.officeIdentity = officeIdentity;
+      fallbackDetails.preferredDocumentOwner = preferredDocumentOwner;
+      fallbackDetails.effectiveDocumentOwner = fallbackDetails.effectiveDocumentOwner || officeIdentity;
+      fallbackDetails.fallbackUsed = true;
+      fallbackDetails.normalized = Boolean(normalization.normalized);
+      const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      const combined = new Error(`首选文档所有者保护失败：${primaryMessage}；Office 登录身份回退仍失败：${fallbackMessage}`) as Error & PowerPointIrmErrorDetails;
+      Object.assign(combined, fallbackDetails);
+      throw combined;
+    }
+  }
+}
+
+export function shouldRetryWithOfficeIdentity(stage: string | undefined): boolean {
+  return Boolean(stage && /设置文档所有者|保存受保护 PPT|重新打开受保护 PPT|校验 IRM 权限/u.test(stage));
+}
+
+function asPowerPointIrmError(error: unknown): PowerPointIrmErrorDetails {
+  const candidate = error as Partial<PowerPointIrmErrorDetails>;
+  if (!Array.isArray(candidate.diagnostics)) candidate.diagnostics = [];
+  return candidate as PowerPointIrmErrorDetails;
 }
 
 async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promise<PowerShellResult> {
@@ -215,7 +324,9 @@ async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promis
       const error = new Error(result.error || "PowerPoint 企业 IRM 操作失败") as Error & PowerPointIrmErrorDetails;
       error.stage = result.stage;
       error.diagnostics = result.diagnostics ?? [];
-      error.signedInAccount = result.signedInAccount;
+      error.officeIdentity = result.officeIdentity;
+      error.effectiveDocumentOwner = result.effectiveDocumentOwner;
+      error.normalized = result.normalized;
       throw error;
     }
     return result;
@@ -239,7 +350,6 @@ $stage = "初始化"
 $diagnostics = @()
 function Find-OfficeIdentity([string]$DocumentAuthor) {
   $candidates = @()
-  if (-not [string]::IsNullOrWhiteSpace($DocumentAuthor)) { $candidates += $DocumentAuthor }
   foreach ($root in @(
     "HKCU:\Software\Microsoft\Office\16.0\Common\Identity",
     "HKCU:\Software\Microsoft\Office\Common\Identity"
@@ -259,10 +369,16 @@ function Find-OfficeIdentity([string]$DocumentAuthor) {
       }
     }
   }
+  if ($env:USERNAME -match "^[Ll][0-9]+$") { $candidates += "$($env:USERNAME)@china.huawei.com" }
+  if (-not [string]::IsNullOrWhiteSpace($DocumentAuthor)) { $candidates += $DocumentAuthor }
+  $validCandidates = @()
   foreach ($candidate in ($candidates | Select-Object -Unique)) {
     $normalized = $candidate.Trim()
-    if ($normalized -match "^[^@\s]+@[^@\s]+\.[^@\s]+$") { return $normalized }
+    if ($normalized -match "^[^@\s]+@[^@\s]+\.[^@\s]+$") { $validCandidates += $normalized }
   }
+  $officeLogin = $validCandidates | Where-Object { $_.ToLowerInvariant().EndsWith("@china.huawei.com") } | Select-Object -First 1
+  if ($officeLogin) { return $officeLogin }
+  if ($validCandidates.Count -gt 0) { return $validCandidates[0] }
   return ""
 }
 function Wait-PowerPointFileReady([string]$Path, [string]$Label) {
@@ -298,10 +414,10 @@ try {
     $permission.Enabled = $true
     $result.irmReady = [bool]$permission.Enabled
     if (-not $result.irmReady) { throw "PowerPoint 企业 IRM 服务不可用" }
-    $result.signedInAccount = Find-OfficeIdentity ([string]$permission.DocumentAuthor)
+    $result.officeIdentity = Find-OfficeIdentity ([string]$permission.DocumentAuthor)
     $diagnostics += "IRM 已启用"
     $result.ok = $true
-  } elseif ($payload.action -eq "protect") {
+  } elseif ($payload.action -eq "normalize") {
     $stage = "打开原始 PPT"
     Wait-PowerPointFileReady ([string]$payload.inputPath) "原始 PPT"
     $diagnostics += "原始 PPT ZIP/XML 已校验"
@@ -322,30 +438,64 @@ try {
         throw "原始 PPT 已通过 ZIP/XML 校验，但 PowerPoint 仍无法打开。常规打开：$regularOpenError；修复模式：$($_.Exception.Message)"
       }
     }
+    $stage = "保存标准化 PPT"
+    try {
+      $presentation.SaveCopyAs([string]$payload.normalizedPath, 24)
+    } catch {
+      throw "PowerPoint 无法保存标准化 PPT：$($_.Exception.Message)"
+    }
+    $diagnostics += "标准化 PPT 已保存"
+    $presentation.Close()
+    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($presentation) | Out-Null
+    $presentation = $null
+    if ($protectedViewWindow -ne $null) {
+      try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($protectedViewWindow) | Out-Null } catch {}
+      $protectedViewWindow = $null
+    }
+    try { $powerPoint.Quit() } catch {}
+    try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($powerPoint) | Out-Null } catch {}
+    $powerPoint = $null
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+    Wait-PowerPointFileReady ([string]$payload.normalizedPath) "标准化 PPT"
+    $stage = "常规重开标准化 PPT"
+    $powerPoint = New-Object -ComObject PowerPoint.Application
+    $powerPoint.Visible = -1
+    try {
+      $presentation = $powerPoint.Presentations.Open([string]$payload.normalizedPath, 0, 0, -1)
+    } catch {
+      throw "标准化 PPT 仍无法由新的 PowerPoint 实例常规打开：$($_.Exception.Message)"
+    }
+    $diagnostics += "标准化 PPT 常规重开成功"
+    $result.normalized = $true
+    $result.ok = $true
+  } elseif ($payload.action -eq "protect") {
+    $result.officeIdentity = [string]$payload.officeIdentity
+    $result.normalized = $true
+    $stage = "打开标准化 PPT"
+    Wait-PowerPointFileReady ([string]$payload.inputPath) "标准化 PPT"
+    $powerPoint.Visible = -1
+    try {
+      $presentation = $powerPoint.Presentations.Open([string]$payload.inputPath, 0, 0, -1)
+      $diagnostics += "标准化 PPT 常规打开成功"
+    } catch {
+      throw "标准化 PPT 在写入 IRM 前无法常规打开：$($_.Exception.Message)"
+    }
     $permission = $presentation.Permission
-    $stage = "识别 Office 账号"
-    $author = ""
-    if (-not [string]::IsNullOrWhiteSpace([string]$payload.authorAccount)) {
-      $author = ([string]$payload.authorAccount).Trim().ToLowerInvariant()
-    }
-    if ([string]::IsNullOrWhiteSpace($author)) {
-      $author = Find-OfficeIdentity ([string]$permission.DocumentAuthor)
-    }
+    $stage = "设置文档所有者"
+    $author = ([string]$payload.ownerAccount).Trim().ToLowerInvariant()
     $permission.RemoveAll()
     $permission.Enabled = $true
     if (-not $permission.Enabled) { throw "PowerPoint 企业 IRM 服务不可用" }
-    if ([string]::IsNullOrWhiteSpace($author)) {
-      $author = Find-OfficeIdentity ([string]$permission.DocumentAuthor)
-    }
-    if ([string]::IsNullOrWhiteSpace($author)) {
-      throw "无法识别当前 PowerPoint 企业账号，不能为导出者保留所有者权限。请先在 PowerPoint 的账户页面确认已登录企业邮箱"
-    }
-    $result.signedInAccount = $author
+    if ([string]::IsNullOrWhiteSpace($author)) { throw "未提供有效的文档所有者账号" }
     try {
       $permission.DocumentAuthor = $author
     } catch {
-      throw "无法将当前 PowerPoint 企业账号设置为文档所有者：$author。$($_.Exception.Message)"
+      throw "无法设置文档所有者：$($_.Exception.Message)"
     }
+    $effectiveAuthor = ([string]$permission.DocumentAuthor).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($effectiveAuthor)) { throw "PowerPoint 未返回有效的文档所有者" }
+    $result.effectiveDocumentOwner = $effectiveAuthor
     $diagnostics += "文档所有者已设置"
     $stage = "写入白名单权限"
     $grantIndex = 0
@@ -397,7 +547,7 @@ try {
         $presentation = $powerPoint.Presentations.Open([string]$payload.outputPath, -1, 0, -1)
         $diagnostics += "可见窗口回读成功"
       } catch {
-        throw "保护后的 PPT 已保存，但 PowerPoint 无法重新打开。隐藏验证：$hiddenOpenError；可见窗口验证：$($_.Exception.Message)。请确认当前 Office 账号 $author 有权使用企业 IRM"
+        throw "保护后的 PPT 已保存，但 PowerPoint 无法重新打开。隐藏验证：$hiddenOpenError；可见窗口验证：$($_.Exception.Message)"
       }
     }
     $stage = "校验 IRM 权限"
@@ -413,7 +563,8 @@ try {
       }
     }
     $result.grants = $verified
-    $result.signedInAccount = $author
+    $result.verifiedGrantCount = $verified.Count
+    $result.effectiveDocumentOwner = ([string]$permission.DocumentAuthor).Trim().ToLowerInvariant()
     $result.irmReady = $true
     $diagnostics += "IRM 权限回读完成"
     $result.ok = $true

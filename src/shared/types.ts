@@ -215,8 +215,8 @@ export interface IrmEnvironmentStatus {
   platform: string;
   powerPointInstalled: boolean;
   irmReady: boolean;
-  signedInAccount?: string;
-  documentOwnerAccount?: string;
+  officeIdentity?: string;
+  preferredDocumentOwner?: string;
   message: string;
 }
 
@@ -224,6 +224,15 @@ export interface PptDiagnosticLog {
   createdAt: string;
   path: string;
   content: string;
+  directoryPath?: string;
+}
+
+export interface PptExportResult {
+  canceled: boolean;
+  path?: string;
+  slideCount?: number;
+  effectiveDocumentOwner?: string;
+  fallbackUsed?: boolean;
 }
 
 export interface SaveGroupOverrideInput {
@@ -351,6 +360,7 @@ export interface ElectronApi {
   savePptAccessPolicy(input: SavePptAccessPolicyInput): Promise<AppSnapshot>;
   checkIrmEnvironment(): Promise<IrmEnvironmentStatus>;
   getPptDiagnosticLog(): Promise<PptDiagnosticLog | null>;
+  openPptDiagnosticDirectory(): Promise<{ path: string }>;
   saveGroupOverride(input: SaveGroupOverrideInput): Promise<AppSnapshot>;
   saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot>;
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
@@ -360,7 +370,7 @@ export interface ElectronApi {
   inspectWorkspaceWorkbook(): Promise<{ canceled: boolean; preview?: WorkspaceWorkbookImportPreview }>;
   applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
-  exportRoadmapPresentation(input: PptExportRequest): Promise<{ canceled: boolean; path?: string; slideCount?: number }>;
+  exportRoadmapPresentation(input: PptExportRequest): Promise<PptExportResult>;
 }
 
 declare global {

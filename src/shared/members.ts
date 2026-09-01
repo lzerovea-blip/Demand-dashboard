@@ -21,11 +21,6 @@ export function resolvePptDocumentOwnerAccount(
 ): string | undefined {
   if (!signedInAccount?.trim()) return undefined;
   const normalizedAccount = normalizeMicrosoftAccount(signedInAccount);
-  const exactMember = members.find(
-    (member) => normalizeMicrosoftAccount(member.microsoftAccount) === normalizedAccount,
-  );
-  if (exactMember) return normalizeMicrosoftAccount(exactMember.microsoftAccount);
-
   const localIdentity = normalizedAccount
     .split("@")[0]
     ?.split("\\")
@@ -36,6 +31,11 @@ export function resolvePptDocumentOwnerAccount(
     (member) => member.employeeNumber.trim().toLocaleLowerCase("en-US") === localIdentity,
   );
   if (employeeMember) return normalizeMicrosoftAccount(employeeMember.microsoftAccount);
+
+  const exactMember = members.find(
+    (member) => normalizeMicrosoftAccount(member.microsoftAccount) === normalizedAccount,
+  );
+  if (exactMember) return normalizeMicrosoftAccount(exactMember.microsoftAccount);
 
   return isValidMicrosoftAccount(normalizedAccount) ? normalizedAccount : undefined;
 }
