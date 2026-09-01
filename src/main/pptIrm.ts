@@ -75,6 +75,34 @@ export interface IrmProtectionRequest {
   signedInAccount?: string;
 }
 
+export function buildPowerPointIrmAccess(
+  request: Pick<IrmProtectionRequest, "members" | "policy" | "expiration" | "signedInAccount">,
+): { authorAccount?: string; grants: PowerShellGrant[] } {
+  const memberById = new Map(request.members.map((member) => [member.id, member]));
+  const requestedGrants = request.policy.entries.map((entry) => {
+    const member = memberById.get(entry.memberId);
+    if (!member) throw new Error("PPT 白名单包含不存在的成员，请重新保存白名单");
+    return {
+      account: member.microsoftAccount,
+      permission: MSO_PERMISSION[entry.permission],
+      expirationUtc: request.expiration.toISOString(),
+    };
+  });
+  if (!requestedGrants.length) throw new Error("请至少添加一名成员到 PPT 白名单");
+
+  const authorAccount = resolvePptDocumentOwnerAccount(request.signedInAccount, request.members);
+  const normalizedAuthor = authorAccount?.toLocaleLowerCase("en-US");
+  return {
+    authorAccount,
+    // PowerPoint already grants DocumentAuthor full control. Adding that same
+    // identity again through Permission.Add raises E_INVALIDARG in some Office
+    // enterprise builds, so the owner must not be duplicated as a whitelist grant.
+    grants: requestedGrants.filter(
+      (grant) => grant.account.toLocaleLowerCase("en-US") !== normalizedAuthor,
+    ),
+  };
+}
+
 export function verifyPowerPointIrmGrants(actual: PowerShellGrant[], expected: PowerShellGrant[]): void {
   for (const expectedGrant of expected) {
     const accountMatches = actual.filter(
@@ -124,18 +152,7 @@ export async function checkPowerPointIrmEnvironment(platform = process.platform)
 
 export async function protectPowerPointWithIrm(request: IrmProtectionRequest): Promise<void> {
   if (process.platform !== "win32") throw new Error("受保护 PPT 只能在 Windows 桌面版 PowerPoint 企业 IRM 环境中导出");
-  const memberById = new Map(request.members.map((member) => [member.id, member]));
-  const grants = request.policy.entries.map((entry) => {
-    const member = memberById.get(entry.memberId);
-    if (!member) throw new Error("PPT 白名单包含不存在的成员，请重新保存白名单");
-    return {
-      account: member.microsoftAccount,
-      permission: MSO_PERMISSION[entry.permission],
-      expirationUtc: request.expiration.toISOString(),
-    };
-  });
-  if (!grants.length) throw new Error("请至少添加一名成员到 PPT 白名单");
-  const authorAccount = resolvePptDocumentOwnerAccount(request.signedInAccount, request.members);
+  const { authorAccount, grants } = buildPowerPointIrmAccess(request);
 
   const result = await runPowerPointIrmScript({
     action: "protect",
@@ -331,10 +348,25 @@ try {
     }
     $diagnostics += "文档所有者已设置"
     $stage = "写入白名单权限"
+    $grantIndex = 0
     foreach ($grant in $payload.grants) {
-      $userPermission = $permission.Add([string]$grant.account, [int]$grant.permission)
-      $expirationUtc = [DateTime]::Parse([string]$grant.expirationUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
-      $userPermission.ExpirationDate = $expirationUtc.ToLocalTime()
+      $grantIndex++
+      $stage = "添加白名单权限（第 $grantIndex 项）"
+      try {
+        $permissionValue = [Microsoft.Office.Core.MsoPermission][int]$grant.permission
+        $userPermission = $permission.Add([string]$grant.account, $permissionValue)
+      } catch {
+        throw "白名单第 $grantIndex 项权限添加失败：$($_.Exception.Message)"
+      }
+      $diagnostics += "白名单第 $grantIndex 项权限已添加"
+      $stage = "设置白名单有效期（第 $grantIndex 项）"
+      try {
+        $expirationUtc = [DateTime]::Parse([string]$grant.expirationUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+        $userPermission.ExpirationDate = $expirationUtc.ToLocalTime()
+      } catch {
+        throw "白名单第 $grantIndex 项有效期设置失败：$($_.Exception.Message)"
+      }
+      $diagnostics += "白名单第 $grantIndex 项有效期已设置"
     }
     $diagnostics += "白名单权限已写入"
     $stage = "保存受保护 PPT"

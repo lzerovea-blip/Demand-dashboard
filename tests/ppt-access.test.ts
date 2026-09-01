@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   POWERPOINT_IRM_SCRIPT,
+  buildPowerPointIrmAccess,
   checkPowerPointIrmEnvironment,
   encodeWindowsPowerShellScript,
   powerShellExecutableCandidates,
   verifyPowerPointIrmGrants,
 } from "../src/main/pptIrm";
 import { addCalendarMonthsClamped, formatPptExpirationDate, pptPermissionExpiration } from "../src/shared/pptAccess";
+import type { Member, PptAccessPolicy } from "../src/shared/types";
 
 describe("PPT 企业 IRM 有效期", () => {
   it("按六个日历月计算并在月末自动收敛", () => {
@@ -25,6 +27,9 @@ describe("PPT 企业 IRM 有效期", () => {
     expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.Enabled = $true");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.RemoveAll() ".trim());
     expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.Add");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("[Microsoft.Office.Core.MsoPermission][int]$grant.permission");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("白名单第 $grantIndex 项权限添加失败");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("白名单第 $grantIndex 项有效期设置失败");
     expect(POWERPOINT_IRM_SCRIPT).toContain("ExpirationDate");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.Item($index)");
   });
@@ -55,6 +60,36 @@ describe("PPT 企业 IRM 有效期", () => {
     expect(authorAt).toBeGreaterThan(enabledAt);
     expect(POWERPOINT_IRM_SCRIPT).toContain("$permission.DocumentAuthor = $author");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$payload.authorAccount");
+  });
+
+  it("文档所有者保留完全控制且不重复写入白名单", () => {
+    const owner = pptMember("owner", "l00860412", "zw.lin@huawei.com");
+    const reader = pptMember("reader", "l10000000", "reader@huawei.com");
+    const policy: PptAccessPolicy = {
+      entries: [
+        { memberId: owner.id, permission: "read" },
+        { memberId: reader.id, permission: "change" },
+      ],
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const access = buildPowerPointIrmAccess({
+      members: [owner, reader],
+      policy,
+      expiration: new Date("2027-03-01T00:00:00.000Z"),
+      signedInAccount: "l00860412@china.huawei.com",
+    });
+    expect(access.authorAccount).toBe("zw.lin@huawei.com");
+    expect(access.grants).toEqual([{
+      account: "reader@huawei.com",
+      permission: 15,
+      expirationUtc: "2027-03-01T00:00:00.000Z",
+    }]);
+    expect(buildPowerPointIrmAccess({
+      members: [owner],
+      policy: { ...policy, entries: [{ memberId: owner.id, permission: "read" }] },
+      expiration: new Date("2027-03-01T00:00:00.000Z"),
+      signedInAccount: "l00860412@china.huawei.com",
+    }).grants).toEqual([]);
   });
 
   it("以 OpenXML 格式保存并等待文件稳定，回读失败时尝试可见窗口", () => {
@@ -91,3 +126,17 @@ describe("PPT 企业 IRM 有效期", () => {
     ])).toThrow("缺少账号");
   });
 });
+
+function pptMember(id: string, employeeNumber: string, microsoftAccount: string): Member {
+  return {
+    id,
+    name: id,
+    employeeNumber,
+    microsoftAccount,
+    role: "规划",
+    domainL1Ids: [],
+    sortOrder: 0,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+}
