@@ -131,9 +131,12 @@ describe("PPT 企业 IRM 有效期", () => {
   it("原始 PPT 修复后另存为标准 PPT，并由新的 PowerPoint 实例常规重开", () => {
     expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Visible = -1");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Presentations.Open([string]$payload.inputPath, 0, 0, -1)");
-    expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.ProtectedViewWindows.Open([string]$payload.inputPath, \"\", -1)");
-    expect(POWERPOINT_IRM_SCRIPT).toContain("$presentation = $protectedViewWindow.Edit()");
-    expect(POWERPOINT_IRM_SCRIPT).toContain("$presentation.SaveCopyAs([string]$payload.normalizedPath, 24)");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$powerPoint.Presentations.Open2007([string]$payload.inputPath, 0, -1, -1, -1)");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$presentation.SaveAs([string]$payload.normalizedPath, 24)");
+    expect(POWERPOINT_IRM_SCRIPT).not.toContain("ProtectedViewWindows.Open");
+    expect(POWERPOINT_IRM_SCRIPT).not.toContain("$presentation.SaveCopyAs");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$result.sourceSlideCount = [int]$presentation.Slides.Count");
+    expect(POWERPOINT_IRM_SCRIPT).toContain("$result.normalizedSlideCount = [int]$presentation.Slides.Count");
     expect(POWERPOINT_IRM_SCRIPT).toContain("$stage = \"常规重开标准化 PPT\"");
     expect(POWERPOINT_IRM_SCRIPT).toContain("标准化 PPT 常规重开成功");
     expect(POWERPOINT_IRM_SCRIPT).toContain("Unblock-File");

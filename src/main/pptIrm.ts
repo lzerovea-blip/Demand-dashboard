@@ -21,6 +21,9 @@ interface PowerShellResult {
   irmReady?: boolean;
   officeIdentity?: string;
   normalized?: boolean;
+  normalizationMethod?: string;
+  sourceSlideCount?: number;
+  normalizedSlideCount?: number;
   effectiveDocumentOwner?: string;
   verifiedGrantCount?: number;
   grants?: PowerShellGrant[];
@@ -37,6 +40,9 @@ export interface PowerPointIrmErrorDetails {
   effectiveDocumentOwner?: string;
   fallbackUsed?: boolean;
   normalized?: boolean;
+  normalizationMethod?: string;
+  sourceSlideCount?: number;
+  normalizedSlideCount?: number;
 }
 
 function firstEnvironmentValue(environment: NodeJS.ProcessEnv, keys: string[]): string | undefined {
@@ -327,6 +333,9 @@ async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promis
       error.officeIdentity = result.officeIdentity;
       error.effectiveDocumentOwner = result.effectiveDocumentOwner;
       error.normalized = result.normalized;
+      error.normalizationMethod = result.normalizationMethod;
+      error.sourceSlideCount = result.sourceSlideCount;
+      error.normalizedSlideCount = result.normalizedSlideCount;
       throw error;
     }
     return result;
@@ -344,7 +353,6 @@ export const POWERPOINT_IRM_SCRIPT = String.raw`param(
 $ErrorActionPreference = "Stop"
 $powerPoint = $null
 $presentation = $null
-$protectedViewWindow = $null
 $result = @{ ok = $false; powerPointInstalled = $false; irmReady = $false }
 $stage = "初始化"
 $diagnostics = @()
@@ -427,31 +435,33 @@ try {
       $powerPoint.Visible = -1
       $presentation = $powerPoint.Presentations.Open([string]$payload.inputPath, 0, 0, -1)
       $diagnostics += "原始 PPT 常规打开成功"
+      $result.normalizationMethod = "常规打开 + SaveAs OpenXML"
     } catch {
       $regularOpenError = $_.Exception.Message
-      $diagnostics += "常规打开失败，尝试修复模式"
+      $diagnostics += "常规打开失败，尝试 Open2007 修复模式"
       try {
-        $protectedViewWindow = $powerPoint.ProtectedViewWindows.Open([string]$payload.inputPath, "", -1)
-        $presentation = $protectedViewWindow.Edit()
-        $diagnostics += "原始 PPT 修复模式打开成功"
+        # Open2007 的第 5 个参数是 OpenAndRepair。Untitled=-1 可避免
+        # PowerPoint 将修复结果继续绑定到原始临时文件。
+        $presentation = $powerPoint.Presentations.Open2007([string]$payload.inputPath, 0, -1, -1, -1)
+        $diagnostics += "原始 PPT Open2007 修复模式打开成功"
+        $result.normalizationMethod = "Open2007 修复 + SaveAs OpenXML"
       } catch {
-        throw "原始 PPT 已通过 ZIP/XML 校验，但 PowerPoint 仍无法打开。常规打开：$regularOpenError；修复模式：$($_.Exception.Message)"
+        throw "原始 PPT 已通过 ZIP/XML 校验，但 PowerPoint 仍无法打开。常规打开：$regularOpenError；Open2007 修复：$($_.Exception.Message)"
       }
     }
+    $result.sourceSlideCount = [int]$presentation.Slides.Count
     $stage = "保存标准化 PPT"
     try {
-      $presentation.SaveCopyAs([string]$payload.normalizedPath, 24)
+      # SaveAs 会让 PowerPoint 按当前对象模型完整重写 OpenXML 包；
+      # SaveCopyAs 只复制当前文件状态，不能可靠提交修复结果。
+      $presentation.SaveAs([string]$payload.normalizedPath, 24)
     } catch {
       throw "PowerPoint 无法保存标准化 PPT：$($_.Exception.Message)"
     }
-    $diagnostics += "标准化 PPT 已保存"
+    $diagnostics += "标准化 PPT 已按 OpenXML SaveAs 保存"
     $presentation.Close()
     [Runtime.InteropServices.Marshal]::FinalReleaseComObject($presentation) | Out-Null
     $presentation = $null
-    if ($protectedViewWindow -ne $null) {
-      try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($protectedViewWindow) | Out-Null } catch {}
-      $protectedViewWindow = $null
-    }
     try { $powerPoint.Quit() } catch {}
     try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($powerPoint) | Out-Null } catch {}
     $powerPoint = $null
@@ -466,7 +476,11 @@ try {
     } catch {
       throw "标准化 PPT 仍无法由新的 PowerPoint 实例常规打开：$($_.Exception.Message)"
     }
-    $diagnostics += "标准化 PPT 常规重开成功"
+    $result.normalizedSlideCount = [int]$presentation.Slides.Count
+    if ($result.normalizedSlideCount -ne $result.sourceSlideCount) {
+      throw "标准化 PPT 页数不一致：保存前 $($result.sourceSlideCount) 页，重开后 $($result.normalizedSlideCount) 页"
+    }
+    $diagnostics += "标准化 PPT 常规重开成功（$($result.normalizedSlideCount) 页）"
     $result.normalized = $true
     $result.ok = $true
   } elseif ($payload.action -eq "protect") {
@@ -579,9 +593,6 @@ try {
   if ($presentation -ne $null) {
     try { $presentation.Close() } catch {}
     try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($presentation) | Out-Null } catch {}
-  }
-  if ($protectedViewWindow -ne $null) {
-    try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($protectedViewWindow) | Out-Null } catch {}
   }
   if ($powerPoint -ne $null) {
     try { $powerPoint.Quit() } catch {}

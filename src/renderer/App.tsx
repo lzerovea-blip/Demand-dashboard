@@ -91,8 +91,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.40",
-  releasedAt: "2026-09-01",
+  version: "0.7.41",
+  releasedAt: "2026-09-02",
   author: "林忠维",
 };
 

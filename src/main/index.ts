@@ -33,7 +33,7 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-09-01";
+const APP_RELEASED_AT = "2026-09-02";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 const PPT_DIAGNOSTIC_FILE = "ppt-export-last-error.txt";
@@ -75,10 +75,16 @@ async function writePptDiagnosticLog(input: {
   const message = input.error instanceof Error ? input.error.message : String(input.error);
   const fallbackUsed = input.fallbackUsed ?? details.fallbackUsed ?? false;
   const protectedPath = fallbackUsed ? input.fallbackProtectedPath : input.preferredProtectedPath;
+  const standardizationDetail = [
+    details.normalizationMethod,
+    details.sourceSlideCount !== undefined
+      ? `${details.sourceSlideCount}→${details.normalizedSlideCount ?? "未重开"} 页`
+      : undefined,
+  ].filter(Boolean).join("；");
   const standardizationStatus = details.normalized
-    ? "已完成修复/标准化并由新 PowerPoint 实例常规重开"
+    ? `已完成并由新 PowerPoint 实例常规重开${standardizationDetail ? `（${standardizationDetail}）` : ""}`
     : input.normalizedPath
-      ? "未完成或未通过常规重开"
+      ? `未完成或未通过常规重开${standardizationDetail ? `（${standardizationDetail}）` : ""}`
       : "未开始";
   const content = formatPptDiagnosticText({
     createdAt,
