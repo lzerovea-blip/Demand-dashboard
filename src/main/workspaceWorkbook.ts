@@ -19,6 +19,7 @@ import { halfYearSequence, monthsForHalfYear, requirementsInRange } from "../sha
 import { roundWorkload } from "../shared/workload.js";
 import { diffWorkspaceData, workspaceDifferenceDigest } from "../shared/workspaceDiff.js";
 import { validateWorkspaceData } from "./workspacePackage.js";
+import { isHistoricalTieringFeature, normalizeTieringData, renameIndependentTieringDomain, resolveTieringFeature } from "../shared/tiering.js";
 
 const FORMAT_KEY = "health-roadmap-collaboration";
 const FORMAT_VERSION = "v6";
@@ -244,6 +245,8 @@ export function workspaceDataForWorkbookRange(data: WorkspaceData, start: string
     groupOverrides: data.groupOverrides.filter((item) => months.has(item.groupKey.split("::")[2] ?? "")),
     members: data.members,
     pptAccessPolicy: data.pptAccessPolicy,
+    // Retain link targets for validation; the v6 writer still emits business columns only.
+    tiering: data.tiering,
   };
 }
 
@@ -1265,7 +1268,14 @@ function planWorkspaceWorkbookImport(
         continue;
       }
     }
-    requirements.set(incoming.id, { ...incoming, images: existing.images, createdAt: existing.createdAt, updatedAt: now });
+    requirements.set(incoming.id, {
+      ...existing, ...incoming,
+      tieringFeatureId: existing.tieringFeatureId,
+      historicalLaunch: existing.historicalLaunch ? { ...existing.historicalLaunch, suggestedTargetMonth: incoming.targetMonth } : undefined,
+      unallocatedWorkloadPm: existing.unallocatedWorkloadPm,
+      workloadPm: roundWorkload(incoming.deviceWorkloadPm + incoming.appWorkloadPm + incoming.cloudWorkloadPm + existing.unallocatedWorkloadPm),
+      images: existing.images, createdAt: existing.createdAt, updatedAt: now,
+    });
     counts.updated += 1;
   }
 
@@ -1310,14 +1320,33 @@ function planWorkspaceWorkbookImport(
   }
 
   counts.conflicts = conflicts.length;
+  const nextDomains = [...domainL0Merge.items, ...domainL1Merge.items];
+  const nextRequirements = [...requirements.values()];
+  const tiering = normalizeTieringData(current.tiering);
+  // Only explicit Excel deletions may remove normal specifications. Broken existing links stay intact.
+  const deletedRequirementIds = new Set(current.requirements.filter((item) => !requirements.has(item.id)).map((item) => item.id));
+  const removedFeatureIds = new Set(tiering.features.filter((item) => !isHistoricalTieringFeature(item) && item.requirementId && deletedRequirementIds.has(item.requirementId)).map((item) => item.id));
+  tiering.features = tiering.features.filter((item) => !removedFeatureIds.has(item.id)).map((feature) => {
+    if (feature.requirementId && deletedRequirementIds.has(feature.requirementId)) return { ...feature, requirementId: undefined, updatedAt: now };
+    let updated = feature;
+    for (const previous of current.domains) {
+      const next = nextDomains.find((item) => item.id === previous.id);
+      if (next) updated = renameIndependentTieringDomain(updated, previous, next, current.domains, current.requirements);
+    }
+    return resolveTieringFeature(updated, nextRequirements, nextDomains).feature;
+  });
+  tiering.supportRecords = tiering.supportRecords.filter((item) => !removedFeatureIds.has(item.featureId));
+  tiering.changeLogs = tiering.changeLogs.filter((item) => !removedFeatureIds.has(item.featureId));
+  tiering.verificationIssues = tiering.verificationIssues.filter((item) => !removedFeatureIds.has(item.featureId));
   return {
     data: {
-      requirements: [...requirements.values()],
-      domains: [...domainL0Merge.items, ...domainL1Merge.items],
+      requirements: nextRequirements,
+      domains: nextDomains,
       products: productMerge.items,
       groupOverrides: [...overrides.values()],
       members: current.members,
       pptAccessPolicy: current.pptAccessPolicy,
+      ...(current.tiering ? { tiering } : {}),
     },
     counts,
     conflicts,

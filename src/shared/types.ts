@@ -21,6 +21,8 @@ export const REQUIREMENT_SCOPES = ["仅国内", "仅海外", "全球"] as const;
 export const OVERSEAS_REGIONS = ["欧州", "亚非拉", "欧亚"] as const;
 export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"] as const;
 export const MEMBER_ROLES = ["规划", "产品经理", "SE", "PM", "开发", "UX"] as const;
+export const TIERING_SUPPORT_STATUSES = ["支持", "不支持", "未判断"] as const;
+export const TIERING_AUDIT_STATUSES = ["待内审", "已公开核验", "已审核", "需复核"] as const;
 
 export type RequirementSource = (typeof SOURCES)[number];
 export type RequirementCategory = (typeof CATEGORIES)[number];
@@ -38,7 +40,24 @@ export type RequirementScope = (typeof REQUIREMENT_SCOPES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
 export type Track = (typeof ROADMAP_TRACKS)[number];
 export type MemberRole = (typeof MEMBER_ROLES)[number];
+export type TieringSupportStatus = (typeof TIERING_SUPPORT_STATUSES)[number];
+export type TieringAuditStatus = (typeof TIERING_AUDIT_STATUSES)[number];
 export type PptPermissionLevel = "read" | "change";
+export const HISTORICAL_LAUNCH_PRECISIONS = ["month", "half-year", "year"] as const;
+export const HISTORICAL_LAUNCH_VERIFICATION_STATUSES = ["confirmed", "pending"] as const;
+export const HISTORICAL_LAUNCH_CONFIDENCE_LEVELS = ["A", "B", "C"] as const;
+export type HistoricalLaunchPrecision = (typeof HISTORICAL_LAUNCH_PRECISIONS)[number];
+export type HistoricalLaunchVerificationStatus = (typeof HISTORICAL_LAUNCH_VERIFICATION_STATUSES)[number];
+export type HistoricalLaunchConfidence = (typeof HISTORICAL_LAUNCH_CONFIDENCE_LEVELS)[number];
+
+export interface HistoricalLaunchMetadata {
+  suggestedTargetMonth: string;
+  precision: HistoricalLaunchPrecision;
+  verificationStatus: HistoricalLaunchVerificationStatus;
+  confidence: HistoricalLaunchConfidence;
+  evidenceUrls: string[];
+  note: string;
+}
 export type PptExportSectionId = "summary" | Track;
 export interface PptExportRequest extends HalfYearRange {
   materialName: string;
@@ -80,6 +99,112 @@ export interface Requirement {
   workloadPm: number;
   createdAt: string;
   updatedAt: string;
+  /** 指向分层分级中的稳定需求行；普通需求与历史需求均使用。 */
+  tieringFeatureId?: string;
+  /** 历史需求的中国大陆首次公开可用时间证据；普通需求不设置。 */
+  historicalLaunch?: HistoricalLaunchMetadata;
+}
+
+export interface TieringFeature {
+  id: string;
+  l0: string;
+  l1: string;
+  requirementTitle: string;
+  requirementId?: string;
+  historicalLaunch?: HistoricalLaunchMetadata;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TieringProductSeries {
+  id: string;
+  name: string;
+  boundary: string;
+  representativeProducts: string;
+  managementEntry: string;
+  sourceIds: string[];
+  lifecycle: string;
+  note: string;
+  sortOrder: number;
+  updatedAt: string;
+}
+
+export interface TieringSupportRecord {
+  id: string;
+  featureId: string;
+  seriesId: string;
+  status: TieringSupportStatus;
+  supportedModels: string;
+  excludedModels: string;
+  phoneOsMarket: string;
+  minHealthAppVersion: string;
+  minDeviceVersion: string;
+  prerequisites: string;
+  sourceIds: string[];
+  sourceUrl: string;
+  verifiedAt: string;
+  evidenceLevel: string;
+  auditStatus: TieringAuditStatus;
+  note: string;
+  updatedAt: string;
+}
+
+export interface TieringEvidenceSource {
+  id: string;
+  sourceType: string;
+  title: string;
+  url: string;
+  scope: string;
+  market: string;
+  versionCondition: string;
+  collectedAt: string;
+  verifiedAt: string;
+  evidenceLevel: string;
+  maintenanceStatus: string;
+  owner: string;
+  note: string;
+  updatedAt: string;
+}
+
+export interface TieringVerificationIssue {
+  id: string;
+  featureId: string;
+  seriesIds: string[];
+  issueType: string;
+  description: string;
+  priority: string;
+  status: string;
+  sourceIds: string[];
+  owner: string;
+  createdAt: string;
+  targetDate: string;
+  updatedAt: string;
+  resolution: string;
+}
+
+export interface TieringChangeLog {
+  id: string;
+  changedAt: string;
+  triggerType: string;
+  featureId: string;
+  seriesId: string;
+  before: string;
+  after: string;
+  reason: string;
+  sourceIds: string[];
+  reviewer: string;
+  recordStatus: string;
+  note: string;
+}
+
+export interface TieringData {
+  features: TieringFeature[];
+  productSeries: TieringProductSeries[];
+  supportRecords: TieringSupportRecord[];
+  evidenceSources: TieringEvidenceSource[];
+  verificationIssues: TieringVerificationIssue[];
+  changeLogs: TieringChangeLog[];
 }
 
 export interface DictionaryItem {
@@ -165,6 +290,7 @@ export interface AppSnapshot {
   groupOverrides: GroupOverride[];
   members: Member[];
   pptAccessPolicy: PptAccessPolicy;
+  tiering?: TieringData;
   templates: TemplateProfile[];
 }
 
@@ -185,6 +311,25 @@ export interface SaveRequirementInput {
   deviceWorkloadPm: number;
   appWorkloadPm: number;
   cloudWorkloadPm: number;
+  tieringFeatureId?: string;
+}
+
+export interface SaveTieringSupportInput {
+  recordId: string;
+  status: TieringSupportStatus;
+  reason?: string;
+}
+
+export interface SaveTieringEvidenceSourceInput {
+  source: TieringEvidenceSource;
+}
+
+export interface UpdateTieringIssueInput {
+  issueId: string;
+  status: string;
+  owner: string;
+  targetDate: string;
+  resolution: string;
 }
 
 export interface SaveDictionaryInput {
@@ -215,8 +360,17 @@ export interface IrmEnvironmentStatus {
   platform: string;
   powerPointInstalled: boolean;
   irmReady: boolean;
-  signedInAccount?: string;
+  officeIdentity?: string;
+  preferredDocumentOwner?: string;
   message: string;
+}
+
+export interface PptExportResult {
+  canceled: boolean;
+  path?: string;
+  slideCount?: number;
+  effectiveDocumentOwner?: string;
+  fallbackUsed?: boolean;
 }
 
 export interface SaveGroupOverrideInput {
@@ -247,8 +401,9 @@ export interface BackupEnvelope {
   data: WorkspaceData;
 }
 
-export type WorkspaceData = Omit<AppSnapshot, "templates">;
+export type WorkspaceData = Omit<AppSnapshot, "templates" | "tiering"> & { tiering?: TieringData };
 export type WorkspaceImportMode = "merge" | "replace";
+export type WorkspacePackageKind = "workspace" | "tiering-seed";
 
 export interface WorkspacePackageCounts {
   requirements: number;
@@ -258,6 +413,12 @@ export interface WorkspacePackageCounts {
   groupOverrides: number;
   members: number;
   whitelistEntries: number;
+  tieringFeatures: number;
+  tieringProductSeries: number;
+  tieringSupportRecords: number;
+  tieringEvidenceSources: number;
+  tieringVerificationIssues: number;
+  tieringChangeLogs: number;
 }
 
 export type WorkspaceDifferenceChange = "新增" | "修改" | "删除";
@@ -269,7 +430,7 @@ export interface WorkspaceFieldDifference {
 }
 
 export interface WorkspaceImportDifference {
-  entity: "需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单";
+  entity: "需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单" | "分层功能" | "产品系列" | "系列支持" | "证据来源" | "待核验项" | "变更记录";
   key: string;
   title: string;
   change: WorkspaceDifferenceChange;
@@ -280,6 +441,7 @@ export interface WorkspaceImportPreview {
   token: string;
   fileName: string;
   sourceFormat: "roadmap" | "legacy-json";
+  packageKind: WorkspacePackageKind;
   exportedAt: string;
   templateVersion: string;
   counts: WorkspacePackageCounts;
@@ -344,6 +506,10 @@ export interface ElectronApi {
   checkIrmEnvironment(): Promise<IrmEnvironmentStatus>;
   saveGroupOverride(input: SaveGroupOverrideInput): Promise<AppSnapshot>;
   saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot>;
+  saveTieringSupport(input: SaveTieringSupportInput): Promise<AppSnapshot>;
+  saveTieringEvidenceSource(input: SaveTieringEvidenceSourceInput): Promise<AppSnapshot>;
+  updateTieringIssue(input: UpdateTieringIssueInput): Promise<AppSnapshot>;
+  regenerateTieringRequirement(featureId: string): Promise<AppSnapshot>;
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspacePackage(): Promise<{ canceled: boolean; preview?: WorkspaceImportPreview }>;
   applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string }): Promise<{ snapshot: AppSnapshot }>;
@@ -351,7 +517,7 @@ export interface ElectronApi {
   inspectWorkspaceWorkbook(): Promise<{ canceled: boolean; preview?: WorkspaceWorkbookImportPreview }>;
   applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
-  exportRoadmapPresentation(input: PptExportRequest): Promise<{ canceled: boolean; path?: string; slideCount?: number }>;
+  exportRoadmapPresentation(input: PptExportRequest): Promise<PptExportResult>;
 }
 
 declare global {

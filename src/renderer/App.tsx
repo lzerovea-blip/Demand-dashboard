@@ -23,13 +23,14 @@ import {
   type RoadmapGroup,
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
-import { ALL_DICTIONARY_PARENTS, filterDictionaryItemsByParent } from "../shared/dictionaries";
+import { ALL_DICTIONARY_PARENTS, domainFilterSelection, filterDictionaryItemsByParent, toggleDomainSelection } from "../shared/dictionaries";
 import { filterRequirements, filterRequirementsForRegion, listReleaseVersionOptions, type RoadmapRegion } from "../shared/requirements";
-import { requirementMatchesResponsibleMember, responsibleMembers, visibleMembersForRole } from "../shared/members";
-import { splitTextIntoLines } from "../shared/text";
+import { filterMembers, isMemberFilterValid, requirementMatchesResponsibleMember, responsibleMembers, UNASSIGNED_MEMBER, visibleMembersForRole } from "../shared/members";
+import { formatHistoricalLaunch, historicalLaunchStatusLabel } from "../shared/tieringLaunches";
 import { restoreFocusAfterConfirmation } from "./confirmation";
 import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS } from "../shared/pptExport";
 import { moveImageViewerIndex } from "./imageViewer";
+import { TieringPage } from "./TieringPage";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
 import {
   CATEGORY_META,
@@ -73,7 +74,7 @@ import {
   type WorkloadSide,
 } from "../shared/workload";
 
-type Page = "requirements" | "summary" | "roadmap" | "dictionaries" | "template";
+type Page = "requirements" | "summary" | "roadmap" | "tiering" | "dictionaries" | "template";
 
 interface ConfirmationRequest {
   title: string;
@@ -92,8 +93,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.7.33",
-  releasedAt: "2026-08-31",
+  version: "0.8.9",
+  releasedAt: "2026-09-03",
   author: "林忠维",
 };
 
@@ -107,8 +108,8 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
   templates: [],
 };
 
-const HALF_YEARS = Array.from({ length: 18 }, (_, index) => {
-  const serial = 2024 * 2 + index;
+const HALF_YEARS = Array.from({ length: (2033 - 2014) * 2 }, (_, index) => {
+  const serial = 2014 * 2 + index;
   return `${Math.floor(serial / 2)}H${(serial % 2) + 1}`;
 });
 
@@ -353,6 +354,7 @@ export default function App() {
           <NavButton active={page === "requirements"} icon="⌘" label="需求池" onClick={() => setPage("requirements")} />
           <NavButton active={page === "summary"} icon="↗" label="汇总分析" onClick={() => setPage("summary")} />
           <NavButton active={page === "roadmap"} icon="▦" label="路标" onClick={() => setPage("roadmap")} />
+          <NavButton active={page === "tiering"} icon="▥" label="分层分级" onClick={() => setPage("tiering")} />
           <NavButton active={page === "dictionaries"} icon="◇" label="字典设置" onClick={() => setPage("dictionaries")} />
           <NavButton active={page === "template"} icon="⇩" label="导出中心" onClick={() => setPage("template")} />
         </nav>
@@ -429,6 +431,14 @@ export default function App() {
               requestConfirmation={requestConfirmation}
             />
           )}
+          {page === "tiering" && (
+            <TieringPage
+              snapshot={snapshot}
+              onSaveSupport={async (input) => { await update(() => window.roadmapApi.saveTieringSupport(input), "系列支持状态已保存"); }}
+              onOpenRequirement={setEditor}
+              onRegenerateRequirement={async (featureId) => { await update(() => window.roadmapApi.regenerateTieringRequirement(featureId), "历史需求已重新生成"); }}
+            />
+          )}
           {page === "template" && (
             <TemplatePage
               snapshot={snapshot}
@@ -437,7 +447,11 @@ export default function App() {
               onExportPpt={async (config) => {
                 try {
                   const result = await window.roadmapApi.exportRoadmapPresentation({ start: exportStartHalf, end: exportEndHalf, ...config });
-                  if (!result.canceled) setNotice(`PPT 已导出（${result.slideCount} 页）：${result.path}`);
+                  if (!result.canceled) {
+                    const owner = result.effectiveDocumentOwner ? `；文档所有者：${result.effectiveDocumentOwner}` : "";
+                    const fallback = result.fallbackUsed ? "；已回退使用 Office 登录身份" : "";
+                    setNotice(`PPT 已导出（${result.slideCount} 页）${owner}${fallback}：${result.path}`);
+                  }
                 } catch (reason) {
                   setError(messageOf(reason));
                 }
@@ -636,8 +650,8 @@ function PeriodSelector({ start, end, onStart, onEnd }: { start: string; end: st
 
 function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConfirmation }: { snapshot: AppSnapshot; onEdit: (value: Requirement) => void; onDuplicate: (id: string) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const [query, setQuery] = useState("");
-  const [source, setSource] = useState<RequirementSource | "">("");
-  const [category, setCategory] = useState<RequirementCategory | "">("");
+  const [domainL0Id, setDomainL0Id] = useState("");
+  const [domainL1Id, setDomainL1Id] = useState("");
   const [targetHalfYear, setTargetHalfYear] = useState("");
   const [planningMemberId, setPlanningMemberId] = useState("");
   const [productManagerMemberId, setProductManagerMemberId] = useState("");
@@ -646,19 +660,24 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
   const searchInputRef = useRef<HTMLInputElement>(null);
   const domains = new Map(snapshot.domains.map((item) => [item.id, item.name]));
   const products = new Map(snapshot.products.map((item) => [item.id, item.name]));
+  const domainSelection = domainFilterSelection(snapshot.domains, domainL0Id, domainL1Id);
+  useEffect(() => {
+    setDomainL0Id(domainSelection.domainL0Id);
+    setDomainL1Id(domainSelection.domainL1Id);
+  }, [domainSelection.domainL0Id, domainSelection.domainL1Id]);
   const releaseVersions = listReleaseVersionOptions(snapshot.requirements);
   useEffect(() => {
     if (targetHalfYear && !releaseVersions.some((item) => item.halfYear === targetHalfYear)) setTargetHalfYear("");
   }, [targetHalfYear, releaseVersions.map((item) => item.halfYear).join("|")]);
-  const baseRows = filterRequirements(snapshot.requirements, domains, { query, source, category, targetHalfYear });
+  const baseRows = filterRequirements(snapshot.requirements, domains, { query, domainL0Id: domainSelection.domainL0Id, domainL1Id: domainSelection.domainL1Id, targetHalfYear });
   const visibleDomainIds = new Set(baseRows.map((item) => item.domainId));
   const planningMembers = visibleMembersForRole(snapshot.members, visibleDomainIds, "规划");
   const productManagers = visibleMembersForRole(snapshot.members, visibleDomainIds, "产品经理");
   const seMembers = visibleMembersForRole(snapshot.members, visibleDomainIds, "SE");
   useEffect(() => {
-    if (planningMemberId && !planningMembers.some((item) => item.id === planningMemberId)) setPlanningMemberId("");
-    if (productManagerMemberId && !productManagers.some((item) => item.id === productManagerMemberId)) setProductManagerMemberId("");
-    if (seMemberId && !seMembers.some((item) => item.id === seMemberId)) setSeMemberId("");
+    if (!isMemberFilterValid(planningMemberId, planningMembers)) setPlanningMemberId("");
+    if (!isMemberFilterValid(productManagerMemberId, productManagers)) setProductManagerMemberId("");
+    if (!isMemberFilterValid(seMemberId, seMembers)) setSeMemberId("");
   }, [planningMemberId, productManagerMemberId, seMemberId, planningMembers.map((item) => item.id).join("|"), productManagers.map((item) => item.id).join("|"), seMembers.map((item) => item.id).join("|")]);
   const rows = baseRows.filter((item) => requirementMatchesResponsibleMember(item, snapshot.members, "规划", planningMemberId)
     && requirementMatchesResponsibleMember(item, snapshot.members, "产品经理", productManagerMemberId)
@@ -679,12 +698,12 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
       <div className="panel table-panel">
         <div className="toolbar">
           <label className="search"><span>⌕</span><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题或领域" /></label>
-          <select value={source} onChange={(event) => setSource(event.target.value as RequirementSource | "")}><option value="">全部来源</option>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select>
-          <select value={category} onChange={(event) => setCategory(event.target.value as RequirementCategory | "")}><option value="">全部分类</option>{CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select>
-          <select value={targetHalfYear} onChange={(event) => setTargetHalfYear(event.target.value)}><option value="">全部版本</option>{releaseVersions.map((item) => <option key={item.halfYear} value={item.halfYear}>{item.version}（{shortHalf(item.halfYear)}）</option>)}</select>
-          <select value={planningMemberId} onChange={(event) => setPlanningMemberId(event.target.value)}><option value="">全部规划</option>{planningMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-          <select value={productManagerMemberId} onChange={(event) => setProductManagerMemberId(event.target.value)}><option value="">全部产品经理</option>{productManagers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-          <select value={seMemberId} onChange={(event) => setSeMemberId(event.target.value)}><option value="">全部 SE</option>{seMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          <select aria-label="筛选领域 L0" value={domainSelection.domainL0Id} onChange={(event) => setDomainL0Id(event.target.value)}><option value="">全部领域 L0</option>{domainSelection.l0Options.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          <select aria-label="筛选领域 L1" value={domainSelection.domainL1Id} onChange={(event) => setDomainL1Id(event.target.value)}><option value="">全部领域 L1</option>{domainSelection.l1Options.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          <select aria-label="筛选上线版本" value={targetHalfYear} onChange={(event) => setTargetHalfYear(event.target.value)}><option value="">全部版本</option>{releaseVersions.map((item) => <option key={item.halfYear} value={item.halfYear}>{item.version}（{shortHalf(item.halfYear)}）</option>)}</select>
+          <select aria-label="筛选规划" value={planningMemberId} onChange={(event) => setPlanningMemberId(event.target.value)}><option value="">全部规划</option><option value={UNASSIGNED_MEMBER}>未配置规划</option>{planningMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          <select aria-label="筛选产品经理" value={productManagerMemberId} onChange={(event) => setProductManagerMemberId(event.target.value)}><option value="">全部产品经理</option><option value={UNASSIGNED_MEMBER}>未配置产品经理</option>{productManagers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          <select aria-label="筛选 SE" value={seMemberId} onChange={(event) => setSeMemberId(event.target.value)}><option value="">全部 SE</option><option value={UNASSIGNED_MEMBER}>未配置 SE</option>{seMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
           <span className="toolbar-count">显示 {rows.length} / {snapshot.requirements.length}</span>
         </div>
         {rows.length ? (
@@ -706,10 +725,10 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
-                    <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={item.title}>{splitTextIntoLines(item.title).map((line, index) => <span key={`${index}-${line}`}>{line}</span>)}</strong>{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></td>
+                    <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={item.title}>{item.title}</strong><div className="requirement-badges">{item.historicalLaunch && <span className="historical-baseline-badge">历史基线</span>}{item.historicalLaunch?.verificationStatus === "pending" && <span className="historical-pending-badge">{historicalLaunchStatusLabel(item.historicalLaunch)}</span>}{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></div></td>
                     <td>{domains.get(item.domainId) ?? "未命名"}</td>
                     <td><SourceBadge source={item.source} /></td>
-                    <td><div className="release-cell"><b>{formatMonth(item.targetMonth)}</b><small>{hmosVersionForMonth(item.targetMonth)}</small></div></td>
+                    <td><div className="release-cell"><b>{formatRequirementLaunch(item)}</b><small>{hmosVersionForMonth(item.targetMonth)}</small></div></td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
                     <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "规划")} /></td>
                     <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "产品经理")} /></td>
@@ -721,7 +740,7 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
               </tbody>
             </table>
           </div>
-        ) : <Empty title="还没有符合条件的需求" body={snapshot.requirements.length ? "尝试清空搜索或调整来源、分类、上线版本。" : "先维护领域与产品字典，再新建第一条需求。"} />}
+        ) : <Empty title="还没有符合条件的需求" body={snapshot.requirements.length ? "尝试清空搜索或调整领域 L0、领域 L1、上线版本及责任人。" : "先维护领域与产品字典，再新建第一条需求。"} />}
       </div>
     </>
   );
@@ -1232,6 +1251,7 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
 }) {
   const hasExclusive = group.categories.includes("产品专属");
   const hasExperience = group.categories.includes("体验优化");
+  const historicalPending = group.requirements.find((item) => item.historicalLaunch?.verificationStatus === "pending");
   const label = roadmapCardLabel(group);
   const displayLines = roadmapCardDisplayParts(label, Array.from(`${group.cardTitle}：`).length);
   const visibleProducts = group.productNames.slice(0, 2);
@@ -1273,6 +1293,7 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
           <IconTrendingUp size={18} stroke={2.2} aria-hidden="true" />
         </span>
       )}
+      {historicalPending && <span className="roadmap-card-time-pending" aria-label={historicalLaunchStatusLabel(historicalPending.historicalLaunch)}>时间待核验</span>}
     </button>
   );
 }
@@ -1556,7 +1577,7 @@ function GroupDrawer({ group, onClose, onEditRequirement }: {
       <div className="overlay" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
         <div className="drawer group-drawer">
           <div className="drawer-header"><div><span className="eyebrow">ROADMAP GROUP</span><h2>{group.domainName}</h2></div><button className="icon-button" onClick={onClose}>×</button></div>
-          <div className="group-hero"><SourceBadge source={group.source} /><b>{formatMonth(group.targetMonth)}</b><span>合计 {formatNumber(group.totalWorkloadPm)} 人月</span><span>{group.requirements.length} 条需求</span></div>
+          <div className="group-hero"><SourceBadge source={group.source} /><b>{formatRoadmapGroupLaunch(group)}</b><span>合计 {formatNumber(group.totalWorkloadPm)} 人月</span><span>{group.requirements.length} 条需求</span></div>
           <div className="form-body">
             {group.productNames.length > 0 && <div className="detail-products"><span>涉及产品</span>{group.productNames.map((name) => <b key={name}>{name}</b>)}</div>}
             <div className="detail-list">
@@ -1684,11 +1705,23 @@ function MembersPanel({ domains, members, onSave, onDelete, requestConfirmation 
   const [role, setRole] = useState<MemberRole | "">("");
   const [domainL1Ids, setDomainL1Ids] = useState<string[]>([]);
   const [roleFilter, setRoleFilter] = useState<MemberRole | "">("");
+  const [listL0Id, setListL0Id] = useState("");
+  const [editorL0Id, setEditorL0Id] = useState("");
   const [domainFilter, setDomainFilter] = useState("");
   const [saving, setSaving] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const domainNames = new Map(domains.map((item) => [item.id, item.name]));
-  const visibleMembers = members.filter((item) => (!roleFilter || item.role === roleFilter) && (!domainFilter || item.domainL1Ids.includes(domainFilter)));
+  const listSelection = domainFilterSelection(domains, listL0Id, domainFilter);
+  const editorSelection = domainFilterSelection(domains, editorL0Id);
+  const visibleMembers = filterMembers(members, domains, { role: roleFilter, domainL0Id: listSelection.domainL0Id, domainL1Id: listSelection.domainL1Id });
+  useEffect(() => {
+    setListL0Id(listSelection.domainL0Id);
+    setDomainFilter(listSelection.domainL1Id);
+    setEditorL0Id(editorSelection.domainL0Id);
+  }, [listSelection.domainL0Id, listSelection.domainL1Id, editorSelection.domainL0Id]);
+  useEffect(() => {
+    setDomainL1Ids((current) => current.filter((id) => domainL1s.some((item) => item.id === id)));
+  }, [domainL1s.map((item) => item.id).join("|")]);
 
   function reset() {
     setEditingId(undefined);
@@ -1697,6 +1730,7 @@ function MembersPanel({ domains, members, onSave, onDelete, requestConfirmation 
     setMicrosoftAccount("");
     setRole("");
     setDomainL1Ids([]);
+    setEditorL0Id("");
   }
 
   function edit(member: Member) {
@@ -1706,6 +1740,7 @@ function MembersPanel({ domains, members, onSave, onDelete, requestConfirmation 
     setMicrosoftAccount(member.microsoftAccount);
     setRole(member.role ?? "");
     setDomainL1Ids([...member.domainL1Ids]);
+    setEditorL0Id("");
     nameInputRef.current?.focus();
   }
 
@@ -1729,22 +1764,25 @@ function MembersPanel({ domains, members, onSave, onDelete, requestConfirmation 
         <Field label="工号" required><input value={employeeNumber} onChange={(event) => setEmployeeNumber(event.target.value)} placeholder="唯一工号" /></Field>
         <Field label="Microsoft 365 账号" required><input type="email" value={microsoftAccount} onChange={(event) => setMicrosoftAccount(event.target.value)} placeholder="name@company.com" /></Field>
         <Field label="岗位角色"><select value={role} onChange={(event) => setRole(event.target.value as MemberRole | "")}><option value="">未填写</option>{MEMBER_ROLES.map((item) => <option key={item}>{item}</option>)}</select></Field>
+        <Field label="负责领域 L0"><select aria-label="录入负责领域 L0" value={editorSelection.domainL0Id} onChange={(event) => setEditorL0Id(event.target.value)}><option value="">全部 L0</option>{editorSelection.l0Options.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
         <div className="field member-domain-field">
           <span>负责领域 L1</span>
           <details className="member-domain-select">
             <summary>{domainL1Ids.length ? `已选择 ${domainL1Ids.length} 个领域` : "选择负责领域"}</summary>
             <div className="member-domain-menu">
-              {domainL1s.map((item) => <label key={item.id}><input type="checkbox" checked={domainL1Ids.includes(item.id)} onChange={(event) => setDomainL1Ids((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><span>{item.name}</span></label>)}
-              {!domainL1s.length && <em>请先新增领域 L1</em>}
+              {editorSelection.l1Options.map((item) => <label key={item.id}><input type="checkbox" checked={domainL1Ids.includes(item.id)} onChange={() => setDomainL1Ids((current) => toggleDomainSelection(current, item.id))} /><span>{item.name}</span></label>)}
+              {!editorSelection.l1Options.length && <em>当前 L0 下暂无领域 L1</em>}
             </div>
           </details>
         </div>
       </div>
+      <div className="member-selected-domains" aria-label="全部已选负责领域"><span>已选领域 L1（跨 L0 保留）</span>{domainL1Ids.length ? domainL1Ids.map((id) => <button type="button" key={id} aria-label={`取消负责领域 ${domainNames.get(id)}`} onClick={() => setDomainL1Ids((current) => current.filter((item) => item !== id))}>{domainNames.get(id)} <span aria-hidden="true">×</span></button>) : <em>尚未选择</em>}</div>
       <div className="member-editor-actions">{editingId && <button type="button" className="button ghost" onClick={reset}>取消编辑</button>}<button className="button primary" disabled={saving || !name.trim() || !employeeNumber.trim() || !microsoftAccount.trim()}>{saving ? "保存中…" : editingId ? "保存修改" : "新增成员"}</button></div>
     </form>
     <div className="member-list-toolbar">
-      <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as MemberRole | "")}><option value="">全部角色</option>{MEMBER_ROLES.map((item) => <option key={item}>{item}</option>)}</select>
-      <select value={domainFilter} onChange={(event) => setDomainFilter(event.target.value)}><option value="">全部领域 L1</option>{domainL1s.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+      <select aria-label="人员角色筛选" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as MemberRole | "")}><option value="">全部角色</option>{MEMBER_ROLES.map((item) => <option key={item}>{item}</option>)}</select>
+      <select aria-label="人员负责领域 L0 筛选" value={listSelection.domainL0Id} onChange={(event) => setListL0Id(event.target.value)}><option value="">全部领域 L0</option>{listSelection.l0Options.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+      <select aria-label="人员负责领域 L1 筛选" value={listSelection.domainL1Id} onChange={(event) => setDomainFilter(event.target.value)}><option value="">全部领域 L1</option>{listSelection.l1Options.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
       <span>{visibleMembers.length} 名成员</span>
     </div>
     <div className="member-list">
@@ -2010,10 +2048,10 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           <section className="panel export-type-card roadmap-export-card">
             <div className="export-type-head"><span className="export-type-icon">P</span><span className="eyebrow">POWERPOINT</span></div>
             <h3>需求路标</h3>
-            <p>按当前半年区间生成原生可编辑 PowerPoint。封面固定保留，其余内容一项对应一页。</p>
+            <p>按当前半年区间生成原生可编辑 PowerPoint。封面固定保留；路标内容过多时自动续页，保留全部卡片及原有顺序。</p>
             <dl className="export-type-meta">
               <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
-              <div><dt>预计页数</dt><dd>{1 + pptSections.length} 页</dd></div>
+              <div><dt>基础页数</dt><dd>{1 + pptSections.length} 页（内容过多自动续页）</dd></div>
               <div><dt>处理方式</dt><dd>全程本地</dd></div>
             </dl>
             <div className="ppt-export-config">
@@ -2025,7 +2063,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
               {halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS && <p className="ppt-range-warning">PPT 一次最多支持 {MAX_PPT_HALF_YEARS} 个连续半年，请缩短导出区间。</p>}
             </div>
             <div className="export-card-actions">
-              <button className="button primary" onClick={exportPpt} disabled={exporting || !whitelistEntries.length || !pptMaterialName.trim() || halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS}>{exporting ? (checkingIrm ? "正在检测 IRM…" : "正在生成并保护…") : `生成 ${1 + pptSections.length} 页受保护 PPT`}</button>
+              <button className="button primary" onClick={exportPpt} disabled={exporting || !whitelistEntries.length || !pptMaterialName.trim() || halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS}>{exporting ? (checkingIrm ? "正在检测 IRM…" : "正在生成并保护…") : "生成受保护 PPT"}</button>
             </div>
           </section>
 
@@ -2101,12 +2139,12 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
       {preview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !applying && setPreview(null)}>
         <div className="import-dialog panel" role="dialog" aria-modal="true" aria-labelledby="import-title">
           <div className="import-dialog-head"><div><span className="eyebrow">WORKSPACE IMPORT</span><h2 id="import-title">确认导入数据包</h2></div><button className="icon-button" onClick={() => setPreview(null)} disabled={Boolean(applying)}>×</button></div>
-          <div className="import-file"><b>{preview.fileName}</b><span>{preview.sourceFormat === "roadmap" ? `.roadmap · 模板 ${preview.templateVersion}` : "旧版 JSON 备份"}</span></div>
-          <dl className="import-counts"><div><dt>需求</dt><dd>{preview.counts.requirements} 条</dd></div><div><dt>图片</dt><dd>{preview.counts.images} 张</dd></div><div><dt>领域</dt><dd>{preview.counts.domains} 个</dd></div><div><dt>产品</dt><dd>{preview.counts.products} 个</dd></div><div><dt>人员</dt><dd>{preview.counts.members} 名</dd></div><div><dt>PPT 白名单</dt><dd>{preview.counts.whitelistEntries} 人</dd></div><div><dt>卡片编辑</dt><dd>{preview.counts.groupOverrides} 项</dd></div><div><dt>导出时间</dt><dd>{formatDateTime(preview.exportedAt)}</dd></div></dl>
-          <div className="import-guidance"><b>选择导入方式</b><span>合并导入会按名称合并字典，并保留更新时间较新的同 ID 需求；整体替换会用数据包完整覆盖当前业务数据。</span></div>
+          <div className="import-file"><b>{preview.fileName}</b><span>{preview.sourceFormat === "roadmap" ? `.roadmap · ${preview.packageKind === "tiering-seed" ? "分层分级初始包" : `模板 ${preview.templateVersion}`}` : "旧版 JSON 备份"}</span></div>
+          <dl className="import-counts"><div><dt>需求</dt><dd>{preview.counts.requirements} 条</dd></div><div><dt>图片</dt><dd>{preview.counts.images} 张</dd></div><div><dt>领域</dt><dd>{preview.counts.domains} 个</dd></div><div><dt>产品</dt><dd>{preview.counts.products} 个</dd></div><div><dt>分层功能</dt><dd>{preview.counts.tieringFeatures} 项</dd></div><div><dt>产品系列</dt><dd>{preview.counts.tieringProductSeries} 个</dd></div><div><dt>支持明细</dt><dd>{preview.counts.tieringSupportRecords} 条</dd></div><div><dt>来源 / 待核验</dt><dd>{preview.counts.tieringEvidenceSources} / {preview.counts.tieringVerificationIssues}</dd></div></dl>
+          <div className="import-guidance"><b>{preview.packageKind === "tiering-seed" ? "分层分级初始包只能合并" : "选择导入方式"}</b><span>{preview.packageKind === "tiering-seed" ? "合并只写入历史需求、领域与分层分级数据，不覆盖产品、成员、PPT 白名单、卡片编辑和其他需求。" : "合并导入会按名称合并字典，并保留更新时间较新的同 ID 需求；整体替换会用数据包完整覆盖当前业务数据。"}</span></div>
           <ImportDifferenceList differences={preview.differences} />
           {preview.differences.length > 0 && <label className="import-difference-confirm"><input type="checkbox" checked={packageDifferencesConfirmed} onChange={(event) => setPackageDifferencesConfirmed(event.target.checked)} /><span>我已逐项核对以上全部差异，确认合并这些变化。</span></label>}
-          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setPreview(null)} disabled={Boolean(applying)}>取消</button><button className="button dark" onClick={() => applyPackage("merge")} disabled={Boolean(applying) || (preview.differences.length > 0 && !packageDifferencesConfirmed)}>{applying === "merge" ? "合并中…" : "确认差异并合并"}</button><button className="button danger" onClick={() => applyPackage("replace")} disabled={Boolean(applying)}>{applying === "replace" ? "替换中…" : "整体替换"}</button></div>
+          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setPreview(null)} disabled={Boolean(applying)}>取消</button><button className="button dark" onClick={() => applyPackage("merge")} disabled={Boolean(applying) || (preview.differences.length > 0 && !packageDifferencesConfirmed)}>{applying === "merge" ? "合并中…" : "确认差异并合并"}</button>{preview.packageKind !== "tiering-seed" && <button className="button danger" onClick={() => applyPackage("replace")} disabled={Boolean(applying)}>{applying === "replace" ? "替换中…" : "整体替换"}</button>}</div>
         </div>
       </div>}
     </>
@@ -2119,7 +2157,12 @@ function ImportIssueList({ title, tone, items }: { title: string; tone: "error" 
 
 function ImportDifferenceList({ differences }: { differences: WorkspaceImportPreview["differences"] }) {
   if (!differences.length) return <div className="import-differences empty-differences"><b>合并差异</b><span>当前文件与本机数据没有会被合入的差异。</span></div>;
-  return <div className="import-differences"><div className="import-differences-head"><b>全部合并差异</b><span>{differences.length} 项记录变化</span></div><div className="import-difference-scroll">{differences.map((difference) => <details key={`${difference.entity}-${difference.key}`} open><summary><span className={`difference-change ${difference.change}`}>{difference.change}</span><b>{difference.entity} · {difference.title}</b><small>{difference.fields.length} 个字段</small></summary><table><thead><tr><th>字段</th><th>本机值</th><th>导入后</th></tr></thead><tbody>{difference.fields.map((field) => <tr key={field.field}><th>{field.field}</th><td>{field.currentValue || "—"}</td><td>{field.incomingValue || "—"}</td></tr>)}</tbody></table></details>)}</div></div>;
+  return <div className="import-differences"><div className="import-differences-head"><b>全部合并差异</b><span>{differences.length} 项记录变化，可逐项展开核对</span></div><div className="import-difference-scroll">{differences.map((difference) => <ImportDifferenceItem key={`${difference.entity}-${difference.key}`} difference={difference} />)}</div></div>;
+}
+
+function ImportDifferenceItem({ difference }: { difference: WorkspaceImportPreview["differences"][number] }) {
+  const [expanded, setExpanded] = useState(false);
+  return <details open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}><summary><span className={`difference-change ${difference.change}`}>{difference.change}</span><b>{difference.entity} · {difference.title}</b><small>{difference.fields.length} 个字段</small></summary>{expanded && <table><thead><tr><th>字段</th><th>本机值</th><th>导入后</th></tr></thead><tbody>{difference.fields.map((field) => <tr key={field.field}><th>{field.field}</th><td>{field.currentValue || "—"}</td><td>{field.incomingValue || "—"}</td></tr>)}</tbody></table>}</details>;
 }
 
 function Metric({ label, value, suffix, accent = "plain" }: { label: string; value: string | number; suffix: string; accent?: string }) {
@@ -2141,7 +2184,7 @@ function ScopeBadge({ scope }: { scope: RequirementScope }) {
 
 function ResponsibilityCell({ members }: { members: Member[] }) {
   if (!members.length) return <span className="responsibility-empty">—</span>;
-  return <div className="responsibility-cell">{members.map((member) => <span key={member.id}><b>{member.name}</b><small>{member.employeeNumber} · {member.microsoftAccount}</small></span>)}</div>;
+  return <div className="responsibility-cell">{members.map((member) => <span key={member.id}>{member.name}</span>)}</div>;
 }
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: ReactNode }) {
@@ -2153,11 +2196,11 @@ function Empty({ title, body }: { title: string; body: string }) {
 }
 
 function pageTitle(page: Page): string {
-  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标", dictionaries: "字典设置", template: "导出中心" })[page];
+  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标", tiering: "分层分级", dictionaries: "字典设置", template: "导出中心" })[page];
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
+  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", tiering: "离线管理九个华为产品系列对运动健康原子功能的支持规格", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {
@@ -2177,6 +2220,15 @@ function formatWorkloadBreakdown(workload: WorkloadBreakdown): string {
 function formatMonth(value: string): string {
   const [year, month] = value.split("-");
   return `${year}年${Number(month)}月`;
+}
+
+function formatRequirementLaunch(item: Pick<Requirement, "targetMonth" | "historicalLaunch">): string {
+  return item.historicalLaunch ? formatHistoricalLaunch(item.historicalLaunch, item.targetMonth) : formatMonth(item.targetMonth);
+}
+
+function formatRoadmapGroupLaunch(group: RoadmapGroup): string {
+  const historical = group.requirements.find((item) => item.historicalLaunch);
+  return historical ? formatHistoricalLaunch(historical.historicalLaunch!, group.targetMonth) : formatMonth(group.targetMonth);
 }
 
 function formatDateTime(value: string): string {

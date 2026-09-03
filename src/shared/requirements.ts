@@ -1,5 +1,7 @@
 import { REQUIREMENT_SCOPES } from "./types.js";
 import type { GroupOverride, Requirement, RequirementCategory, RequirementScope, RequirementSource } from "./types.js";
+import { halfYearOf, hmosVersionForHalfYear } from "./roadmap.js";
+import { historicalLaunchForFeatureId, normalizeHistoricalLaunchMetadata } from "./tieringLaunches.js";
 import { roundWorkload } from "./workload.js";
 
 export const LEGACY_OVERSEAS_SOURCE = "海外研究" as const;
@@ -21,6 +23,14 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
   const legacyTotal = nonNegative(input.workloadPm);
   const source = normalizeLegacySource(input.source) as RequirementSource;
   const productIds = normalizeRequirementProductIds(input.category, input.productIds);
+  let historicalLaunch = normalizeHistoricalLaunchMetadata(input.historicalLaunch);
+  if (!historicalLaunch && input.tieringFeatureId && input.targetMonth === "2026-09") {
+    try {
+      historicalLaunch = historicalLaunchForFeatureId(input.tieringFeatureId);
+    } catch {
+      // 非标准扩展功能保持旧数据，不阻断普通工作区读取。
+    }
+  }
   const unallocatedWorkloadPm = hasBreakdown
     ? (Number.isFinite(input.unallocatedWorkloadPm) ? nonNegative(input.unallocatedWorkloadPm) : roundWorkload(Math.max(0, legacyTotal - categorized)))
     : legacyTotal;
@@ -39,6 +49,8 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
     cloudWorkloadPm,
     unallocatedWorkloadPm,
     workloadPm: roundWorkload(categorized + unallocatedWorkloadPm),
+    targetMonth: historicalLaunch?.suggestedTargetMonth ?? input.targetMonth,
+    historicalLaunch,
   };
 }
 
@@ -86,13 +98,27 @@ function nonNegative(value: unknown): number {
 
 export interface RequirementFilters {
   query: string;
-  source: RequirementSource | "";
-  category: RequirementCategory | "";
-  targetMonth: string;
+  domainL0Id: string;
+  domainL1Id: string;
+  targetHalfYear: string;
 }
 
-export function listTargetMonths(requirements: Requirement[]): string[] {
-  return [...new Set(requirements.map((item) => item.targetMonth).filter((item) => /^\d{4}-(0[1-9]|1[0-2])$/.test(item)))].sort();
+export interface ReleaseVersionOption {
+  halfYear: string;
+  version: string;
+}
+
+export function listReleaseVersionOptions(requirements: Requirement[]): ReleaseVersionOption[] {
+  const halfYears = new Set<string>();
+  for (const requirement of requirements) {
+    try {
+      halfYears.add(halfYearOf(requirement.targetMonth));
+    } catch {
+      // Invalid historical months remain excluded from filter options and validation handles them elsewhere.
+    }
+  }
+  return [...halfYears].sort((a, b) => Number(b.slice(0, 4)) - Number(a.slice(0, 4)) || Number(b.slice(-1)) - Number(a.slice(-1)))
+    .map((halfYear) => ({ halfYear, version: hmosVersionForHalfYear(halfYear) }));
 }
 
 export function filterRequirements(
@@ -104,9 +130,9 @@ export function filterRequirements(
   return requirements.filter((item) => {
     const searchText = `${item.title} ${domainNames.get(item.domainL0Id) ?? ""} ${domainNames.get(item.domainId) ?? ""} ${item.overseasRegions.join(" ")}`.toLocaleLowerCase("zh-CN");
     return (!normalizedQuery || searchText.includes(normalizedQuery))
-      && (!filters.source || item.source === filters.source)
-      && (!filters.category || item.category === filters.category)
-      && (!filters.targetMonth || item.targetMonth === filters.targetMonth);
+      && (!filters.domainL0Id || item.domainL0Id === filters.domainL0Id)
+      && (!filters.domainL1Id || item.domainId === filters.domainL1Id)
+      && (!filters.targetHalfYear || halfYearOf(item.targetMonth) === filters.targetHalfYear);
   });
 }
 
@@ -143,5 +169,7 @@ export function cloneRequirementAsCopy(
     overseasRegions: [...source.overseasRegions],
     createdAt: now,
     updatedAt: now,
+    tieringFeatureId: undefined,
+    historicalLaunch: undefined,
   };
 }

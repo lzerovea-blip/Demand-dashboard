@@ -1,15 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cloneRequirementAsCopy, filterRequirements, filterRequirementsForRegion, listTargetMonths, nextRequirementCopyTitle, normalizeLegacyGroupOverride, normalizeRequirement, requirementVisibleInRegion } from "../src/shared/requirements";
-import { splitTextIntoLines } from "../src/shared/text";
+import { cloneRequirementAsCopy, filterRequirements, filterRequirementsForRegion, listReleaseVersionOptions, nextRequirementCopyTitle, normalizeLegacyGroupOverride, normalizeRequirement, requirementVisibleInRegion } from "../src/shared/requirements";
 import type { Requirement } from "../src/shared/types";
-
-describe("需求池标题分行", () => {
-  it("每20个Unicode字符换行且不限制行数", () => {
-    expect(splitTextIntoLines("字".repeat(20))).toEqual(["字".repeat(20)]);
-    expect(splitTextIntoLines("字".repeat(21))).toEqual(["字".repeat(20), "字"]);
-    expect(splitTextIntoLines("字".repeat(41))).toEqual(["字".repeat(20), "字".repeat(20), "字"]);
-  });
-});
 
 describe("需求复制", () => {
   it("连续副本使用首个空闲序号", () => {
@@ -22,6 +13,8 @@ describe("需求复制", () => {
     source.description = "完整描述";
     source.productIds = ["p1"];
     source.images = [{ id: "old-image", name: "a.png", mimeType: "image/png", sizeBytes: 1, dataUrl: "data:image/png;base64,YQ==" }];
+    source.tieringFeatureId = "F012";
+    source.historicalLaunch = { suggestedTargetMonth: "2014-04", precision: "year", verificationStatus: "pending", confidence: "C", evidenceUrls: ["https://example.com"], note: "待核验" };
     const ids = ["new-requirement", "new-image"];
     const copy = cloneRequirementAsCopy(source, [source.title], () => ids.shift()!, "2026-08-28T10:00:00.000Z");
     expect(copy).toMatchObject({ id: "new-requirement", title: "睡眠监测 副本（1）", description: "完整描述", productIds: ["p1"], createdAt: "2026-08-28T10:00:00.000Z", updatedAt: "2026-08-28T10:00:00.000Z" });
@@ -29,6 +22,8 @@ describe("需求复制", () => {
     expect(copy.images[0].dataUrl).toBe(source.images[0].dataUrl);
     expect(copy.images).not.toBe(source.images);
     expect(copy.productIds).not.toBe(source.productIds);
+    expect(copy.tieringFeatureId).toBeUndefined();
+    expect(copy.historicalLaunch).toBeUndefined();
   });
 });
 
@@ -58,6 +53,15 @@ describe("历史需求兼容", () => {
       unallocatedWorkloadPm: 1,
       workloadPm: 1,
     });
+  });
+
+  it("旧分层历史需求缺少元数据时从稳定功能 ID 自动修正归档月份", () => {
+    const normalized = normalizeRequirement({
+      ...requirement("historical-huawei-F146", "步数统计", "d1", "运动基础", "平台演进", "2026-09"),
+      tieringFeatureId: "F146",
+    });
+    expect(normalized.targetMonth).toBe("2014-04");
+    expect(normalized.historicalLaunch).toMatchObject({ precision: "year", verificationStatus: "pending", confidence: "C" });
   });
 
   it("保留最近版本升级设置并兼容旧数据默认否", () => {
@@ -226,17 +230,31 @@ describe("需求池筛选", () => {
   ];
   const domains = new Map([["d1", "睡眠"], ["d2", "跑步"]]);
 
-  it("提取、去重并按时间排列完整年月", () => {
-    expect(listTargetMonths([...requirements, { ...requirements[0], id: "r4" }])).toEqual(["2026-12", "2027-03", "2027-04"]);
+  it("按实际需求提取、去重并按半年排列上线版本", () => {
+    expect(listReleaseVersionOptions([...requirements, { ...requirements[0], id: "r4" }, { ...requirements[0], id: "historical", targetMonth: "2014-04" }])).toEqual([
+      { halfYear: "2027H1", version: "HMOS 7.1" },
+      { halfYear: "2026H2", version: "HMOS 7.0" },
+      { halfYear: "2014H1", version: "历史版本" },
+    ]);
   });
 
-  it("月份与关键词、来源、分类组合筛选", () => {
+  it("版本按半年倒序而非 HMOS 字符串排序", () => {
+    expect(listReleaseVersionOptions(["2028-09", "2029-09", "2016-04", "2014-04", "invalid"].map((targetMonth) => ({ ...requirements[0], targetMonth }))).map((item) => item.halfYear)).toEqual(["2029H2", "2028H2", "2016H1", "2014H1"]);
+  });
+
+  it("版本筛选包含同半年不同月份并与关键词、L0、L1 组合，不再按来源或分类过滤", () => {
     expect(filterRequirements(requirements, domains, {
       query: "睡眠",
-      source: "健康基础",
-      category: "体验优化",
-      targetMonth: "2027-03",
-    }).map((item) => item.id)).toEqual(["r1"]);
+      domainL0Id: "l0",
+      domainL1Id: "d1",
+      targetHalfYear: "2027H1",
+    }).map((item) => item.id)).toEqual(["r1", "r2"]);
+    expect(filterRequirements(requirements, domains, {
+      query: "睡眠",
+      domainL0Id: "another-l0",
+      domainL1Id: "d1",
+      targetHalfYear: "2027H1",
+    }).map((item) => item.id)).toEqual([]);
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidMicrosoftAccount, normalizePptAccessPolicy, requirementMatchesResponsibleMember, responsibleMembers, visibleMembersForRole } from "../src/shared/members";
+import { filterMembers, isMemberFilterValid, isValidMicrosoftAccount, normalizePptAccessPolicy, requirementMatchesResponsibleMember, resolvePptDocumentOwnerAccount, responsibleMembers, UNASSIGNED_MEMBER, visibleMembersForRole } from "../src/shared/members";
 import type { Member, Requirement } from "../src/shared/types";
 
 const members: Member[] = [
@@ -10,6 +10,23 @@ const members: Member[] = [
 ];
 
 describe("人员责任矩阵", () => {
+  it("人员角色、L0 和 L1 采用 AND；L0 匹配任意负责子级", () => {
+    const domains = ["d1", "d2"].map((id) => ({ id, name: id, level: "L1" as const, parentId: id === "d1" ? "health" : "sports", active: true, sortOrder: 0 }));
+    expect(filterMembers(members, domains, { role: "规划", domainL0Id: "sports", domainL1Id: "" }).map((item) => item.id)).toEqual(["m2"]);
+    expect(filterMembers(members, domains, { role: "规划", domainL0Id: "health", domainL1Id: "d2" })).toEqual([]);
+    expect(filterMembers(members, domains, { role: "产品经理", domainL0Id: "health", domainL1Id: "" })).toEqual([]);
+  });
+  it.each(["规划", "产品经理", "SE"] as const)("%s 支持未配置筛选，且不自动清空该特殊选项", (role) => {
+    expect(requirementMatchesResponsibleMember({ domainId: "missing" }, members, role, UNASSIGNED_MEMBER)).toBe(true);
+    expect(requirementMatchesResponsibleMember({ domainId: "d1" }, [member("a", "同名", role, ["d1"], 0)], role, UNASSIGNED_MEMBER)).toBe(false);
+    expect(isMemberFilterValid(UNASSIGNED_MEMBER, [])).toBe(true);
+    expect(isMemberFilterValid("deleted", [])).toBe(false);
+  });
+  it("角色空值与指定成员 AND 组合按角色和成员 ID 判定", () => {
+    const sameName = [member("a", "同名", "规划", ["d1"], 0), member("b", "同名", "规划", ["d2"], 1)];
+    const rows = ["d1", "d2", "d3"].map((domainId) => ({ domainId }));
+    expect(rows.filter((row) => requirementMatchesResponsibleMember(row, sameName, "规划", "b") && requirementMatchesResponsibleMember(row, sameName, "SE", UNASSIGNED_MEMBER))).toEqual([{ domainId: "d2" }]);
+  });
   it("同一 L1 可匹配多名同角色成员并按排序展示", () => {
     expect(responsibleMembers(members, "d1", "规划").map((item) => item.id)).toEqual(["m2", "m1"]);
   });
@@ -25,6 +42,15 @@ describe("人员责任矩阵", () => {
     expect(isValidMicrosoftAccount("user@company.com")).toBe(true);
     expect(isValidMicrosoftAccount("10086")).toBe(false);
     expect(normalizePptAccessPolicy({ entries: [{ memberId: "m1", permission: "read" }, { memberId: "m1", permission: "change" }], updatedAt: "2026-08-28" }).entries).toEqual([{ memberId: "m1", permission: "change" }]);
+  });
+
+  it("将 Office 内部工号身份映射到人员字典企业账号", () => {
+    const owner = member("owner", "林忠维", "规划", [], 0);
+    owner.employeeNumber = "l00850411";
+    owner.microsoftAccount = "zw.lin@huawei.com";
+    expect(resolvePptDocumentOwnerAccount("l00850411@china.huawei.com", [owner])).toBe("zw.lin@huawei.com");
+    expect(resolvePptDocumentOwnerAccount("OTHER@HUAWEI.COM", [owner])).toBe("other@huawei.com");
+    expect(resolvePptDocumentOwnerAccount(undefined, [owner])).toBeUndefined();
   });
 });
 

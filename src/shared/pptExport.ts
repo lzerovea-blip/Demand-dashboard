@@ -35,6 +35,7 @@ export interface PptExportPlan {
   summaries: HalfYearSummary[];
   groups: RoadmapGroup[];
   roadmapPages: PptRoadmapPagePlan[];
+  /** Base count before the main-process layout adds roadmap continuation pages. */
   slideCount: number;
 }
 

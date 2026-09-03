@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
-import { basename, dirname, join } from "node:path";
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { LocalDatabase } from "./database.js";
 import { createWorkspacePackage, inspectWorkspacePackage, type PreparedWorkspaceImport } from "./workspacePackage.js";
 import type {
@@ -12,12 +13,16 @@ import type {
   PptExportRequest,
   SaveMemberInput,
   SavePptAccessPolicyInput,
+  SaveTieringSupportInput,
+  SaveTieringEvidenceSourceInput,
+  UpdateTieringIssueInput,
   WorkspaceImportMode,
 } from "../shared/types.js";
 import { buildPptExportPlan } from "../shared/pptExport.js";
 import { halfYearSequence } from "../shared/roadmap.js";
-import { createRoadmapPresentation } from "./pptxExport.js";
-import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm } from "./pptIrm.js";
+import { createRoadmapPresentation, presentationSlideCount } from "./pptxExport.js";
+import { validateGeneratedPptx } from "./pptxValidation.js";
+import { checkPowerPointIrmEnvironment, protectPowerPointWithIrm, resolveIrmEnvironmentStatus } from "./pptIrm.js";
 import { pptPermissionExpiration } from "../shared/pptAccess.js";
 import {
   createWorkspaceWorkbook,
@@ -27,7 +32,7 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-08-31";
+const APP_RELEASED_AT = "2026-09-03";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
@@ -37,6 +42,28 @@ const BUILTIN_TEMPLATE_FILE = "需求路标模板-共创版-v0.1.pptx";
 const pendingImports = new Map<string, PreparedWorkspaceImport>();
 const pendingWorkbookImports = new Map<string, PreparedWorkspaceWorkbookImport>();
 
+function safeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return message.replace(/需求“[^”]*”/g, "某条需求");
+}
+
+async function writeStartupDiagnostic(event: string, detail: string): Promise<string | undefined> {
+  try {
+    const directory = join(app.getPath("userData"), "logs");
+    const path = join(directory, "startup.log");
+    await mkdir(directory, { recursive: true });
+    await appendFile(path, `[${new Date().toISOString()}] ${event}: ${detail}\n`, "utf8");
+    return path;
+  } catch {
+    return undefined;
+  }
+}
+
+async function getResolvedIrmEnvironment() {
+  const status = await checkPowerPointIrmEnvironment();
+  return resolveIrmEnvironmentStatus(status, database.getSnapshot().members);
+}
+
 async function createWindow(): Promise<void> {
   const appWindow = new BrowserWindow({
     width: 1480,
@@ -45,6 +72,7 @@ async function createWindow(): Promise<void> {
     minHeight: 760,
     backgroundColor: "#f4f6f8",
     title: PRODUCT_NAME,
+    show: true,
     webPreferences: {
       preload: join(app.getAppPath(), "dist-electron", "preload", "index.cjs"),
       contextIsolation: true,
@@ -61,12 +89,24 @@ async function createWindow(): Promise<void> {
   };
   appWindow.on("enter-full-screen", () => notifyFullscreenChange(true));
   appWindow.on("leave-full-screen", () => notifyFullscreenChange(false));
+  appWindow.on("unresponsive", () => {
+    void writeStartupDiagnostic("window-unresponsive", "主窗口失去响应");
+  });
+  appWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
+    void writeStartupDiagnostic("renderer-load-failed", `${errorCode} ${errorDescription}`);
+  });
+  appWindow.webContents.on("render-process-gone", (_event, details) => {
+    void writeStartupDiagnostic("renderer-process-gone", `${details.reason} exitCode=${details.exitCode}`);
+  });
 
   if (process.env.VITE_DEV_SERVER_URL) {
     await appWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
     await appWindow.loadFile(join(app.getAppPath(), "dist-renderer", "index.html"));
   }
+  appWindow.center();
+  appWindow.show();
+  appWindow.focus();
 }
 
 function registerIpc(): void {
@@ -94,9 +134,13 @@ function registerIpc(): void {
   ipcMain.handle("members:save", (_event, input: SaveMemberInput) => database.saveMember(input));
   ipcMain.handle("members:delete", (_event, id: string) => database.deleteMember(id));
   ipcMain.handle("ppt-access:save", (_event, input: SavePptAccessPolicyInput) => database.savePptAccessPolicy(input));
-  ipcMain.handle("ppt-access:check-environment", () => checkPowerPointIrmEnvironment());
+  ipcMain.handle("ppt-access:check-environment", () => getResolvedIrmEnvironment());
   ipcMain.handle("groups:save", (_event, input: SaveGroupOverrideInput) => database.saveGroupOverride(input));
   ipcMain.handle("groups:reorder", (_event, input: SaveGroupOrderInput) => database.saveGroupOrder(input));
+  ipcMain.handle("tiering:support:save", (_event, input: SaveTieringSupportInput) => database.saveTieringSupport(input));
+  ipcMain.handle("tiering:source:save", (_event, input: SaveTieringEvidenceSourceInput) => database.saveTieringEvidenceSource(input));
+  ipcMain.handle("tiering:issue:update", (_event, input: UpdateTieringIssueInput) => database.updateTieringIssue(input));
+  ipcMain.handle("tiering:requirement:regenerate", (_event, featureId: string) => database.regenerateTieringRequirement(featureId));
 
   ipcMain.handle("workspace:export", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -133,6 +177,7 @@ function registerIpc(): void {
     if (!input || !["merge", "replace"].includes(input.mode)) throw new Error("请选择有效的导入方式");
     const prepared = pendingImports.get(input.token);
     if (!prepared) throw new Error("导入数据已失效，请重新选择数据包");
+    if (prepared.preview.packageKind === "tiering-seed" && input.mode !== "merge") throw new Error("分层分级初始包只能选择合并导入，不能整体替换");
     if (input.mode === "merge" && input.differenceDigest !== prepared.preview.differenceDigest) throw new Error("请先核对并确认全部合并差异");
     pendingImports.delete(input.token);
     return { snapshot: await database.importWorkspace(prepared.data, input.mode) };
@@ -194,9 +239,10 @@ function registerIpc(): void {
   ipcMain.handle("presentation:export", async (_event, input: PptExportRequest) => {
     const snapshot = database.getSnapshot();
     if (!snapshot.pptAccessPolicy.entries.length) throw new Error("请先配置并保存 PPT 成员白名单");
-    const environment = await checkPowerPointIrmEnvironment();
+    const environment = await getResolvedIrmEnvironment();
     if (!environment.supported || !environment.powerPointInstalled || !environment.irmReady) throw new Error(environment.message);
     const plan = buildPptExportPlan(snapshot, input);
+    const slideCount = presentationSlideCount(plan);
     const exportedAt = new Date();
     const expiration = pptPermissionExpiration(exportedAt);
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -206,23 +252,36 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     const outputPath = result.filePath.toLowerCase().endsWith(".pptx") ? result.filePath : `${result.filePath}.pptx`;
-    const tempDirectory = await mkdtemp(join(dirname(outputPath), ".solution-ppt-"));
+    const tempDirectory = await mkdtemp(join(tmpdir(), "solution-ppt-export-"));
     const editablePath = join(tempDirectory, "roadmap-editable.pptx");
-    const protectedPath = join(tempDirectory, "roadmap-protected.pptx");
+    const normalizedPath = join(tempDirectory, "roadmap-normalized.pptx");
+    const preferredProtectedPath = join(tempDirectory, "roadmap-protected-preferred-owner.pptx");
+    const fallbackProtectedPath = join(tempDirectory, "roadmap-protected-office-owner.pptx");
     try {
-      await writeFile(editablePath, await createRoadmapPresentation(snapshot, input, { exportedAt, expiration }));
-      await protectPowerPointWithIrm({
+      const presentationBytes = await createRoadmapPresentation(snapshot, input, { exportedAt, expiration });
+      await validateGeneratedPptx(presentationBytes, slideCount);
+      await writeFile(editablePath, presentationBytes);
+      const protection = await protectPowerPointWithIrm({
         inputPath: editablePath,
-        outputPath: protectedPath,
+        normalizedPath,
+        preferredOutputPath: preferredProtectedPath,
+        fallbackOutputPath: fallbackProtectedPath,
         members: snapshot.members,
         policy: snapshot.pptAccessPolicy,
         expiration,
+        officeIdentity: environment.officeIdentity,
       });
-      await copyFile(protectedPath, outputPath);
+      await copyFile(protection.outputPath, outputPath);
+      return {
+        canceled: false,
+        path: outputPath,
+        slideCount,
+        effectiveDocumentOwner: protection.effectiveDocumentOwner,
+        fallbackUsed: protection.fallbackUsed,
+      };
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-    return { canceled: false, path: outputPath, slideCount: plan.slideCount };
   });
 }
 
@@ -230,12 +289,30 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = "light";
   app.setPath("userData", process.env.SOLUTION_REQUIREMENTS_USER_DATA_DIR || join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY));
   database = new LocalDatabase();
-  await database.initialize();
+  const initialization = await database.initialize();
+  if (initialization.skippedTieringRequirements > 0) {
+    await writeStartupDiagnostic(
+      "legacy-domain-links-skipped",
+      `检测到 ${initialization.skippedTieringRequirements} 项需求或分层规格的关联失效；原数据和支持状态已保留，请在需求池或分层分级修复关联`,
+    );
+  }
   registerIpc();
   await createWindow();
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
+}).catch(async (error: unknown) => {
+  const message = safeErrorMessage(error);
+  const diagnosticPath = await writeStartupDiagnostic("startup-failed", message);
+  dialog.showErrorBox(
+    `${PRODUCT_NAME}无法启动`,
+    [
+      "应用启动初始化失败，已停止后台进程。",
+      message,
+      diagnosticPath ? `诊断日志：${diagnosticPath}` : "未能写入诊断日志。",
+    ].join("\n\n"),
+  );
+  app.exit(1);
 });
 
 app.on("window-all-closed", () => {

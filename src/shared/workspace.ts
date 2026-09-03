@@ -1,6 +1,7 @@
 import type { DictionaryItem, GroupOverride, Member, PptAccessPolicy, Requirement, WorkspaceData } from "./types.js";
 import { normalizeLegacyGroupOverride, normalizeRequirement } from "./requirements.js";
 import { EMPTY_PPT_ACCESS_POLICY, normalizeMember, normalizePptAccessPolicy } from "./members.js";
+import { EMPTY_TIERING_DATA, mergeTieringData, normalizeTieringData } from "./tiering.js";
 
 export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData): WorkspaceData {
   const domainMerge = mergeDomainDictionaries(local.domains, incoming.domains);
@@ -44,6 +45,7 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
     groupOverrides: mergeByUpdatedAt(local.groupOverrides, remappedOverrides, (item) => item.groupKey),
     members: memberMerge.items,
     pptAccessPolicy,
+    tiering: mergeTieringData(normalizeTieringData(local.tiering), normalizeTieringData(incoming.tiering)),
   };
 }
 
@@ -176,6 +178,7 @@ function timestamp(value: string): number {
 }
 
 export function workspaceCounts(data: WorkspaceData) {
+  const tiering = normalizeTieringData(data.tiering ?? EMPTY_TIERING_DATA);
   return {
     requirements: data.requirements.length,
     images: data.requirements.reduce((sum, item) => sum + item.images.length, 0),
@@ -184,5 +187,11 @@ export function workspaceCounts(data: WorkspaceData) {
     groupOverrides: data.groupOverrides.length,
     members: (data.members ?? []).length,
     whitelistEntries: normalizePptAccessPolicy(data.pptAccessPolicy ?? EMPTY_PPT_ACCESS_POLICY).entries.length,
+    tieringFeatures: tiering.features.length,
+    tieringProductSeries: tiering.productSeries.length,
+    tieringSupportRecords: tiering.supportRecords.length,
+    tieringEvidenceSources: tiering.evidenceSources.length,
+    tieringVerificationIssues: tiering.verificationIssues.length,
+    tieringChangeLogs: tiering.changeLogs.length,
   };
 }

@@ -8,7 +8,7 @@ import {
   type PptRoadmapPagePlan,
   type RoadmapBadgeKind,
 } from "../shared/pptExport.js";
-import { groupMatchesRoadmapLane, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
+import { groupMatchesRoadmapLane, hmosVersionForHalfYear, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
 import { CATEGORIES } from "../shared/types.js";
 import type { AppSnapshot, PptExportRequest, RequirementCategory, Track } from "../shared/types.js";
 import type { WorkloadSide } from "../shared/workload.js";
@@ -69,8 +69,10 @@ export interface RoadmapCardLayout {
   gapAfter: number;
   visibleRequirements: string[];
   titleLines: string[];
+  bodyLines: string[];
   titleLineHeight: number;
   bodyLineHeight: number;
+  bodyOffset: number;
   height: number;
   top: number;
   badgeLeft: number;
@@ -84,6 +86,13 @@ export interface RoadmapCellLayout {
   visibleLimit: number;
   cards: RoadmapCardLayout[];
 }
+
+export interface PaginatedRoadmapPage extends PptRoadmapPagePlan {
+  continuationIndex: number;
+  continuationCount: number;
+}
+
+class RoadmapCellCapacityError extends Error {}
 
 export interface PptExportSecurityContext {
   exportedAt: Date;
@@ -115,12 +124,21 @@ export async function createRoadmapPresentation(
     if (section === "summary") addSummarySlide(pptx, plan);
     else {
       const page = plan.roadmapPages.find((item) => item.track === section);
-      if (page) addRoadmapSlide(pptx, page);
+      if (page) paginateRoadmapPage(page).forEach((part) => addRoadmapSlide(pptx, part));
     }
   }
 
   const output = await pptx.write({ outputType: "nodebuffer", compression: true });
   return Buffer.from(output as Uint8Array);
+}
+
+/** Actual count, including overflow pages; shared by validation and the export result. */
+export function presentationSlideCount(plan: PptExportPlan): number {
+  return 1 + plan.selectedSections.reduce((count, section) => {
+    if (section === "summary") return count + 1;
+    const page = plan.roadmapPages.find((item) => item.track === section);
+    return count + (page ? paginateRoadmapPage(page).length : 0);
+  }, 0);
 }
 
 function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan, security: PptExportSecurityContext): void {
@@ -190,15 +208,65 @@ function addSummarySlide(pptx: PptxPresentation, plan: PptExportPlan): void {
   notes(slide, "三端和分类均按需求实际工作量计算；本页不展示七类路标投入。");
 }
 
-function addRoadmapSlide(pptx: PptxPresentation, page: PptRoadmapPagePlan): void {
+function addRoadmapSlide(pptx: PptxPresentation, page: PaginatedRoadmapPage): void {
   const slide = pptx.addSlide();
   slide.background = { color: C.paper };
   const slideNumber = pptx._slides.length;
-  text(slide, `${page.track}路标`, 50, 20, 500, 38, 24, C.ink, true, "left", "mid");
+  const continuation = page.continuationCount > 1
+    ? `（${page.continuationIndex ? "续 " : ""}${page.continuationIndex + 1}/${page.continuationCount}）`
+    : "";
+  text(slide, `${page.track}路标${continuation}`, 50, 20, 650, 38, 24, C.ink, true, "left", "mid");
   text(slide, String(slideNumber).padStart(2, "0"), 1170, 26, 46, 18, 9, C.ink, true, "right");
   line(slide, 50, 64, 1170, 0, C.faint, 1);
   drawRoadmapTable(slide, page);
   notes(slide, `${page.track}路标按半年展示；每条圆点文本对应一条独立需求记录，不展示产品名称。`);
+}
+
+export function paginateRoadmapPage(page: PptRoadmapPagePlan): PaginatedRoadmapPage[] {
+  const lanes = roadmapLanesForTrack(page.track);
+  const cellWidth = (ROADMAP_TABLE.w - ROADMAP_TABLE.laneW) / page.halfYears.length;
+  const cellHeight = (ROADMAP_TABLE.h - ROADMAP_TABLE.headerH) / lanes.length;
+  const chunksByCell: RoadmapGroup[][][] = [];
+
+  // Split whole cards independently per cell. A continuation retains every half-year and lane.
+  for (const lane of lanes) {
+    for (const halfYear of page.halfYears) {
+      const groups = groupsForHalfYear(page.groups, halfYear).filter((group) => groupMatchesRoadmapLane(group, lane));
+      const chunks: RoadmapGroup[][] = [];
+      let current: RoadmapGroup[] = [];
+      for (const group of groups) {
+        const candidate = [...current, group];
+        try {
+          layoutRoadmapCell(candidate, cellWidth, cellHeight);
+          current = candidate;
+        } catch (error) {
+          if (!(error instanceof RoadmapCellCapacityError)) throw error;
+          // Pagination cannot fix an individual card that is taller than an entire cell.
+          try {
+            layoutRoadmapCell([group], cellWidth, cellHeight);
+          } catch (singleCardError) {
+            if (!(singleCardError instanceof RoadmapCellCapacityError)) throw singleCardError;
+            throw new RoadmapCellCapacityError(`PPT 路标单张卡片超过可排版容量：${page.track}路标 / ${lane} / ${halfYear} / ${group.cardTitle}。请缩短该领域标题或需求标题后重试`);
+          }
+          if (current.length) chunks.push(current);
+          current = [group];
+        }
+      }
+      if (current.length) chunks.push(current);
+      chunksByCell.push(chunks);
+    }
+  }
+
+  const continuationCount = Math.max(1, ...chunksByCell.map((chunks) => chunks.length));
+  return Array.from({ length: continuationCount }, (_, continuationIndex) => {
+    const keys = new Set(chunksByCell.flatMap((chunks) => chunks[continuationIndex] ?? []).map((group) => group.key));
+    return {
+      ...page,
+      groups: page.groups.filter((group) => keys.has(group.key)),
+      continuationIndex,
+      continuationCount,
+    };
+  });
 }
 
 function drawRoadmapTable(slide: PptxSlide, page: PptRoadmapPagePlan): void {
@@ -207,10 +275,9 @@ function drawRoadmapTable(slide: PptxSlide, page: PptRoadmapPagePlan): void {
   const halfW = (w - laneW) / page.halfYears.length;
   const bodyH = h - headerH;
   const laneH = bodyH / lanes.length;
-  const rows = [
-    ["类型", ...page.halfYears.map((halfYear) => `${shortHalf(halfYear)}\n（产品标识）`)],
-    ...lanes.map((lane) => [lane, ...page.halfYears.map(() => "")]),
-  ];
+  // Labels are editable text boxes below; the native table only supplies the grid.
+  // Drawing labels in both places produces overlapping text on every continuation.
+  const rows = Array.from({ length: lanes.length + 1 }, () => Array(page.halfYears.length + 1).fill(""));
   const colW = [laneW * PX, ...page.halfYears.map(() => halfW * PX)];
   const rowH = [headerH * PX, ...lanes.map(() => laneH * PX)];
   slide.addTable(rows, {
@@ -233,7 +300,7 @@ function drawRoadmapTable(slide: PptxSlide, page: PptRoadmapPagePlan): void {
   rect(slide, x, y, w, headerH, C.red, C.red, 0);
   text(slide, "类型", x, y, laneW, headerH, 16, C.white, true, "center", "mid");
   page.halfYears.forEach((halfYear, index) => {
-    text(slide, `${shortHalf(halfYear)}\n（产品标识）`, x + laneW + index * halfW, y + 6, halfW, headerH - 12, 12, C.white, true, "center", "mid");
+    text(slide, `${shortHalf(halfYear)}\n（${hmosVersionForHalfYear(halfYear)}）`, x + laneW + index * halfW, y + 6, halfW, headerH - 12, 12, C.white, true, "center", "mid");
   });
   lanes.forEach((lane, laneIndex) => {
     const rowY = y + headerH + laneIndex * laneH;
@@ -264,10 +331,11 @@ function drawRoadmapCell(
     const top = cellY + card.top;
     const width = cellW - card.margin * 2;
     const titleHeight = card.titleLines.length * card.titleLineHeight;
-    text(slide, card.titleLines.join("\n"), left, top, width, titleHeight, card.fontSize, C.ink, true, "left", "top", { margin: 0, breakLine: true, name: `roadmap-title-${track}-${lane}-${halfYear}-${index}` });
-    const bodyTop = top + titleHeight + 2;
-    const bodyLines = card.visibleRequirements.flatMap((item) => wrapText(`· ${item}`, width, card.fontSize, false).map((part, partIndex) => partIndex ? `  ${part}` : part));
-    text(slide, bodyLines.join("\n"), left, bodyTop, width, Math.max(card.bodyLineHeight, card.height - titleHeight - 2), card.fontSize, C.ink, false, "left", "top", { margin: 0, breakLine: true, name: `roadmap-body-${track}-${lane}-${halfYear}-${index}` });
+    // Use exactly the measured lines. A second Office wrap can add an unmeasured
+    // line (or strand the bullet), invalidating the pagination capacity check.
+    text(slide, card.titleLines.join("\n"), left, top, width, titleHeight, card.fontSize, C.ink, true, "left", "top", { margin: 0, wrap: false, lineSpacing: card.titleLineHeight * 72 / 96, name: `roadmap-title-${track}-${lane}-${halfYear}-${index}` });
+    const bodyTop = top + card.bodyOffset;
+    text(slide, card.bodyLines.join("\n"), left, bodyTop, width, card.height - card.bodyOffset, card.fontSize, C.ink, false, "left", "top", { margin: 0, wrap: false, lineSpacing: card.bodyLineHeight * 72 / 96, name: `roadmap-body-${track}-${lane}-${halfYear}-${index}` });
     if (card.badge === "product") {
       roundRect(slide, cellX + card.badgeLeft, cellY + card.badgeTop, 58, 17, C.navy, C.navy, 0, 4);
       text(slide, "产品专属", cellX + card.badgeLeft, cellY + card.badgeTop, 58, 17, 8.5, C.white, true, "center", "mid", { margin: 0, name: `roadmap-product-${track}-${lane}-${halfYear}-${index}` });
@@ -303,15 +371,15 @@ export function layoutRoadmapCell(groups: RoadmapGroup[], width: number, height:
       };
     }
   }
-  throw new Error("PPT 路标单元格内容超过可排版容量：即使使用 8pt、4px 边距并仅保留每卡 1 条需求仍无法容纳，请缩短标题或拆分时间范围");
+  throw new RoadmapCellCapacityError("PPT 路标单元格内容超过可排版容量：需要拆分续页");
 }
 
 function calculateCardLayouts(groups: RoadmapGroup[], width: number, fontSize: number, margin: number, gap: number, visibleLimit: number): RoadmapCardLayout[] {
   const textWidth = width - margin * 2;
-  const titleLineHeight = pointsToPixels(fontSize) * 1.18;
   const bodyLineHeight = pointsToPixels(fontSize) * 1.25;
   return groups.map((group, index) => {
     const badge = roadmapBadgeKind(group);
+    const titleLineHeight = Math.max(pointsToPixels(fontSize) * 1.18, badge ? 17 : 0);
     const badgeWidth = badge === "product" ? 58 : badge === "experience" ? 17 : 0;
     const badgeGap = badge ? 7 : 0;
     let titleLines = wrapText(group.cardTitle, textWidth, fontSize, true);
@@ -320,9 +388,12 @@ function calculateCardLayouts(groups: RoadmapGroup[], width: number, fontSize: n
       titleLines = wrapText(group.cardTitle, Math.max(20, textWidth - badgeWidth - badgeGap), fontSize, true);
     }
     const visibleRequirements = visibleRequirementTitlesForLayout(group, visibleLimit);
-    const bodyLines = visibleRequirements.reduce((sum, item) => sum + Math.max(1, wrapText(`· ${item}`, textWidth, fontSize, false).length), 0);
+    // Reserve indentation and a small font-substitution tolerance before wrapping.
+    const bodyLines = visibleRequirements.flatMap((item) => wrapText(item, textWidth - measureTextWidth("· ", fontSize) - 4, fontSize, false)
+      .map((part, partIndex) => `${partIndex ? "  " : "· "}${part}`));
     const titleHeight = titleLines.length * titleLineHeight;
-    const height = titleHeight + 2 + Math.max(1, bodyLines) * bodyLineHeight;
+    const bodyOffset = titleHeight + 2;
+    const height = bodyOffset + Math.max(1, bodyLines.length) * bodyLineHeight;
     const dynamicLastWidth = measureTextWidth(titleLines.at(-1) ?? "", fontSize, true);
     const badgeTop = (titleLines.length - 1) * titleLineHeight + Math.max(0, (titleLineHeight - 17) / 2);
     return {
@@ -333,8 +404,10 @@ function calculateCardLayouts(groups: RoadmapGroup[], width: number, fontSize: n
       gapAfter: index === groups.length - 1 ? 0 : gap,
       visibleRequirements,
       titleLines,
+      bodyLines,
       titleLineHeight,
       bodyLineHeight,
+      bodyOffset,
       height,
       top: 0,
       badgeLeft: Math.min(width - margin - badgeWidth, margin + dynamicLastWidth + badgeGap),
@@ -357,6 +430,13 @@ function wrapText(value: string, maxWidth: number, fontSize: number, bold: boole
   let lineValue = "";
   let lineWidth = 0;
   for (const char of chars) {
+    if (char === "\r") continue;
+    if (char === "\n") {
+      lines.push(lineValue);
+      lineValue = "";
+      lineWidth = 0;
+      continue;
+    }
     const charWidth = measureTextWidth(char, fontSize, bold);
     if (lineValue && lineWidth + charWidth > maxWidth) {
       lines.push(lineValue);
@@ -376,7 +456,8 @@ export function measureTextWidth(value: string, fontSize: number, bold = false):
   const factor = bold ? 1.04 : 1;
   return Array.from(value).reduce((sum, char) => {
     if (/\s/u.test(char)) return sum + pixelSize * 0.3;
-    if (/[\u3400-\u9fff\uf900-\ufaff]/u.test(char)) return sum + pixelSize * factor;
+    if (/[\u3000-\u9fff\uf900-\ufaff\uff01-\uff60]/u.test(char)) return sum + pixelSize * factor;
+    if (/[MWmw]/u.test(char)) return sum + pixelSize * 0.9 * factor;
     if (/[A-Z0-9]/u.test(char)) return sum + pixelSize * 0.62 * factor;
     return sum + pixelSize * 0.54 * factor;
   }, 0);
@@ -388,7 +469,7 @@ function drawSummaryTrend(slide: PptxSlide, summaries: HalfYearSummary[]): void 
   [0, 0.33, 0.66, 1].forEach((ratio, index) => {
     const y = plot.y + plot.h - ratio * plot.h;
     line(slide, plot.x, y, plot.w, 0, C.faint2, 1);
-    text(slide, formatNumber((maximum * ratio)), 74, y - 8, 30, 16, 9, C.muted, false, "right");
+    text(slide, formatNumber((maximum * ratio)), 60, y - 8, 44, 16, 9, C.muted, false, "right");
   });
   const groupWidth = plot.w / Math.max(1, summaries.length);
   const barWidth = Math.min(18, groupWidth / 5);
@@ -398,7 +479,7 @@ function drawSummaryTrend(slide: PptxSlide, summaries: HalfYearSummary[]): void 
       const value = summary.bySide[side];
       const height = value / maximum * plot.h;
       const x = center - barWidth * 1.7 + sideIndex * barWidth * 1.2;
-      rect(slide, x, plot.y + plot.h - height, barWidth, height, SIDE_META[side].color, SIDE_META[side].color, 0, 3);
+      if (height > 0) rect(slide, x, plot.y + plot.h - height, barWidth, height, SIDE_META[side].color, SIDE_META[side].color, 0, 3);
     });
     text(slide, shortHalf(summary.halfYear), center - groupWidth / 2, 570, groupWidth, 20, 10, C.muted, true, "center");
   });
@@ -461,6 +542,10 @@ function addChrome(slide: PptxSlide, page: number, section: string, dark: boolea
 }
 
 function rect(slide: PptxSlide, x: number, y: number, w: number, h: number, fill: string, border: string, borderWidth = 1, radius = 0): void {
+  // PptxGenJS divides by the smallest round-rectangle dimension. Zero-sized
+  // rounded shapes therefore emit `fmla="val Infinity"`, which PowerPoint
+  // treats as corrupt OpenXML and repeatedly offers to repair.
+  if (w <= 0 || h <= 0) return;
   slide.addShape(radius ? "roundRect" : "rect", { x: x * PX, y: y * PX, w: w * PX, h: h * PX, rectRadius: radius * PX, fill: { color: fill }, line: { color: border, width: borderWidth } });
 }
 
@@ -488,7 +573,7 @@ function text(
   bold = false,
   align: "left" | "center" | "right" = "left",
   valign: "top" | "mid" | "bottom" = "top",
-  extra: { margin?: number; breakLine?: boolean; name?: string } = {},
+  extra: { margin?: number; breakLine?: boolean; name?: string; wrap?: boolean; lineSpacing?: number } = {},
 ): void {
   slide.addText(value, {
     x: x * PX,
@@ -501,10 +586,14 @@ function text(
     bold,
     margin: extra.margin ?? 0,
     breakLine: extra.breakLine,
-    fit: "shrink",
+    fit: extra.wrap === false ? "none" : "shrink",
+    wrap: extra.wrap,
+    lineSpacing: extra.lineSpacing,
+    paraSpaceAfter: extra.lineSpacing ? 0 : undefined,
+    paraSpaceBefore: extra.lineSpacing ? 0 : undefined,
     valign,
     align,
-    name: extra.name,
+    objectName: extra.name,
   });
 }
 

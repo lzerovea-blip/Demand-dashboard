@@ -6,7 +6,15 @@ import type {
   WorkspaceData,
   WorkspaceFieldDifference,
   WorkspaceImportDifference,
+  TieringChangeLog,
+  TieringEvidenceSource,
+  TieringFeature,
+  TieringProductSeries,
+  TieringSupportRecord,
+  TieringVerificationIssue,
 } from "./types.js";
+import { normalizeTieringData } from "./tiering.js";
+import { formatHistoricalLaunch, historicalLaunchStatusLabel } from "./tieringLaunches.js";
 
 export function diffWorkspaceData(before: WorkspaceData, after: WorkspaceData): WorkspaceImportDifference[] {
   const differences: WorkspaceImportDifference[] = [];
@@ -15,6 +23,14 @@ export function diffWorkspaceData(before: WorkspaceData, after: WorkspaceData): 
   compareCollection(differences, "产品", before.products, after.products, (item) => item.id, (item) => item.name, dictionaryFields);
   compareCollection(differences, "路标卡片", before.groupOverrides, after.groupOverrides, (item) => item.groupKey, (item) => item.cardTitle, overrideFields);
   compareCollection(differences, "成员", before.members ?? [], after.members ?? [], (item) => item.id, (item) => item.name, memberFields);
+  const beforeTiering = normalizeTieringData(before.tiering);
+  const afterTiering = normalizeTieringData(after.tiering);
+  compareCollection(differences, "分层功能", beforeTiering.features, afterTiering.features, (item) => item.id, (item) => item.requirementTitle, tieringFeatureFields);
+  compareCollection(differences, "产品系列", beforeTiering.productSeries, afterTiering.productSeries, (item) => item.id, (item) => item.name, tieringSeriesFields);
+  compareCollection(differences, "系列支持", beforeTiering.supportRecords, afterTiering.supportRecords, (item) => item.id, (item) => item.id, tieringSupportFields);
+  compareCollection(differences, "证据来源", beforeTiering.evidenceSources, afterTiering.evidenceSources, (item) => item.id, (item) => item.title, tieringSourceFields);
+  compareCollection(differences, "待核验项", beforeTiering.verificationIssues, afterTiering.verificationIssues, (item) => item.id, (item) => item.description, tieringIssueFields);
+  compareCollection(differences, "变更记录", beforeTiering.changeLogs, afterTiering.changeLogs, (item) => item.id, (item) => item.id, tieringLogFields);
 
   const beforePolicy = normalizePolicy(before);
   const afterPolicy = normalizePolicy(after);
@@ -87,6 +103,9 @@ function requirementFields(before: Requirement, after: Requirement): WorkspaceFi
     ["允许最近版本升级", yesNo(before.allowLatestVersionUpgrade), yesNo(after.allowLatestVersionUpgrade)],
     ["分类", before.category, after.category],
     ["上线月份", before.targetMonth, after.targetMonth],
+    ["历史建议时间", launchText(before), launchText(after)],
+    ["历史时间核验", historicalLaunchStatusLabel(before.historicalLaunch) || "—", historicalLaunchStatusLabel(after.historicalLaunch) || "—"],
+    ["历史证据", before.historicalLaunch?.evidenceUrls.join("、") || "—", after.historicalLaunch?.evidenceUrls.join("、") || "—"],
     ["匹配产品", before.productIds.join("、") || "—", after.productIds.join("、") || "—"],
     ["设备工作量", String(before.deviceWorkloadPm), String(after.deviceWorkloadPm)],
     ["App 工作量", String(before.appWorkloadPm), String(after.appWorkloadPm)],
@@ -125,6 +144,38 @@ function memberFields(before: Member, after: Member): WorkspaceFieldDifference[]
     ["负责领域 L1", before.domainL1Ids.join("、") || "—", after.domainL1Ids.join("、") || "—"],
     ["更新时间", before.updatedAt, after.updatedAt],
   ]);
+}
+
+function tieringFeatureFields(before: TieringFeature, after: TieringFeature): WorkspaceFieldDifference[] {
+  return changedFields([["L0", before.l0, after.l0], ["L1", before.l1, after.l1], ["需求", before.requirementTitle, after.requirementTitle], ["建议上线时间", featureLaunchText(before), featureLaunchText(after)], ["关联需求", before.requirementId ?? "—", after.requirementId ?? "—"]]);
+}
+
+function launchText(item: Requirement): string {
+  return item.historicalLaunch ? `${formatHistoricalLaunch(item.historicalLaunch, item.targetMonth)} · 置信度 ${item.historicalLaunch.confidence}` : "—";
+}
+
+function featureLaunchText(item: TieringFeature): string {
+  return item.historicalLaunch ? `${formatHistoricalLaunch(item.historicalLaunch)} · 置信度 ${item.historicalLaunch.confidence}` : "—";
+}
+
+function tieringSeriesFields(before: TieringProductSeries, after: TieringProductSeries): WorkspaceFieldDifference[] {
+  return changedFields([["名称", before.name, after.name], ["系列边界", before.boundary, after.boundary], ["代表产品", before.representativeProducts, after.representativeProducts], ["生命周期", before.lifecycle, after.lifecycle]]);
+}
+
+function tieringSupportFields(before: TieringSupportRecord, after: TieringSupportRecord): WorkspaceFieldDifference[] {
+  return changedFields([["支持状态", before.status, after.status]]);
+}
+
+function tieringSourceFields(before: TieringEvidenceSource, after: TieringEvidenceSource): WorkspaceFieldDifference[] {
+  return changedFields([["来源标题", before.title, after.title], ["URL", before.url, after.url], ["适用范围", before.scope, after.scope], ["证据等级", before.evidenceLevel, after.evidenceLevel], ["维护状态", before.maintenanceStatus, after.maintenanceStatus]]);
+}
+
+function tieringIssueFields(before: TieringVerificationIssue, after: TieringVerificationIssue): WorkspaceFieldDifference[] {
+  return changedFields([["问题描述", before.description, after.description], ["涉及系列", before.seriesIds.join("、"), after.seriesIds.join("、")], ["优先级", before.priority, after.priority], ["状态", before.status, after.status], ["负责人", before.owner, after.owner], ["处理说明", before.resolution, after.resolution]]);
+}
+
+function tieringLogFields(before: TieringChangeLog, after: TieringChangeLog): WorkspaceFieldDifference[] {
+  return changedFields([["变更时间", before.changedAt, after.changedAt], ["变更前", before.before, after.before], ["变更后", before.after, after.after], ["变更原因", before.reason, after.reason]]);
 }
 
 function changedFields(rows: Array<[string, string, string]>): WorkspaceFieldDifference[] {

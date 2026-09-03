@@ -77,14 +77,39 @@ export function halfYearOf(targetMonth: string): string {
   return `${year}H${month <= 6 ? 1 : 2}`;
 }
 
+function parseHalfYear(value: string): { year: number; half: 1 | 2 } {
+  const match = /^(\d{4})H([12])$/.exec(value);
+  if (!match) throw new Error(`无效半年：${value}`);
+  return { year: Number(match[1]), half: Number(match[2]) as 1 | 2 };
+}
+
+export function shortHalfYear(value: string): string {
+  const { year, half } = parseHalfYear(value);
+  return `${String(year).slice(-2)}H${half}`;
+}
+
+export function hmosVersionForHalfYear(value: string): string {
+  const { year, half } = parseHalfYear(value);
+  if (year < 2024) return "历史版本";
+  const h1Major = 6 + (year - 2026);
+  return `HMOS ${half === 1 ? `${h1Major}.1` : `${h1Major + 1}.0`}`;
+}
+
+export function hmosVersionForMonth(targetMonth: string): string {
+  return hmosVersionForHalfYear(halfYearOf(targetMonth));
+}
+
+export function formatHalfYearWithHmos(value: string): string {
+  return `${shortHalfYear(value)}（${hmosVersionForHalfYear(value)}）`;
+}
+
 export function halfYearSequence(start: string, end: string): string[] {
-  const parse = (value: string) => {
-    const match = /^(\d{4})H([12])$/.exec(value);
-    if (!match) throw new Error(`无效半年：${value}`);
-    return Number(match[1]) * 2 + Number(match[2]) - 1;
+  const serialOf = (value: string) => {
+    const { year, half } = parseHalfYear(value);
+    return year * 2 + half - 1;
   };
-  const from = parse(start);
-  const to = parse(end);
+  const from = serialOf(start);
+  const to = serialOf(end);
   if (from > to) throw new Error("起始半年不能晚于结束半年");
   return Array.from({ length: to - from + 1 }, (_, index) => {
     const serial = from + index;
@@ -95,10 +120,8 @@ export function halfYearSequence(start: string, end: string): string[] {
 }
 
 export function monthsForHalfYear(halfYear: string): string[] {
-  const match = /^(\d{4})H([12])$/.exec(halfYear);
-  if (!match) throw new Error(`无效半年：${halfYear}`);
-  const year = Number(match[1]);
-  const startMonth = match[2] === "1" ? 1 : 7;
+  const { year, half } = parseHalfYear(halfYear);
+  const startMonth = half === 1 ? 1 : 7;
   return Array.from({ length: 6 }, (_, index) => `${year}-${String(startMonth + index).padStart(2, "0")}`);
 }
 

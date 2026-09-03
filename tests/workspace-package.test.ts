@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { createHash } from "node:crypto";
 import { createWorkspacePackage, inspectWorkspacePackage } from "../src/main/workspacePackage";
 import type { RequirementImage, WorkspaceData } from "../src/shared/types";
+import { EMPTY_TIERING_DATA } from "../src/shared/tiering";
 
 const imageBytes = Buffer.from("offline-image-bytes", "utf8");
 const image: RequirementImage = {
@@ -50,7 +51,7 @@ describe(".roadmap 数据包", () => {
   it("完整往返需求、描述、图片、字典和卡片编辑", async () => {
     const archive = await createWorkspacePackage(workspace, "0.1.0", "2026-08-20T08:00:00.000Z");
     const inspected = await inspectWorkspacePackage(archive, "交接.roadmap");
-    expect(inspected.data).toEqual(workspace);
+    expect(inspected.data).toEqual({ ...workspace, tiering: EMPTY_TIERING_DATA });
     expect(inspected.preview).toMatchObject({
       sourceFormat: "roadmap",
       exportedAt: "2026-08-20T08:00:00.000Z",
@@ -80,6 +81,47 @@ describe(".roadmap 数据包", () => {
     expect(inspected.data.members).toEqual(withMembers.members);
     expect(inspected.data.pptAccessPolicy).toEqual(withMembers.pptAccessPolicy);
     expect(inspected.preview.counts).toMatchObject({ members: 1, whitelistEntries: 1 });
+  });
+
+  it("分层分级初始包带 merge-only 类型及完整数量", async () => {
+    const tieringWorkspace: WorkspaceData = {
+      ...workspace,
+      tiering: {
+        ...EMPTY_TIERING_DATA,
+        features: [{ id: "F001", l0: "基础体征测量", l1: "心率", requirementTitle: "单次心率测量", requirementId: "r1", sortOrder: 0, createdAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z" }],
+      },
+      requirements: workspace.requirements.map((item) => ({ ...item, tieringFeatureId: "F001" })),
+    };
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(tieringWorkspace, "0.8.0", "2026-09-01T00:00:00.000Z", "tiering-seed"), "初始包.roadmap");
+    expect(inspected.preview.packageKind).toBe("tiering-seed");
+    expect(inspected.preview.counts.tieringFeatures).toBe(1);
+  });
+
+  it("完整往返历史上线时间证据并在差异预览中列出", async () => {
+    const historicalWorkspace: WorkspaceData = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({
+        ...item,
+        targetMonth: "2018-09",
+        updatedAt: "2026-09-01T00:00:00.000Z",
+        historicalLaunch: {
+          suggestedTargetMonth: "2018-09",
+          precision: "half-year" as const,
+          verificationStatus: "pending" as const,
+          confidence: "B" as const,
+          evidenceUrls: ["https://consumer.huawei.com/cn/example"],
+          note: "H2 可信，月份待核验",
+        },
+      })),
+    };
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(historicalWorkspace, "0.8.0"), "历史证据.roadmap", workspace);
+    expect(inspected.data.requirements[0].historicalLaunch).toMatchObject({ precision: "half-year", verificationStatus: "pending", confidence: "B" });
+    expect(inspected.preview.differences[0].fields.map((item) => item.field)).toEqual(expect.arrayContaining(["历史建议时间", "历史时间核验", "历史证据"]));
+  });
+
+  it("兼容缺少历史上线时间元数据的旧数据包", async () => {
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(workspace, "0.7.38"), "旧需求包.roadmap");
+    expect(inspected.data.requirements[0].historicalLaunch).toBeUndefined();
   });
 
   it("允许三端工作量全部为零的数据完整往返", async () => {

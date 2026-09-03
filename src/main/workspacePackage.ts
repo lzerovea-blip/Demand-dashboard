@@ -7,15 +7,18 @@ import type {
   WorkspaceData,
   WorkspaceImportPreview,
   WorkspacePackageCounts,
+  WorkspacePackageKind,
 } from "../shared/types.js";
 import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, MEMBER_ROLES, REQUIREMENT_IMAGE_MIME_TYPES, REQUIREMENT_SCOPES, SOURCES } from "../shared/types.js";
 import { normalizeLegacyGroupOverride, normalizeLegacySource, normalizeRequirement } from "../shared/requirements.js";
 import { mergeWorkspaceData, workspaceCounts } from "../shared/workspace.js";
 import { diffWorkspaceData, workspaceDifferenceDigest } from "../shared/workspaceDiff.js";
 import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizePptAccessPolicy } from "../shared/members.js";
+import { EMPTY_TIERING_DATA, normalizeTieringData, validateTieringData } from "../shared/tiering.js";
+import { normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
 
 const PACKAGE_FORMAT = "health-roadmap-workspace";
-const PACKAGE_VERSION = 2;
+const PACKAGE_VERSION = 4;
 const TEMPLATE_VERSION = "v0.1";
 const DATA_PATH = "data.json";
 
@@ -33,6 +36,7 @@ interface WorkspacePackageManifest {
   dataPath: typeof DATA_PATH;
   counts: WorkspacePackageCounts;
   files: Record<string, PackageFileRecord>;
+  packageKind?: WorkspacePackageKind;
 }
 
 interface PackedRequirementImage extends Omit<RequirementImage, "dataUrl"> {
@@ -54,7 +58,7 @@ export interface PreparedWorkspaceImport {
   preview: Omit<WorkspaceImportPreview, "token" | "fileName">;
 }
 
-export async function createWorkspacePackage(data: WorkspaceData, appVersion: string, exportedAt = new Date().toISOString()): Promise<Buffer> {
+export async function createWorkspacePackage(data: WorkspaceData, appVersion: string, exportedAt = new Date().toISOString(), packageKind: WorkspacePackageKind = "workspace"): Promise<Buffer> {
   validateWorkspaceData(data);
   const zip = new JSZip();
   const files: Record<string, PackageFileRecord> = {};
@@ -88,6 +92,7 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
     groupOverrides: data.groupOverrides,
     members: data.members,
     pptAccessPolicy: data.pptAccessPolicy,
+    tiering: normalizeTieringData(data.tiering),
   };
   const dataBytes = Buffer.from(`${JSON.stringify(packedData, null, 2)}\n`, "utf8");
   zip.file(DATA_PATH, dataBytes);
@@ -102,6 +107,7 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
     dataPath: DATA_PATH,
     counts: workspaceCounts(data),
     files,
+    packageKind,
   };
   zip.file("manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
@@ -139,6 +145,7 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, c
     groupOverrides: packedData.groupOverrides.map(normalizeLegacyGroupOverride),
     members: (packedData.members ?? []).map(normalizeMember),
     pptAccessPolicy: normalizePptAccessPolicy(packedData.pptAccessPolicy),
+    tiering: normalizeTieringData(packedData.tiering),
     requirements: packedData.requirements.map((requirement) => ({
       ...normalizeRequirement({ ...requirement, images: [] }),
       images: requirement.images.map((image) => {
@@ -163,6 +170,7 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, c
     data,
     preview: {
       sourceFormat: "roadmap",
+      packageKind: manifest.packageKind ?? "workspace",
       exportedAt: manifest.exportedAt,
       templateVersion: manifest.templateVersion,
       counts: actualCounts,
@@ -182,12 +190,14 @@ function inspectLegacyBackup(bytes: Buffer): PreparedWorkspaceImport {
     groupOverrides: backup.data.groupOverrides.map(normalizeLegacyGroupOverride),
     members: (backup.data.members ?? []).map(normalizeMember),
     pptAccessPolicy: normalizePptAccessPolicy(backup.data.pptAccessPolicy),
+    tiering: normalizeTieringData(backup.data.tiering),
   };
   validateWorkspaceData(data);
   return {
     data,
     preview: {
       sourceFormat: "legacy-json",
+      packageKind: "workspace",
       exportedAt: backup.exportedAt,
       templateVersion: "旧版备份",
       counts: workspaceCounts(data),
@@ -211,7 +221,8 @@ function withMergeDifferences(prepared: PreparedWorkspaceImport, current?: Works
 }
 
 function validateManifest(value: WorkspacePackageManifest): void {
-  if (value?.format !== PACKAGE_FORMAT || ![1, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
+  if (value?.format !== PACKAGE_FORMAT || ![1, 2, 3, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
+  if (value.packageKind && !["workspace", "tiering-seed"].includes(value.packageKind)) throw new Error("数据包类型无效");
   if (value.dataPath !== DATA_PATH || !value.files || !value.files[DATA_PATH]) throw new Error("数据包清单不完整");
   if (!value.exportedAt || !value.templateVersion || !value.counts) throw new Error("数据包元信息不完整");
   for (const record of Object.values(value.files)) {
@@ -248,6 +259,10 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (rawAllowLatestVersionUpgrade !== undefined && typeof rawAllowLatestVersionUpgrade !== "boolean") {
       throw new Error(`需求“${raw.title}”的最近版本升级设置无效`);
     }
+    const rawHistoricalLaunch = (raw as Requirement & { historicalLaunch?: unknown }).historicalLaunch;
+    if (rawHistoricalLaunch !== undefined && !normalizeHistoricalLaunchMetadata(rawHistoricalLaunch)) {
+      throw new Error(`需求“${raw.title}”的历史上线时间证据无效`);
+    }
     const item = normalizeRequirement(raw);
     if (!item.id || requirementIds.has(item.id) || !item.title.trim()) throw new Error("数据包包含无效或重复需求");
     requirementIds.add(item.id);
@@ -256,6 +271,9 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (item.domainL0Id && domainsById.get(item.domainId)?.parentId !== item.domainL0Id) throw new Error(`需求“${item.title}”的领域 L1 不属于所选领域 L0`);
     if (!SOURCES.includes(item.source) || !CATEGORIES.includes(item.category)) throw new Error(`需求“${item.title}”的来源或分类无效`);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(item.targetMonth)) throw new Error(`需求“${item.title}”的上线年月无效`);
+    if (item.historicalLaunch && item.historicalLaunch.suggestedTargetMonth !== item.targetMonth) {
+      throw new Error(`需求“${item.title}”的历史上线时间与需求月份不一致`);
+    }
     if (!Number.isFinite(item.workloadPm) || item.workloadPm < 0) throw new Error(`需求“${item.title}”的工作量无效`);
     if (item.description.length > 5000 || !validTimestamp(item.createdAt) || !validTimestamp(item.updatedAt)) throw new Error(`需求“${item.title}”的文本或时间信息无效`);
     if (item.productIds.some((id) => !productIds.has(id))) throw new Error(`需求“${item.title}”引用了不存在的产品`);
@@ -298,6 +316,11 @@ export function validateWorkspaceData(data: WorkspaceData): void {
   if (!validTimestamp(policy.updatedAt)) throw new Error("PPT 白名单更新时间无效");
   if (policy.entries.some((entry) => !memberIds.has(entry.memberId) || !["read", "change"].includes(entry.permission))) {
     throw new Error("PPT 白名单引用了不存在的成员或无效权限");
+  }
+  const tiering = validateTieringData(data.tiering ?? EMPTY_TIERING_DATA);
+  const linkedFeatureIds = new Set(tiering.features.map((item) => item.id));
+  for (const requirement of data.requirements) {
+    if (requirement.tieringFeatureId && !linkedFeatureIds.has(requirement.tieringFeatureId)) throw new Error(`历史需求“${requirement.title}”引用了不存在的分层功能`);
   }
 }
 
@@ -391,5 +414,11 @@ function sameCounts(left: WorkspacePackageCounts, right: WorkspacePackageCounts)
     && left.products === right.products
     && left.groupOverrides === right.groupOverrides
     && (right.members === undefined || left.members === right.members)
-    && (right.whitelistEntries === undefined || left.whitelistEntries === right.whitelistEntries);
+    && (right.whitelistEntries === undefined || left.whitelistEntries === right.whitelistEntries)
+    && (right.tieringFeatures === undefined || left.tieringFeatures === right.tieringFeatures)
+    && (right.tieringProductSeries === undefined || left.tieringProductSeries === right.tieringProductSeries)
+    && (right.tieringSupportRecords === undefined || left.tieringSupportRecords === right.tieringSupportRecords)
+    && (right.tieringEvidenceSources === undefined || left.tieringEvidenceSources === right.tieringEvidenceSources)
+    && (right.tieringVerificationIssues === undefined || left.tieringVerificationIssues === right.tieringVerificationIssues)
+    && (right.tieringChangeLogs === undefined || left.tieringChangeLogs === right.tieringChangeLogs);
 }

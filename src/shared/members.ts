@@ -1,5 +1,18 @@
 import { MEMBER_ROLES } from "./types.js";
-import type { Member, MemberRole, PptAccessPolicy, PptWhitelistEntry, Requirement } from "./types.js";
+import type { DictionaryItem, Member, MemberRole, PptAccessPolicy, PptWhitelistEntry, Requirement } from "./types.js";
+
+export const UNASSIGNED_MEMBER = "__unassigned__";
+
+export function isMemberFilterValid(memberId: string, options: readonly Member[]): boolean {
+  return !memberId || memberId === UNASSIGNED_MEMBER || options.some((item) => item.id === memberId);
+}
+
+export function filterMembers(members: readonly Member[], domains: readonly DictionaryItem[], filters: { role: MemberRole | ""; domainL0Id: string; domainL1Id: string }): Member[] {
+  const children = new Set(domains.filter((item) => (item.level ?? "L1") === "L1" && (!filters.domainL0Id || item.parentId === filters.domainL0Id)).map((item) => item.id));
+  return members.filter((member) => (!filters.role || member.role === filters.role)
+    && (!filters.domainL0Id || member.domainL1Ids.some((id) => children.has(id)))
+    && (!filters.domainL1Id || (children.has(filters.domainL1Id) && member.domainL1Ids.includes(filters.domainL1Id))));
+}
 
 export const EMPTY_PPT_ACCESS_POLICY: PptAccessPolicy = {
   entries: [],
@@ -13,6 +26,31 @@ export function normalizeMicrosoftAccount(value: string): string {
 export function isValidMicrosoftAccount(value: string): boolean {
   const account = normalizeMicrosoftAccount(value);
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(account);
+}
+
+export function resolvePptDocumentOwnerAccount(
+  officeIdentity: string | undefined,
+  members: readonly Member[],
+): string | undefined {
+  if (!officeIdentity?.trim()) return undefined;
+  const normalizedAccount = normalizeMicrosoftAccount(officeIdentity);
+  const localIdentity = normalizedAccount
+    .split("@")[0]
+    ?.split("\\")
+    .at(-1)
+    ?.trim()
+    .toLocaleLowerCase("en-US");
+  const employeeMember = members.find(
+    (member) => member.employeeNumber.trim().toLocaleLowerCase("en-US") === localIdentity,
+  );
+  if (employeeMember) return normalizeMicrosoftAccount(employeeMember.microsoftAccount);
+
+  const exactMember = members.find(
+    (member) => normalizeMicrosoftAccount(member.microsoftAccount) === normalizedAccount,
+  );
+  if (exactMember) return normalizeMicrosoftAccount(exactMember.microsoftAccount);
+
+  return isValidMicrosoftAccount(normalizedAccount) ? normalizedAccount : undefined;
 }
 
 export function normalizeMember(input: Member): Member {
@@ -62,7 +100,8 @@ export function requirementMatchesResponsibleMember(
   memberId: string,
 ): boolean {
   if (!memberId) return true;
-  return responsibleMembers(members, requirement.domainId, role).some((member) => member.id === memberId);
+  const responsible = responsibleMembers(members, requirement.domainId, role);
+  return memberId === UNASSIGNED_MEMBER ? responsible.length === 0 : responsible.some((member) => member.id === memberId);
 }
 
 export function visibleMembersForRole(members: readonly Member[], domains: ReadonlySet<string>, role: MemberRole): Member[] {

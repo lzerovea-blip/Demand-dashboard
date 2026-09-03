@@ -3,10 +3,13 @@ import {
   buildHalfYearSummaries,
   buildRoadmapGroups,
   categoryPercentagesForSide,
+  formatHalfYearWithHmos,
   groupKeyFor,
   groupMatchesRoadmapLane,
   halfYearOf,
   halfYearSequence,
+  hmosVersionForHalfYear,
+  hmosVersionForMonth,
   monthsForHalfYear,
   moveRoadmapGroupKey,
   roadmapCardLabel,
@@ -54,6 +57,22 @@ describe("半年与月份", () => {
   it("生成连续半年和固定六个月", () => {
     expect(halfYearSequence("2026H2", "2027H2")).toEqual(["2026H2", "2027H1", "2027H2"]);
     expect(monthsForHalfYear("2026H2")).toEqual(["2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12"]);
+  });
+
+  it("按统一公式映射 2024 至 2032 年的 HMOS 版本", () => {
+    for (let year = 2024; year <= 2032; year += 1) {
+      expect(hmosVersionForHalfYear(`${year}H1`)).toBe(`HMOS ${year - 2020}.1`);
+      expect(hmosVersionForHalfYear(`${year}H2`)).toBe(`HMOS ${year - 2019}.0`);
+    }
+    expect(hmosVersionForMonth("2027-03")).toBe("HMOS 7.1");
+    expect(hmosVersionForMonth("2027-09")).toBe("HMOS 8.0");
+    expect(formatHalfYearWithHmos("2026H1")).toBe("26H1（HMOS 6.1）");
+    expect(formatHalfYearWithHmos("2014H1")).toBe("14H1（历史版本）");
+  });
+
+  it("拒绝非法半年和上线年月", () => {
+    expect(() => hmosVersionForHalfYear("2026H3")).toThrow("无效半年");
+    expect(() => hmosVersionForMonth("2026-13")).toThrow("无效上线年月");
   });
 });
 
