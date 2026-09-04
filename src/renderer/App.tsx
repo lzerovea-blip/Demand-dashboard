@@ -25,7 +25,7 @@ import {
 import { latestRequirementSelections } from "../shared/entryDefaults";
 import { ALL_DICTIONARY_PARENTS, domainFilterSelection, filterDictionaryItemsByParent, toggleDomainSelection } from "../shared/dictionaries";
 import { filterRequirements, filterRequirementsForRegion, listReleaseVersionOptions, type RoadmapRegion } from "../shared/requirements";
-import { filterMembers, isMemberFilterValid, requirementMatchesResponsibleMember, responsibleMembers, UNASSIGNED_MEMBER, visibleMembersForRole } from "../shared/members";
+import { filterMembers, isMemberFilterValid, requirementMatchesResponsibleMember, responsibleMembers, savedResponsibleMembers, REQUIREMENT_OWNER_FIELDS, type RequirementOwnerKey, UNASSIGNED_MEMBER, visibleMembersForRole } from "../shared/members";
 import { formatHistoricalLaunch, historicalLaunchStatusLabel } from "../shared/tieringLaunches";
 import { restoreFocusAfterConfirmation } from "./confirmation";
 import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS } from "../shared/pptExport";
@@ -93,8 +93,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.8.9",
-  releasedAt: "2026-09-03",
+  version: "0.8.10",
+  releasedAt: "2026-09-04",
   author: "林忠维",
 };
 
@@ -534,6 +534,11 @@ export default function App() {
           value={editor === "new" ? undefined : editor}
           snapshot={snapshot}
           onClose={() => setEditor(null)}
+          onDelete={async (id) => {
+            await update(() => window.roadmapApi.deleteRequirement(id), "需求已删除");
+            setEditor(null);
+          }}
+          requestConfirmation={requestConfirmation}
           onSave={async (input, keepOpen) => {
             const nextSnapshot = await update(() => window.roadmapApi.saveRequirement(input), input.id ? "需求已更新" : "需求已加入路标");
             if (input.id && selectedGroupContext) {
@@ -670,10 +675,9 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
     if (targetHalfYear && !releaseVersions.some((item) => item.halfYear === targetHalfYear)) setTargetHalfYear("");
   }, [targetHalfYear, releaseVersions.map((item) => item.halfYear).join("|")]);
   const baseRows = filterRequirements(snapshot.requirements, domains, { query, domainL0Id: domainSelection.domainL0Id, domainL1Id: domainSelection.domainL1Id, targetHalfYear });
-  const visibleDomainIds = new Set(baseRows.map((item) => item.domainId));
-  const planningMembers = visibleMembersForRole(snapshot.members, visibleDomainIds, "规划");
-  const productManagers = visibleMembersForRole(snapshot.members, visibleDomainIds, "产品经理");
-  const seMembers = visibleMembersForRole(snapshot.members, visibleDomainIds, "SE");
+  const planningMembers = visibleMembersForRole(snapshot.members, baseRows, "规划");
+  const productManagers = visibleMembersForRole(snapshot.members, baseRows, "产品经理");
+  const seMembers = visibleMembersForRole(snapshot.members, baseRows, "SE");
   useEffect(() => {
     if (!isMemberFilterValid(planningMemberId, planningMembers)) setPlanningMemberId("");
     if (!isMemberFilterValid(productManagerMemberId, productManagers)) setProductManagerMemberId("");
@@ -730,9 +734,9 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
                     <td><SourceBadge source={item.source} /></td>
                     <td><div className="release-cell"><b>{formatRequirementLaunch(item)}</b><small>{hmosVersionForMonth(item.targetMonth)}</small></div></td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
-                    <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "规划")} /></td>
-                    <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "产品经理")} /></td>
-                    <td><ResponsibilityCell members={responsibleMembers(snapshot.members, item.domainId, "SE")} /></td>
+                    <td><ResponsibilityCell members={savedResponsibleMembers(item, snapshot.members, "规划")} /></td>
+                    <td><ResponsibilityCell members={savedResponsibleMembers(item, snapshot.members, "产品经理")} /></td>
+                    <td><ResponsibilityCell members={savedResponsibleMembers(item, snapshot.members, "SE")} /></td>
                     <td className="numeric workload-cell"><b>{formatNumber(item.workloadPm)} PM</b><span>{formatWorkloadBreakdown(workloadBreakdownOf(item))}</span></td>
                     <td className="row-actions"><button onClick={() => onEdit(item)}>编辑</button><button disabled={Boolean(copyingId)} onClick={() => void duplicate(item.id)}>{copyingId === item.id ? "复制中…" : "复制"}</button><button className="danger-text" onClick={(event) => requestConfirmation({ title: "删除需求", message: "确定删除这条需求？此操作可通过完整需求包恢复。", confirmLabel: "确认删除", action: () => onDelete(item.id) }, event.currentTarget, searchInputRef.current)}>删除</button></td>
                   </tr>
@@ -1310,11 +1314,14 @@ function roadmapMonthColumns(scroller: HTMLElement): RoadmapMonthColumnMetrics[]
 
 type WorkloadTexts = { device: string; app: string; cloud: string };
 
-function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requirement; snapshot: AppSnapshot; onClose: () => void; onSave: (input: SaveRequirementInput, keepOpen: boolean) => Promise<void> }) {
+function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, requestConfirmation }: { value?: Requirement; snapshot: AppSnapshot; onClose: () => void; onSave: (input: SaveRequirementInput, keepOpen: boolean) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const domainL0s = snapshot.domains.filter((item) => item.active && item.level === "L0");
   const allDomainL1s = snapshot.domains.filter((item) => item.active && (item.level ?? "L1") === "L1");
   const [form, setForm] = useState<SaveRequirementInput>(() => {
     if (value) return {
+      planningMemberId: value.planningMemberId ?? "",
+      productManagerMemberId: value.productManagerMemberId ?? "",
+      seMemberId: value.seMemberId ?? "",
       id: value.id,
       title: value.title,
       description: value.description ?? "",
@@ -1336,6 +1343,9 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
     const domainL0Id = domainL0s.some((item) => item.id === previous?.domainL0Id) ? previous?.domainL0Id ?? "" : domainL0s[0]?.id ?? "";
     const linkedDomainL1s = allDomainL1s.filter((item) => item.parentId === domainL0Id);
     return {
+      planningMemberId: "",
+      productManagerMemberId: "",
+      seMemberId: "",
       title: "",
       description: "",
       images: [],
@@ -1354,6 +1364,18 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
     };
   });
   const domainL1s = allDomainL1s.filter((item) => item.parentId === form.domainL0Id);
+  const manualOwners = useRef(new Set<RequirementOwnerKey>(REQUIREMENT_OWNER_FIELDS.filter(({ key }) => value?.[key]).map(({ key }) => key)));
+  useEffect(() => {
+    setForm((current) => {
+      const next = { ...current };
+      for (const { key, role } of REQUIREMENT_OWNER_FIELDS) {
+        if (manualOwners.current.has(key)) continue;
+        const candidates = responsibleMembers(snapshot.members, current.domainId, role);
+        next[key] = candidates.length === 1 ? candidates[0].id : "";
+      }
+      return REQUIREMENT_OWNER_FIELDS.some(({ key }) => current[key] !== next[key]) ? next : current;
+    });
+  }, [form.domainId, snapshot.members]);
   const [workloadTexts, setWorkloadTexts] = useState<WorkloadTexts>(() => ({
     device: value?.deviceWorkloadPm ? String(value.deviceWorkloadPm) : "",
     app: value?.appWorkloadPm ? String(value.appWorkloadPm) : "",
@@ -1498,6 +1520,12 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
               </div>
             </Field>
           </div>
+          <div className="requirement-owner-row">
+            {REQUIREMENT_OWNER_FIELDS.map(({ key, role }) => {
+              const options = snapshot.members.filter((member) => member.role === role);
+              return <Field key={key} label={role} required><select aria-label={`需求${role}`} required value={form[key]} onChange={(event) => { manualOwners.current.add(key); setForm({ ...form, [key]: event.target.value }); }}><option value="">请选择{role}</option>{options.map((member) => <option key={member.id} value={member.id}>{member.name}{options.some((other) => other.id !== member.id && other.name === member.name) ? `（${member.employeeNumber}）` : ""}</option>)}</select>{!options.length && <small>请先在字典设置添加{role}成员</small>}</Field>;
+            })}
+          </div>
           <div className="form-row-pair category-product-row">
             <Field label="分类" required><div className="segmented category-segmented">{CATEGORIES.map((item) => <button type="button" key={item} className={form.category === item ? "active" : ""} onClick={() => setForm({ ...form, category: item, productIds: item === "体验优化" ? [] : form.productIds.slice(0, 1) })}>{item}</button>)}</div></Field>
             <Field label="匹配产品" required={form.category === "产品专属"}>
@@ -1523,7 +1551,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave }: { value?: Requi
           <div className="merge-hint"><b>自动合并规则</b><span>同领域 L1、同来源、同上线年月的需求会合并为一张路标卡片；路标卡片只显示领域 L1。</span></div>
         </div>
         <div className="drawer-footer">
-          {!value && <label className="keep-open"><input type="checkbox" checked={keepOpen} onChange={(event) => setKeepOpen(event.target.checked)} /> 保存后继续录入</label>}
+          {!value ? <label className="keep-open"><input type="checkbox" checked={keepOpen} onChange={(event) => setKeepOpen(event.target.checked)} /> 保存后继续录入</label> : <button type="button" className="button danger" onClick={(event) => requestConfirmation({ title: "删除需求", message: `确定删除“${value.title}”？删除后无法直接撤销。`, confirmLabel: "确认删除", action: () => onDelete(value.id) }, event.currentTarget)}>删除需求</button>}
           <div><button type="button" className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={saving || !form.domainL0Id || !domainL1s.some((item) => item.id === form.domainId)}>{saving ? "保存中…" : "保存需求"}</button></div>
         </div>
       </form>
@@ -2200,7 +2228,7 @@ function pageTitle(page: Page): string {
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", tiering: "离线管理九个华为产品系列对运动健康原子功能的支持规格", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
+  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", tiering: "离线管理十三个华为产品系列对运动健康原子功能的支持规格", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {

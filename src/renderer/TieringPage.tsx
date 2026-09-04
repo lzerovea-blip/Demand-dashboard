@@ -9,6 +9,10 @@ import {
 } from "../shared/types";
 import { EMPTY_TIERING_DATA, isHistoricalTieringFeature, normalizeTieringData, resolveTieringFeature, tieringSupportId } from "../shared/tiering";
 import { formatHistoricalLaunch } from "../shared/tieringLaunches";
+import { isMemberFilterValid, UNASSIGNED_MEMBER, visibleMembersForRole } from "../shared/members";
+import { listReleaseVersionOptions } from "../shared/requirements";
+import { shortHalfYear as shortHalf } from "../shared/roadmap";
+import { tieringMatchesOwnersAndVersion } from "../shared/tieringFilters";
 
 type View = "matrix" | "logs";
 
@@ -31,6 +35,21 @@ export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRege
   const [l0, setL0] = useState("");
   const [l1, setL1] = useState("");
   const [status, setStatus] = useState<TieringSupportStatus | "">("");
+  const [planningMemberId, setPlanningMemberId] = useState("");
+  const [productManagerMemberId, setProductManagerMemberId] = useState("");
+  const [halfYear, setHalfYear] = useState("");
+  const planningMembers = visibleMembersForRole(snapshot.members, snapshot.requirements, "规划");
+  const productManagers = visibleMembersForRole(snapshot.members, snapshot.requirements, "产品经理");
+  const requirementByFeature = new Map(resolvedFeatures.map((item) => [item.feature.id, item.requirement]));
+  const versions = listReleaseVersionOptions(resolvedFeatures.flatMap((item) => {
+    const targetMonth = item.requirement?.targetMonth ?? item.feature.historicalLaunch?.suggestedTargetMonth;
+    return targetMonth ? [{ targetMonth }] : [];
+  }));
+  useEffect(() => {
+    if (!isMemberFilterValid(planningMemberId, planningMembers)) setPlanningMemberId("");
+    if (!isMemberFilterValid(productManagerMemberId, productManagers)) setProductManagerMemberId("");
+    if (halfYear && !versions.some((item) => item.halfYear === halfYear)) setHalfYear("");
+  }, [planningMemberId, productManagerMemberId, halfYear, planningMembers.map((item) => item.id).join("|"), productManagers.map((item) => item.id).join("|"), versions.map((item) => item.halfYear).join("|")]);
   const [busyRecordId, setBusyRecordId] = useState<string | null>(null);
   const [selectedSeriesIds, setSelectedSeriesIds] = useState<string[]>(() => readSeriesSelection(allSeriesIds));
   const selectedSeriesSet = useMemo(() => new Set(selectedSeriesIds), [selectedSeriesIds]);
@@ -59,6 +78,7 @@ export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRege
     return (!normalizedQuery || `${feature.id} ${feature.l0} ${feature.l1} ${feature.requirementTitle}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery))
       && (!l0 || feature.l0 === l0)
       && (!l1 || feature.l1 === l1)
+      && tieringMatchesOwnersAndVersion(feature, requirementByFeature.get(feature.id), snapshot.members, { planningMemberId, productManagerMemberId, halfYear })
       && (!status || scopedRecords.some((item) => item.status === status));
   });
 
@@ -94,6 +114,9 @@ export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRege
             {tiering.productSeries.map((series) => <label key={series.id}><input type="checkbox" checked={selectedSeriesSet.has(series.id)} onChange={() => toggleSeries(series.id)} /><span>{series.name}</span></label>)}
           </div>
         </details>
+        <select aria-label="分层筛选规划" value={planningMemberId} onChange={(event) => setPlanningMemberId(event.target.value)}><option value="">全部规划</option><option value={UNASSIGNED_MEMBER}>未配置规划</option>{planningMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+        <select aria-label="分层筛选产品经理" value={productManagerMemberId} onChange={(event) => setProductManagerMemberId(event.target.value)}><option value="">全部产品经理</option><option value={UNASSIGNED_MEMBER}>未配置产品经理</option>{productManagers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+        <select aria-label="分层筛选版本" value={halfYear} onChange={(event) => setHalfYear(event.target.value)}><option value="">全部版本</option>{versions.map((item) => <option key={item.halfYear} value={item.halfYear}>{item.version}（{shortHalf(item.halfYear)}）</option>)}</select>
         <span>显示 {visibleFeatures.length} / {tiering.features.length}</span>
       </div>
       <div className="panel tiering-matrix-wrap">
@@ -113,7 +136,7 @@ export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRege
           })}</tbody>
         </table>
         {!selectedSeries.length && <div className="tiering-no-series">尚未选择展示系列，可从上方“显示系列”中勾选。</div>}
-        {selectedSeries.length > 0 && !visibleFeatures.length && <div className="tiering-no-series">暂无符合条件的需求；九个内置系列已就绪，保存需求后会自动生成支持规格。</div>}
+        {selectedSeries.length > 0 && !visibleFeatures.length && <div className="tiering-no-series">暂无符合条件的需求；13 个内置系列已就绪，保存需求后会自动生成支持规格。</div>}
       </div>
     </>}
     {view === "logs" && <div className="panel tiering-ledger"><div className="tiering-section-title"><div><h2>变更记录</h2><p>每次调整系列支持状态都会自动记录修改前后内容。</p></div></div><table><thead><tr><th>时间</th><th>触发类型</th><th>功能 / 系列</th><th>原因</th><th>记录状态</th></tr></thead><tbody>{tiering.changeLogs.map((log) => <tr key={log.id}><td>{formatDate(log.changedAt)}</td><td>{log.triggerType}</td><td>{log.featureId} / {log.seriesId || "—"}</td><td>{log.reason}</td><td>{log.recordStatus}</td></tr>)}</tbody></table></div>}

@@ -1,14 +1,21 @@
 import type { DictionaryItem, GroupOverride, Member, PptAccessPolicy, Requirement, WorkspaceData } from "./types.js";
 import { normalizeLegacyGroupOverride, normalizeRequirement } from "./requirements.js";
-import { EMPTY_PPT_ACCESS_POLICY, normalizeMember, normalizePptAccessPolicy } from "./members.js";
+import { EMPTY_PPT_ACCESS_POLICY, normalizeMember, normalizePptAccessPolicy, REQUIREMENT_OWNER_FIELDS, backfillRequirementOwners, validateRequirementOwners } from "./members.js";
 import { EMPTY_TIERING_DATA, mergeTieringData, normalizeTieringData } from "./tiering.js";
 
 export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData): WorkspaceData {
   const domainMerge = mergeDomainDictionaries(local.domains, incoming.domains);
   const productMerge = mergeDictionaries(local.products, incoming.products);
+  const memberMerge = mergeMembers(local.members ?? [], incoming.members ?? [], domainMerge.idMap);
 
   const remappedRequirements = incoming.requirements.map((item) => {
     const normalized = normalizeRequirement(item);
+    const existing = local.requirements.find((localItem) => localItem.id === item.id);
+    for (const { key } of REQUIREMENT_OWNER_FIELDS) {
+      normalized[key] = item[key] === undefined
+        ? existing?.[key]
+        : (memberMerge.idMap.get(item[key]!) ?? item[key]);
+    }
     const domainId = domainMerge.idMap.get(normalized.domainId) ?? normalized.domainId;
     const mergedDomainL1 = domainMerge.items.find((domain) => domain.id === domainId);
     return {
@@ -19,7 +26,9 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
     };
   });
 
-  const requirements = mergeByUpdatedAt(local.requirements.map((item) => normalizeRequirement(item)), remappedRequirements);
+  const requirements = mergeByUpdatedAt(local.requirements.map((item) => normalizeRequirement(item)), remappedRequirements)
+    .map((item) => backfillRequirementOwners(item, memberMerge.items));
+  for (const item of requirements) validateRequirementOwners(item, memberMerge.items);
   const remappedOverrides = incoming.groupOverrides.map((item) => {
     const normalized = normalizeLegacyGroupOverride(item);
     return {
@@ -27,11 +36,6 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
       groupKey: remapGroupKey(normalized.groupKey, domainMerge.idMap),
     };
   });
-  const memberMerge = mergeMembers(
-    local.members ?? [],
-    incoming.members ?? [],
-    domainMerge.idMap,
-  );
   const localPolicy = normalizePptAccessPolicy(local.pptAccessPolicy);
   const incomingPolicy = normalizePptAccessPolicy(incoming.pptAccessPolicy);
   const pptAccessPolicy = timestamp(incomingPolicy.updatedAt) > timestamp(localPolicy.updatedAt)

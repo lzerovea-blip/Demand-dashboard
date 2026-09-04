@@ -79,6 +79,9 @@ export interface RequirementImage {
 }
 
 export interface Requirement {
+  planningMemberId?: string;
+  productManagerMemberId?: string;
+  seMemberId?: string;
   id: string;
   title: string;
   description: string;
@@ -295,6 +298,9 @@ export interface AppSnapshot {
 }
 
 export interface SaveRequirementInput {
+  planningMemberId: string;
+  productManagerMemberId: string;
+  seMemberId: string;
   id?: string;
   title: string;
   description: string;

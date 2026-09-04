@@ -13,12 +13,12 @@ import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, MEMBER
 import { normalizeLegacyGroupOverride, normalizeLegacySource, normalizeRequirement } from "../shared/requirements.js";
 import { mergeWorkspaceData, workspaceCounts } from "../shared/workspace.js";
 import { diffWorkspaceData, workspaceDifferenceDigest } from "../shared/workspaceDiff.js";
-import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizePptAccessPolicy } from "../shared/members.js";
+import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizePptAccessPolicy, validateRequirementOwners } from "../shared/members.js";
 import { EMPTY_TIERING_DATA, normalizeTieringData, validateTieringData } from "../shared/tiering.js";
 import { normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
 
 const PACKAGE_FORMAT = "health-roadmap-workspace";
-const PACKAGE_VERSION = 4;
+const PACKAGE_VERSION = 5;
 const TEMPLATE_VERSION = "v0.1";
 const DATA_PATH = "data.json";
 
@@ -221,7 +221,7 @@ function withMergeDifferences(prepared: PreparedWorkspaceImport, current?: Works
 }
 
 function validateManifest(value: WorkspacePackageManifest): void {
-  if (value?.format !== PACKAGE_FORMAT || ![1, 2, 3, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
+  if (value?.format !== PACKAGE_FORMAT || ![1, 2, 3, 4, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
   if (value.packageKind && !["workspace", "tiering-seed"].includes(value.packageKind)) throw new Error("数据包类型无效");
   if (value.dataPath !== DATA_PATH || !value.files || !value.files[DATA_PATH]) throw new Error("数据包清单不完整");
   if (!value.exportedAt || !value.templateVersion || !value.counts) throw new Error("数据包元信息不完整");
@@ -313,6 +313,7 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     accounts.add(account);
   }
   const policy = normalizePptAccessPolicy(data.pptAccessPolicy);
+  for (const item of data.requirements) validateRequirementOwners(item, data.members);
   if (!validTimestamp(policy.updatedAt)) throw new Error("PPT 白名单更新时间无效");
   if (policy.entries.some((entry) => !memberIds.has(entry.memberId) || !["read", "change"].includes(entry.permission))) {
     throw new Error("PPT 白名单引用了不存在的成员或无效权限");

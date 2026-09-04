@@ -18,7 +18,7 @@ import { formatHistoricalLaunch, historicalLaunchStatusLabel } from "./tieringLa
 
 export function diffWorkspaceData(before: WorkspaceData, after: WorkspaceData): WorkspaceImportDifference[] {
   const differences: WorkspaceImportDifference[] = [];
-  compareCollection(differences, "需求", before.requirements, after.requirements, (item) => item.id, requirementTitle, requirementFields);
+  compareCollection(differences, "需求", before.requirements, after.requirements, (item) => item.id, requirementTitle, (left, right) => requirementFields(left, right, before.members ?? [], after.members ?? []));
   compareCollection(differences, "领域", before.domains, after.domains, (item) => item.id, (item) => item.name, dictionaryFields);
   compareCollection(differences, "产品", before.products, after.products, (item) => item.id, (item) => item.name, dictionaryFields);
   compareCollection(differences, "路标卡片", before.groupOverrides, after.groupOverrides, (item) => item.groupKey, (item) => item.cardTitle, overrideFields);
@@ -92,12 +92,16 @@ function requirementTitle(item: Requirement): string {
   return item.title || item.id;
 }
 
-function requirementFields(before: Requirement, after: Requirement): WorkspaceFieldDifference[] {
+function requirementFields(before: Requirement, after: Requirement, beforeMembers: Member[], afterMembers: Member[]): WorkspaceFieldDifference[] {
+  const memberName = (id: string | undefined, members: Member[]) => members.find((item) => item.id === id)?.name ?? (id || "未配置");
   return changedFields([
     ["需求标题", before.title, after.title],
     ["需求描述", before.description, after.description],
     ["领域 L0", before.domainL0Id, after.domainL0Id],
     ["领域 L1", before.domainId, after.domainId],
+    ["产品经理", memberName(before.productManagerMemberId, beforeMembers), memberName(after.productManagerMemberId, afterMembers)],
+    ["规划", memberName(before.planningMemberId, beforeMembers), memberName(after.planningMemberId, afterMembers)],
+    ["SE", memberName(before.seMemberId, beforeMembers), memberName(after.seMemberId, afterMembers)],
     ["来源", before.source, after.source],
     ["适用范围", before.scope, after.scope],
     ["允许最近版本升级", yesNo(before.allowLatestVersionUpgrade), yesNo(after.allowLatestVersionUpgrade)],

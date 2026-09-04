@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 const require = createRequire(import.meta.url);
-const electronExecutable = require("electron");
+const electronExecutable = require("electron").trim();
 const electronApp = resolve(dirname(electronExecutable), "../..");
 const releaseDir = resolve(process.env.ROADMAP_RELEASE_DIR ?? "release");
 const productName = "解决方案需求管理";

@@ -128,7 +128,7 @@ describe("路标卡片内容和标识", () => {
     expect(roadmapBadgeKind(platformGroup)).toBeNull();
   });
 
-  it("字体按0.5pt递减并在极限情况下压缩边距和需求数", () => {
+  it("字体固定8pt并在极限情况下压缩边距和需求数", () => {
     const groups = buildRoadmapGroups({ ...snapshot, requirements: Array.from({ length: 12 }, (_, index) => requirement(
       String(20 + index),
       `连续英文VeryLongUnbrokenRequirementTitle${index}`,
@@ -139,7 +139,7 @@ describe("路标卡片内容和标识", () => {
       index < 6 ? "d1" : "d2",
     )) }, "2026H1", "2026H1");
     const layout = layoutRoadmapCell(groups, 273.77, 170.95);
-    expect([10, 9.5, 9, 8.5, 8]).toContain(layout.fontSize);
+    expect(layout.fontSize).toBe(8);
     expect(layout.cards.every((card) => card.top + card.height <= 170.95)).toBe(true);
     expect(measureTextWidth("连续英文ABC123", 10, true)).toBeGreaterThan(0);
   });
@@ -167,10 +167,9 @@ describe("密集路标自动续页", () => {
       layout.cards.forEach((card, cardIndex) => {
         expect(card.top).toBeGreaterThanOrEqual(layout.margin);
         expect(card.top + card.height).toBeLessThanOrEqual(height - layout.margin + 0.01);
-        expect(card.badge).toBe(roadmapBadgeKind(card.group));
-        expect(card.badgeTop).toBeGreaterThanOrEqual(card.top);
-        expect(card.badgeTop + 17).toBeLessThanOrEqual(card.top + card.height);
-        if (card.badge) expect(card.badgeTop + 17).toBeLessThan(card.top + card.bodyOffset);
+        expect(card.fontSize).toBe(8);
+        expect(card).not.toHaveProperty("badge");
+        expect(card).not.toHaveProperty("badgeTop");
         card.bodyLines.forEach((line) => expect(measureTextWidth(line, card.fontSize)).toBeLessThanOrEqual(273.7675 - card.margin * 2));
         if (cardIndex) expect(card.top).toBeGreaterThanOrEqual(layout.cards[cardIndex - 1].top + layout.cards[cardIndex - 1].height + 4);
       });
@@ -262,7 +261,14 @@ describe("PPTX输出", () => {
     for (const domain of dense.domains.slice(1)) expect(xml.split(`<a:t>${domain.name}</a:t>`)).toHaveLength(2);
     expect(xml).toContain("健康路标（续 2/");
     expect(xml).toContain("产品专属");
-    expect(xml).toContain("↑");
+    expect(xml.includes("↑")).toBe(false);
+    expect(/roadmap-(?:product|experience)-/.test(xml)).toBe(false);
+    const roadmapShapes = xml.match(/<p:sp>.*?<\/p:sp>/gs)!.filter((shape) => /name="roadmap-(?:title|body)-/.test(shape));
+    expect(roadmapShapes.length).toBeGreaterThan(0);
+    for (const shape of roadmapShapes) {
+      expect([...shape.matchAll(/\bsz="(\d+)"/g)].every((match) => match[1] === "800")).toBe(true);
+      expect(shape.includes('name="roadmap-title-') ? shape.includes('b="1"') : !shape.includes('b="1"')).toBe(true);
+    }
     expect(xml).not.toMatch(/(?:NaN|Infinity|七类路标投入|领域详情|>\d{1,2}月<)/);
   }, 30_000);
 
@@ -287,7 +293,7 @@ describe("PPTX输出", () => {
     expect(xml).toContain("HMOS 6.1");
     expect(xml).toContain("HMOS 8.0");
     expect(xml).toContain("产品专属");
-    expect(xml).toContain("↑");
+    expect(xml).not.toMatch(/name="roadmap-(?:product|experience)-/);
     expect(xml).toContain("当前区间暂无需求");
   }, 30_000);
 

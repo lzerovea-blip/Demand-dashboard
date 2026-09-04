@@ -26,19 +26,19 @@ const feature: TieringFeature = { id: "F001", l0: "基础体征测量", l1: "心
 const support: TieringSupportRecord = { id: "F001::PS01", featureId: "F001", seriesId: "PS01", status: "支持", supportedModels: "", excludedModels: "", phoneOsMarket: "中国大陆", minHealthAppVersion: "", minDeviceVersion: "", prerequisites: "", sourceIds: ["S001"], sourceUrl: "", verifiedAt: "2026-08-05", evidenceLevel: "A", auditStatus: "已公开核验", note: "", updatedAt: "2026-08-05T00:00:00.000Z" };
 
 describe("需求分层分级", () => {
-  it("内置九个稳定产品系列供全新电脑初始化", () => {
+  it("内置十三个稳定产品系列供全新电脑初始化", () => {
     expect(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.id)).toEqual([
-      "PS01", "PS02", "PS03", "PS04", "PS05", "PS06", "PS07", "PS08", "PS09",
+      "PS01", "PS02", "PS11", "PS03", "PS04", "PS10", "PS05", "PS06", "PS07", "PS08", "PS09", "PS12", "PS13",
     ]);
     expect(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.name)).toEqual([
-      "WATCH数字系列", "GT系列", "ULTIMATE系列", "FIT系列", "D系列", "WATCH Buds系列", "Band系列", "儿童手表", "体脂秤",
+      "WATCH数字系列", "GT系列", "GT Pro系列", "ULTIMATE系列", "FIT系列", "FIT Pro系列", "D系列", "WATCH Buds系列", "Band系列", "儿童手表", "体脂秤", "戒指系列", "无屏系列",
     ]);
   });
 
   it("只补齐缺失系列且不覆盖本机已有系列资料", () => {
     const existing = [{ ...BUILT_IN_TIERING_PRODUCT_SERIES[0], name: "本机自定义名称" }];
     const missing = missingBuiltInTieringProductSeries(existing);
-    expect(missing).toHaveLength(8);
+    expect(missing).toHaveLength(12);
     expect(missing.some((item) => item.id === "PS01")).toBe(false);
     expect(existing[0].name).toBe("本机自定义名称");
   });

@@ -30,6 +30,7 @@ export const TIERING_EXPECTED_COUNTS = {
  * 产品系列属于应用基础字典。它们必须随程序存在，不能依赖某台电脑
  * 曾经导入过分层分级数据包。
  */
+const SERIES_ORDER = ["PS01", "PS02", "PS11", "PS03", "PS04", "PS10", "PS05", "PS06", "PS07", "PS08", "PS09", "PS12", "PS13"];
 export const BUILT_IN_TIERING_PRODUCT_SERIES: readonly TieringProductSeries[] = [
   { id: "PS01", name: "WATCH数字系列", boundary: "WATCH数字命名系列", representativeProducts: "WATCH 3/4/5、WATCH十周年等", managementEntry: "华为运动健康", sourceIds: ["S043"], lifecycle: "现网/历史并存", note: "系列内部代际差异较大；以适用产品清单为准", sortOrder: 0, updatedAt: "2026-08-05T00:00:00.000Z" },
   { id: "PS02", name: "GT系列", boundary: "长续航时尚与专业运动系列", representativeProducts: "GT、GT 2-6、GT Runner、GT Cyber等", managementEntry: "华为运动健康", sourceIds: ["S029"], lifecycle: "现网/历史并存", note: "Pro、Runner与标准款能力有差异", sortOrder: 1, updatedAt: "2026-08-05T00:00:00.000Z" },
@@ -40,7 +41,10 @@ export const BUILT_IN_TIERING_PRODUCT_SERIES: readonly TieringProductSeries[] = 
   { id: "PS07", name: "Band系列", boundary: "智能手环及通话手环系列", representativeProducts: "Band 6-11、B5/B6/B7等", managementEntry: "华为运动健康", sourceIds: ["S003"], lifecycle: "现网/历史并存", note: "手环代际和标准/NFC/Pro款差异显著", sortOrder: 6, updatedAt: "2026-08-05T00:00:00.000Z" },
   { id: "PS08", name: "儿童手表", boundary: "儿童与青少年手表系列", representativeProducts: "儿童手表4/5系列、超新星手表X1等", managementEntry: "智能关怀为主", sourceIds: ["S042"], lifecycle: "现网/历史并存", note: "非华为运动健康主入口；矩阵仅标设备数据能力关联", sortOrder: 7, updatedAt: "2026-08-05T00:00:00.000Z" },
   { id: "PS09", name: "体脂秤", boundary: "华为体重与身体成分设备", representativeProducts: "智能体脂秤、2 Pro、3、3 Pro", managementEntry: "华为运动健康", sourceIds: ["S015"], lifecycle: "现网/历史并存", note: "普通版、蓝牙/WLAN版和Pro版指标不同", sortOrder: 8, updatedAt: "2026-08-05T00:00:00.000Z" },
-];
+  ...([
+    ["PS10", "FIT Pro系列"], ["PS11", "GT Pro系列"], ["PS12", "戒指系列"], ["PS13", "无屏系列"],
+  ] as const).map(([id, name]): TieringProductSeries => ({ id, name, boundary: "", representativeProducts: "", managementEntry: "", sourceIds: [], lifecycle: "", note: "新增系列，支持规格独立判断，不继承其他系列结论", sortOrder: 0, updatedAt: "2026-09-04T00:00:00.000Z" })),
+].map((item) => ({ ...item, sortOrder: SERIES_ORDER.indexOf(item.id) })).sort((a, b) => a.sortOrder - b.sortOrder);
 
 export function missingBuiltInTieringProductSeries(existing: readonly Pick<TieringProductSeries, "id">[]): TieringProductSeries[] {
   const existingIds = new Set(existing.map((item) => item.id));

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "sql.js";
@@ -7,7 +7,7 @@ import JSZip from "jszip";
 import { LocalDatabase } from "../src/main/database";
 import { createWorkspaceWorkbook, inspectWorkspaceWorkbook } from "../src/main/workspaceWorkbook";
 import { EMPTY_TIERING_DATA, domainReferenceMessages, renameIndependentTieringDomain, resolveTieringFeature } from "../src/shared/tiering";
-import type { DictionaryItem, Requirement, TieringFeature, WorkspaceData } from "../src/shared/types";
+import type { DictionaryItem, Requirement, SaveRequirementInput, Member, TieringFeature, WorkspaceData } from "../src/shared/types";
 
 const environment = vi.hoisted(() => ({ directory: "" }));
 vi.mock("electron", () => ({ app: { getPath: () => environment.directory, getAppPath: () => process.cwd() } }));
@@ -19,11 +19,13 @@ const domains: DictionaryItem[] = [
 ];
 const timestamp = "2026-01-01T00:00:00.000Z";
 const requirement: Requirement = {
+  planningMemberId: "plan", productManagerMemberId: "pm", seMemberId: "se",
   id: "r1", title: "健康需求", description: "保留用户完整描述 → 旧路径", domainL0Id: "a", domainId: "a1", source: "健康基础", scope: "全球", allowLatestVersionUpgrade: true, overseasRegions: [], category: "平台演进", targetMonth: "2027-03", productIds: [], images: [], deviceWorkloadPm: 1, appWorkloadPm: 2, cloudWorkloadPm: 3, unallocatedWorkloadPm: 0, workloadPm: 6, createdAt: timestamp, updatedAt: timestamp,
 };
 const independent: TieringFeature = { id: "F002", l0: "原领域", l1: "原标签", requirementTitle: "独立规格", sortOrder: 0, createdAt: timestamp, updatedAt: timestamp };
 function data(requirements = [requirement]): WorkspaceData {
-  return { requirements, domains, products: [], members: [], groupOverrides: [], pptAccessPolicy: { entries: [], updatedAt: timestamp }, tiering: structuredClone(EMPTY_TIERING_DATA) };
+  const members: Member[] = (["规划", "产品经理", "SE"] as const).map((role, index) => ({ id: ["plan", "pm", "se"][index], name: role, role, employeeNumber: `OWN-${index}`, microsoftAccount: `owner${index}@example.com`, domainL1Ids: [], sortOrder: index, createdAt: timestamp, updatedAt: timestamp }));
+  return { requirements, domains, products: [], members, groupOverrides: [], pptAccessPolicy: { entries: [], updatedAt: timestamp }, tiering: structuredClone(EMPTY_TIERING_DATA) };
 }
 let database: LocalDatabase;
 const opened: LocalDatabase[] = [];
@@ -50,11 +52,52 @@ afterEach(async () => {
 });
 
 describe("领域与分层同步（真实 SQLite 事务）", () => {
+  it("v7 启动升级前备份，唯一责任人补齐并为全部规格增加四个未判断系列", async () => {
+    const raw = JSON.parse(internals().db.exec("SELECT payload FROM requirements WHERE id='r1'")[0].values[0][0] as string);
+    delete raw.planningMemberId; delete raw.productManagerMemberId; delete raw.seMemberId;
+    internals().db.run("UPDATE requirements SET payload=? WHERE id='r1'", [JSON.stringify(raw)]);
+    for (const row of internals().db.exec("SELECT id,payload FROM members")[0].values) {
+      const member = { ...JSON.parse(row[1] as string), domainL1Ids: ["a1"] };
+      internals().db.run("UPDATE members SET payload=? WHERE id=?", [JSON.stringify(member), row[0]]);
+    }
+    internals().db.run("DELETE FROM tiering_support_records WHERE id LIKE '%::PS10' OR id LIKE '%::PS11' OR id LIKE '%::PS12' OR id LIKE '%::PS13'");
+    internals().db.run("DELETE FROM tiering_product_series WHERE id IN ('PS10','PS11','PS12','PS13')");
+    internals().db.run("UPDATE meta SET value='7' WHERE key='schema_version'");
+    await internals().persist();
+    const upgraded = await open();
+    const snapshot = upgraded.getSnapshot();
+    expect(snapshot.requirements[0]).toMatchObject({ planningMemberId: "plan", productManagerMemberId: "pm", seMemberId: "se" });
+    expect(snapshot.tiering?.productSeries.map((item) => item.name)).toEqual(["WATCH数字系列", "GT系列", "GT Pro系列", "ULTIMATE系列", "FIT系列", "FIT Pro系列", "D系列", "WATCH Buds系列", "Band系列", "儿童手表", "体脂秤", "戒指系列", "无屏系列"]);
+    expect(snapshot.tiering?.supportRecords).toHaveLength(13);
+    expect(snapshot.tiering?.supportRecords.filter((item) => ["PS10", "PS11", "PS12", "PS13"].includes(item.seriesId)).every((item) => item.status === "未判断")).toBe(true);
+    expect((await readdir(join(environment.directory, "backups"))).some((name) => name.startsWith("roadmap-before-v0.8.10-"))).toBe(true);
+  });
+
+  it("需求引用成员时禁止删除或更改岗位，改名不破坏责任人引用", async () => {
+    const planning = database.getSnapshot().members.find((item) => item.id === "plan")!;
+    await expect(database.deleteMember("plan")).rejects.toThrow(/仍被 1 条需求引用.*健康需求/);
+    await expect(database.saveMember({ ...planning, role: "UX" })).rejects.toThrow(/更改岗位角色/);
+    const renamed = await database.saveMember({ ...planning, name: "规划新姓名" });
+    expect(renamed.requirements[0].planningMemberId).toBe("plan");
+    expect(renamed.members.find((item) => item.id === "plan")?.name).toBe("规划新姓名");
+  });
+
+  it("旧包缺少责任人字段时，替换导入也保留本机分配和所需成员", async () => {
+    const incoming = data().requirements.map((item) => {
+      const legacy = { ...item };
+      delete legacy.planningMemberId; delete legacy.productManagerMemberId; delete legacy.seMemberId;
+      return legacy;
+    });
+    const legacyWorkspace = { ...data(incoming), members: [] };
+    const snapshot = await database.importWorkspace(legacyWorkspace, "replace");
+    expect(snapshot.requirements[0]).toMatchObject({ planningMemberId: "plan", productManagerMemberId: "pm", seMemberId: "se" });
+    expect(snapshot.members.map((item) => item.id).sort()).toEqual(["plan", "pm", "se"]);
+  });
   it.each(["REQ-r1", "F001"])("%s 需求改选领域立即同步，原标签及 L0 可删除", async (featureId) => {
     await database.importWorkspace(data([{ ...requirement, tieringFeatureId: featureId }]), "replace");
     await database.saveTieringSupport({ recordId: `${featureId}::PS01`, status: "支持" });
     const before = database.getSnapshot();
-    await database.saveRequirement({ ...before.requirements[0], domainL0Id: "b", domainId: "b1", title: "修改后需求" });
+    await database.saveRequirement({ ...before.requirements[0], domainL0Id: "b", domainId: "b1", title: "修改后需求" } as SaveRequirementInput);
     const after = database.getSnapshot();
     expect(after.tiering?.features[0]).toMatchObject({ id: featureId, l0: "新领域", l1: "新标签", requirementTitle: "修改后需求" });
     expect(after.tiering?.supportRecords).toEqual(before.tiering?.supportRecords);
@@ -166,7 +209,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     const after = database.getSnapshot();
     expect(after.requirements).toHaveLength(0);
     expect(after.tiering?.features).toHaveLength(featureId === "F001" ? 1 : 0);
-    expect(after.tiering?.supportRecords).toHaveLength(featureId === "F001" ? 9 : 0);
+    expect(after.tiering?.supportRecords).toHaveLength(featureId === "F001" ? 13 : 0);
     expect(after.tiering?.features[0]?.requirementId).toBeUndefined();
   });
 

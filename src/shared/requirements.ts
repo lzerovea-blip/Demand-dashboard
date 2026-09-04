@@ -108,7 +108,7 @@ export interface ReleaseVersionOption {
   version: string;
 }
 
-export function listReleaseVersionOptions(requirements: Requirement[]): ReleaseVersionOption[] {
+export function listReleaseVersionOptions(requirements: readonly Pick<Requirement, "targetMonth">[]): ReleaseVersionOption[] {
   const halfYears = new Set<string>();
   for (const requirement of requirements) {
     try {

@@ -1275,6 +1275,9 @@ function planWorkspaceWorkbookImport(
       unallocatedWorkloadPm: existing.unallocatedWorkloadPm,
       workloadPm: roundWorkload(incoming.deviceWorkloadPm + incoming.appWorkloadPm + incoming.cloudWorkloadPm + existing.unallocatedWorkloadPm),
       images: existing.images, createdAt: existing.createdAt, updatedAt: now,
+      planningMemberId: existing.planningMemberId,
+      productManagerMemberId: existing.productManagerMemberId,
+      seMemberId: existing.seMemberId,
     });
     counts.updated += 1;
   }

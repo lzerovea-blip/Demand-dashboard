@@ -32,7 +32,7 @@ import {
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-09-03";
+const APP_RELEASED_AT = "2026-09-04";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 

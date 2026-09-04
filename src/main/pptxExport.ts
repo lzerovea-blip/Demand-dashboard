@@ -2,11 +2,9 @@ import PptxGenJSImport from "pptxgenjs";
 import {
   buildPptExportPlan,
   groupsForHalfYear,
-  roadmapBadgeKind,
   visibleRequirementTitles,
   type PptExportPlan,
   type PptRoadmapPagePlan,
-  type RoadmapBadgeKind,
 } from "../shared/pptExport.js";
 import { groupMatchesRoadmapLane, hmosVersionForHalfYear, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
 import { CATEGORIES } from "../shared/types.js";
@@ -63,7 +61,6 @@ const PptxGenJS = PptxGenJSImport as unknown as { new(): PptxPresentation };
 
 export interface RoadmapCardLayout {
   group: RoadmapGroup;
-  badge: RoadmapBadgeKind;
   fontSize: number;
   margin: number;
   gapAfter: number;
@@ -75,8 +72,6 @@ export interface RoadmapCardLayout {
   bodyOffset: number;
   height: number;
   top: number;
-  badgeLeft: number;
-  badgeTop: number;
 }
 
 export interface RoadmapCellLayout {
@@ -336,19 +331,12 @@ function drawRoadmapCell(
     text(slide, card.titleLines.join("\n"), left, top, width, titleHeight, card.fontSize, C.ink, true, "left", "top", { margin: 0, wrap: false, lineSpacing: card.titleLineHeight * 72 / 96, name: `roadmap-title-${track}-${lane}-${halfYear}-${index}` });
     const bodyTop = top + card.bodyOffset;
     text(slide, card.bodyLines.join("\n"), left, bodyTop, width, card.height - card.bodyOffset, card.fontSize, C.ink, false, "left", "top", { margin: 0, wrap: false, lineSpacing: card.bodyLineHeight * 72 / 96, name: `roadmap-body-${track}-${lane}-${halfYear}-${index}` });
-    if (card.badge === "product") {
-      roundRect(slide, cellX + card.badgeLeft, cellY + card.badgeTop, 58, 17, C.navy, C.navy, 0, 4);
-      text(slide, "产品专属", cellX + card.badgeLeft, cellY + card.badgeTop, 58, 17, 8.5, C.white, true, "center", "mid", { margin: 0, name: `roadmap-product-${track}-${lane}-${halfYear}-${index}` });
-    } else if (card.badge === "experience") {
-      ellipse(slide, cellX + card.badgeLeft, cellY + card.badgeTop, 17, 17, C.navy, C.navy, 0);
-      text(slide, "↑", cellX + card.badgeLeft, cellY + card.badgeTop - 1, 17, 18, 11, C.white, true, "center", "mid", { margin: 0, name: `roadmap-experience-${track}-${lane}-${halfYear}-${index}` });
-    }
   }
 }
 
 export function layoutRoadmapCell(groups: RoadmapGroup[], width: number, height: number): RoadmapCellLayout {
   const attempts: Array<{ fontSize: number; margin: number; gap: number; visibleLimit: number }> = [
-    ...[10, 9.5, 9, 8.5, 8].map((fontSize) => ({ fontSize, margin: 8, gap: 7, visibleLimit: 3 })),
+    { fontSize: 8, margin: 8, gap: 7, visibleLimit: 3 },
     { fontSize: 8, margin: 4, gap: 4, visibleLimit: 3 },
     { fontSize: 8, margin: 4, gap: 4, visibleLimit: 2 },
     { fontSize: 8, margin: 4, gap: 4, visibleLimit: 1 },
@@ -364,7 +352,7 @@ export function layoutRoadmapCell(groups: RoadmapGroup[], width: number, height:
         cardGap: attempt.gap,
         visibleLimit: attempt.visibleLimit,
         cards: cards.map((card) => {
-          const placed = { ...card, top, badgeTop: top + card.badgeTop };
+          const placed = { ...card, top };
           top += card.height + attempt.gap;
           return placed;
         }),
@@ -378,15 +366,8 @@ function calculateCardLayouts(groups: RoadmapGroup[], width: number, fontSize: n
   const textWidth = width - margin * 2;
   const bodyLineHeight = pointsToPixels(fontSize) * 1.25;
   return groups.map((group, index) => {
-    const badge = roadmapBadgeKind(group);
-    const titleLineHeight = Math.max(pointsToPixels(fontSize) * 1.18, badge ? 17 : 0);
-    const badgeWidth = badge === "product" ? 58 : badge === "experience" ? 17 : 0;
-    const badgeGap = badge ? 7 : 0;
-    let titleLines = wrapText(group.cardTitle, textWidth, fontSize, true);
-    const lastLineWidth = measureTextWidth(titleLines.at(-1) ?? "", fontSize, true);
-    if (badge && lastLineWidth + badgeGap + badgeWidth > textWidth) {
-      titleLines = wrapText(group.cardTitle, Math.max(20, textWidth - badgeWidth - badgeGap), fontSize, true);
-    }
+    const titleLineHeight = pointsToPixels(fontSize) * 1.18;
+    const titleLines = wrapText(group.cardTitle, textWidth, fontSize, true);
     const visibleRequirements = visibleRequirementTitlesForLayout(group, visibleLimit);
     // Reserve indentation and a small font-substitution tolerance before wrapping.
     const bodyLines = visibleRequirements.flatMap((item) => wrapText(item, textWidth - measureTextWidth("· ", fontSize) - 4, fontSize, false)
@@ -394,11 +375,8 @@ function calculateCardLayouts(groups: RoadmapGroup[], width: number, fontSize: n
     const titleHeight = titleLines.length * titleLineHeight;
     const bodyOffset = titleHeight + 2;
     const height = bodyOffset + Math.max(1, bodyLines.length) * bodyLineHeight;
-    const dynamicLastWidth = measureTextWidth(titleLines.at(-1) ?? "", fontSize, true);
-    const badgeTop = (titleLines.length - 1) * titleLineHeight + Math.max(0, (titleLineHeight - 17) / 2);
     return {
       group,
-      badge,
       fontSize,
       margin,
       gapAfter: index === groups.length - 1 ? 0 : gap,
@@ -410,8 +388,6 @@ function calculateCardLayouts(groups: RoadmapGroup[], width: number, fontSize: n
       bodyOffset,
       height,
       top: 0,
-      badgeLeft: Math.min(width - margin - badgeWidth, margin + dynamicLastWidth + badgeGap),
-      badgeTop,
     };
   });
 }

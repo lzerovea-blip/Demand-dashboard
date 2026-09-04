@@ -3,6 +3,50 @@ import type { DictionaryItem, Member, MemberRole, PptAccessPolicy, PptWhitelistE
 
 export const UNASSIGNED_MEMBER = "__unassigned__";
 
+export const REQUIREMENT_OWNER_FIELDS = [
+  { key: "productManagerMemberId", role: "产品经理" },
+  { key: "planningMemberId", role: "规划" },
+  { key: "seMemberId", role: "SE" },
+] as const;
+export type RequirementOwnerKey = (typeof REQUIREMENT_OWNER_FIELDS)[number]["key"];
+export type RequirementOwners = Pick<Requirement, RequirementOwnerKey>;
+
+export function ownerField(role: MemberRole): RequirementOwnerKey | undefined {
+  return REQUIREMENT_OWNER_FIELDS.find((item) => item.role === role)?.key;
+}
+
+export function savedResponsibleMembers(requirement: RequirementOwners, members: readonly Member[], role: MemberRole): Member[] {
+  const key = ownerField(role);
+  return key ? members.filter((member) => member.id === requirement[key]) : [];
+}
+
+/** Only absent legacy fields are inferred; an explicitly empty assignment remains empty. */
+export function backfillRequirementOwners<T extends RequirementOwners & { domainId: string }>(requirement: T, members: readonly Member[]): T {
+  const result = { ...requirement };
+  for (const { key, role } of REQUIREMENT_OWNER_FIELDS) {
+    if (result[key] !== undefined) continue;
+    const matches = responsibleMembers(members, result.domainId, role);
+    result[key] = matches.length === 1 ? matches[0].id : "";
+  }
+  return result;
+}
+
+export function validateRequirementOwners(requirement: RequirementOwners, members: readonly Member[], required = false): void {
+  for (const { key, role } of REQUIREMENT_OWNER_FIELDS) {
+    const id = requirement[key];
+    if (id !== undefined && typeof id !== "string") throw new Error(`${role}责任人格式无效`);
+    if (!id) {
+      if (required) throw new Error(`请选择${role}责任人`);
+      continue;
+    }
+    if (!members.some((member) => member.id === id && member.role === role)) throw new Error(`${role}责任人不存在或岗位角色不匹配`);
+  }
+}
+
+export function memberRequirementReferences(requirements: readonly Requirement[], memberId: string): Requirement[] {
+  return requirements.filter((item) => REQUIREMENT_OWNER_FIELDS.some(({ key }) => item[key] === memberId));
+}
+
 export function isMemberFilterValid(memberId: string, options: readonly Member[]): boolean {
   return !memberId || memberId === UNASSIGNED_MEMBER || options.some((item) => item.id === memberId);
 }
@@ -94,16 +138,19 @@ export function responsibleMembers(
 }
 
 export function requirementMatchesResponsibleMember(
-  requirement: Pick<Requirement, "domainId">,
+  requirement: RequirementOwners,
   members: readonly Member[],
   role: MemberRole,
   memberId: string,
 ): boolean {
   if (!memberId) return true;
-  const responsible = responsibleMembers(members, requirement.domainId, role);
-  return memberId === UNASSIGNED_MEMBER ? responsible.length === 0 : responsible.some((member) => member.id === memberId);
+  const key = ownerField(role);
+  const assigned = key ? requirement[key] : undefined;
+  return memberId === UNASSIGNED_MEMBER ? !assigned : assigned === memberId;
 }
 
-export function visibleMembersForRole(members: readonly Member[], domains: ReadonlySet<string>, role: MemberRole): Member[] {
-  return members.filter((member) => member.role === role && member.domainL1Ids.some((id) => domains.has(id)));
+export function visibleMembersForRole(members: readonly Member[], requirements: readonly RequirementOwners[], role: MemberRole): Member[] {
+  const key = ownerField(role);
+  const ids = new Set(key ? requirements.map((item) => item[key]) : []);
+  return members.filter((member) => member.role === role && ids.has(member.id));
 }
