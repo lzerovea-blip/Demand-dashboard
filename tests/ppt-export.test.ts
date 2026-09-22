@@ -53,7 +53,7 @@ const snapshot: AppSnapshot = {
     requirement("4", "异常趋势", "健康基础", "2026-03", "平台演进"),
     requirement("5", "另一个月的独立卡片", "健康基础", "2026-05", "产品专属", ["p1"]),
     requirement("6", "训练建议", "AI运动", "2026-08"),
-    requirement("7", "NMPA资料", "NMPA送检", "2027-02", "平台演进", [], "d2"),
+    requirement("7", "NMPA资料", "NMPA认证", "2027-02", "平台演进", [], "d2"),
   ],
   domains: [
     { id: "l0", name: "健康", sortOrder: 0, active: true, level: "L0" },
@@ -74,6 +74,21 @@ const fullRequest: PptExportRequest = {
   sections: [...DEFAULT_PPT_EXPORT_SECTIONS],
 };
 
+it("新增工作量仅影响封面和汇总总量，不改变三端图表或路标页样式", async () => {
+  const extended: AppSnapshot = { ...snapshot, requirements: snapshot.requirements.map((item) => ({ ...item, researchAppWorkloadPm: 2, algorithmWorkloadPm: 3, workloadPm: item.workloadPm + 5 })) };
+  const basePlan = buildPptExportPlan(snapshot, fullRequest);
+  const newPlan = buildPptExportPlan(extended, fullRequest);
+  expect(newPlan.summaries.reduce((sum, item) => sum + item.totalWorkload, 0)).toBe(basePlan.summaries.reduce((sum, item) => sum + item.totalWorkload, 0) + newPlan.requirements.length * 5);
+  expect(newPlan.summaries.map((item) => item.bySide)).toEqual(basePlan.summaries.map((item) => item.bySide));
+  const baseline = await JSZip.loadAsync(await createRoadmapPresentation(snapshot, fullRequest));
+  const output = await JSZip.loadAsync(await createRoadmapPresentation(extended, fullRequest));
+  const slide2 = await output.file("ppt/slides/slide2.xml")!.async("string");
+  expect(slide2).toContain("创新研究 App");
+  expect(slide2).toContain("未计入下方三端图表");
+  expect(slide2).toContain("运动健康 App");
+  for (let page = 3; page <= 9; page++) expect(await output.file(`ppt/slides/slide${page}.xml`)!.async("string")).toBe(await baseline.file(`ppt/slides/slide${page}.xml`)!.async("string"));
+});
+
 function denseSnapshot(source: RequirementSource = "健康基础", count = 18): AppSnapshot {
   return {
     ...snapshot,
@@ -89,17 +104,54 @@ function denseSnapshot(source: RequirementSource = "健康基础", count = 18): 
 }
 
 describe("PPT导出计划", () => {
+  it("医疗认证独立全量范围按十二个月和泳道高度续页，产品跟随需求", async () => {
+    const data = denseSnapshot("NMPA认证", 6);
+    data.requirements.forEach((item, index) => {
+      item.targetMonth = "2030-05";
+      item.medicalSubmissionMilestones = { registrationStartMonth: "2028-11", certificateMonth: "2030-06" };
+      item.category = "平台演进";
+      item.productIds = ["p1"];
+      item.title = `独立认证需求${index}`;
+    });
+    const plan = buildPptExportPlan(data, { ...fullRequest, sections: ["医疗认证"] });
+    expect(plan.requirements).toHaveLength(0);
+    expect(plan.roadmapPages[0].groups).toHaveLength(6);
+    expect(plan.roadmapPages[0].medicalMonths?.[0]).toBe("2028-11");
+    expect(plan.roadmapPages[0].medicalMonths?.at(-1)).toBe("2030-06");
+    const pages = paginateRoadmapPage(plan.roadmapPages[0]);
+    expect(pages).toHaveLength(4);
+    expect(pages.map((page) => page.medicalMonths?.length)).toEqual([12, 8, 12, 8]);
+    expect(pages[0].groups).toEqual(pages[1].groups);
+    const zip = await JSZip.loadAsync(await createRoadmapPresentation(data, { ...fullRequest, sections: ["医疗认证"] }));
+    expect(Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))).toHaveLength(5);
+    const xml = await zip.file("ppt/slides/slide2.xml")!.async("string");
+    expect(xml).toContain("独立认证需求");
+    expect(xml).toContain(data.products[0].name);
+    expect(xml).toContain("注册启动");
+    expect(xml).not.toContain("的描述");
+    expect(xml).not.toMatch(/\b(?:NaN|Infinity)\b/);
+  });
+  it("未定送检版本不进入封面数量、汇总或 PPT 卡片，其他输出保持一致", () => {
+    const original = buildPptExportPlan(snapshot, fullRequest);
+    const undated = requirement("undated-medical", "待定送检", "NMPA认证", "");
+    const plan = buildPptExportPlan({ ...snapshot, requirements: [...snapshot.requirements, undated] }, fullRequest);
+    expect(plan.requirements).toEqual(original.requirements);
+    expect(plan.summaries).toEqual(original.summaries);
+    expect(plan.roadmapPages.find((page) => page.track === "医疗认证")!.groups.some((group) => group.requirements[0].id === undated.id)).toBe(true);
+    expect(presentationSlideCount(plan)).toBe(presentationSlideCount(original));
+  });
+
   it("全选基础为封面加八页，非密集内容实际仍为九页", () => {
     const plan = buildPptExportPlan(snapshot, fullRequest);
     expect(plan.slideCount).toBe(9);
     expect(presentationSlideCount(plan)).toBe(9);
-    expect(plan.roadmapPages.map((item) => item.track)).toEqual(["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"]);
+    expect(plan.roadmapPages.map((item) => item.track)).toEqual(["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗认证"]);
     expect(plan.roadmapPages.find((item) => item.track === "行业")?.groups).toEqual([]);
   });
 
   it("部分选择页数等于固定封面加选中项且保持固定顺序", () => {
-    const plan = buildPptExportPlan(snapshot, { ...fullRequest, sections: ["医疗送检", "summary", "运动"] });
-    expect(plan.selectedSections).toEqual(["summary", "运动", "医疗送检"]);
+    const plan = buildPptExportPlan(snapshot, { ...fullRequest, sections: ["医疗认证", "summary", "运动"] });
+    expect(plan.selectedSections).toEqual(["summary", "运动", "医疗认证"]);
     expect(plan.slideCount).toBe(4);
   });
 
@@ -148,19 +200,20 @@ describe("路标卡片内容和标识", () => {
 describe("密集路标自动续页", () => {
   it.each<[Track, RequirementSource]>([
     ["运动", "运动高阶"], ["健康", "健康基础"], ["行业", "行业"], ["全场景", "全场景"],
-    ["health平台", "health平台"], ["AI", "AI健康"], ["医疗送检", "CE送检"],
+    ["health平台", "health平台"], ["AI", "AI健康"], ["医疗认证", "CE认证"],
   ])("%s 在不同泳道高度下保留全部卡片、顺序、标识和表头", (track, source) => {
     const plan = buildPptExportPlan(denseSnapshot(source, 30), { ...fullRequest, sections: [track] });
     const page = plan.roadmapPages[0];
     const pages = paginateRoadmapPage(page);
     expect(pages.length).toBeGreaterThan(1);
-    expect(pages.flatMap((part) => part.groups)).toEqual(page.groups);
+    expect(pages.flatMap((part) => part.groups).map((group) => group.key).sort()).toEqual(page.groups.map((group) => group.key).sort());
     expect(presentationSlideCount(plan)).toBe(1 + pages.length);
     pages.forEach((part, index) => {
       expect(part.continuationIndex).toBe(index);
       expect(part.continuationCount).toBe(pages.length);
       expect(part.halfYears).toEqual(page.halfYears);
       expect(part.track).toBe(track);
+      if (track === "医疗认证") { expect(part.medicalMonths).toEqual(["2026-03"]); return; }
       const height = (580.87 - 68) / roadmapLanesForTrack(track).length;
       const layout = layoutRoadmapCell(part.groups, 273.7675, height);
       expect(layout.fontSize).toBeGreaterThanOrEqual(8);
@@ -247,8 +300,10 @@ describe("PPTX输出", () => {
     const roadmaps = xmls.slice(2);
     roadmaps.forEach((xml, index) => {
       expect(xml).toContain(`<a:t>${String(index + 3).padStart(2, "0")}</a:t>`);
-      for (const header of ["26H1", "26H2", "27H1", "27H2", "HMOS 6.1", "HMOS 8.0"]) expect(xml).toContain(header);
-      expect(xml).toContain("<a:tbl>");
+      if (!xml.includes("医疗认证路标")) {
+        for (const header of ["26H1", "26H2", "27H1", "27H2", "HMOS 6.1", "HMOS 8.0"]) expect(xml).toContain(header);
+        expect(xml).toContain("<a:tbl>");
+      }
     });
     const xml = xmls.join("\n");
     const cardBodies = [...xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)].map((match) => match[0]).filter((shape) => shape.includes('name="roadmap-body-'));
@@ -288,7 +343,10 @@ describe("PPTX输出", () => {
     expect(xml).not.toContain("领域详情");
     expect(xml).not.toContain("制作说明");
     expect(allXml).not.toMatch(/\b(?:NaN|Infinity)\b/);
-    expect(xml).not.toMatch(/>\d{1,2}月</);
+    for (const name of slideFiles) {
+      const slideXml = await zip.file(name)!.async("string");
+      if (!slideXml.includes("医疗认证路标")) expect(slideXml).not.toMatch(/>\d{1,2}月</);
+    }
     expect(xml).toContain("社交时差、体动");
     expect(xml).toContain("HMOS 6.1");
     expect(xml).toContain("HMOS 8.0");

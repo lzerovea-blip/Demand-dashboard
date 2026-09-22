@@ -8,16 +8,20 @@ files:
   - dist-renderer/**/*
   - package.json
 extraResources:
+  - from: build-resources/app-icon.png
+    to: app-icon.png
   - from: node_modules/sql.js/dist/sql-wasm.wasm
     to: sql-wasm.wasm
   - from: 需求路标模板-共创版-v0.1.pptx
     to: templates/需求路标模板-共创版-v0.1.pptx
 mac:
+  icon: build-resources/app-icon.icns
   category: public.app-category.business
   target:
     - dmg
     - zip
 win:
+  icon: build-resources/app-icon.ico
   electronLanguages:
     - zh-CN
     - en-US

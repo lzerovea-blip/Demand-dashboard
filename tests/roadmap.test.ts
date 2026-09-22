@@ -10,16 +10,20 @@ import {
   halfYearSequence,
   hmosVersionForHalfYear,
   hmosVersionForMonth,
+  medicalRoadmapDemandRows,
+  medicalRoadmapTimelineMonths,
   monthsForHalfYear,
   moveRoadmapGroupKey,
   roadmapCardLabel,
   roadmapCardDisplayParts,
   roadmapCardDisplayLines,
   roadmapLanesForTrack,
+  roadmapGroupForRequirement,
   roadmapMonthColumnTemplate,
   roadmapMonthColumnTemplateForTrack,
   roadmapPrimaryLane,
   roadmapTrackOrder,
+  requirementsInRange,
   summarizeCategoryWorkloadForSide,
 } from "../src/shared/roadmap";
 import type { AppSnapshot, Requirement } from "../src/shared/types";
@@ -115,12 +119,85 @@ describe("领域合并", () => {
   });
 });
 
+describe("医疗认证独立泳道", () => {
+  it("应用内保留未定日期独立泳道且键稳定，统计和 PPT 默认分组不纳入", () => {
+    const undated = requirement("undated", "未定送检", "d1", "NMPA认证", "平台演进", "", [], 99);
+    const empty = requirement("empty", "全部未填", "d1", "CE认证", "平台演进", "", [], 99);
+    const dated = requirement("dated", "已定送检", "d1", "CE认证", "平台演进", "2027-03", [], 1);
+    undated.medicalSubmissionMilestones = { registrationStartMonth: "2029-01", clinicalStartMonth: "2027-01", certificateMonth: "2024-12" };
+    const data = { ...snapshot, requirements: [undated, empty, dated] };
+    const appGroups = buildRoadmapGroups(data, "2027H1", "2027H1", { medicalDemandRows: true, medicalRange: "selected" });
+    expect(appGroups).toHaveLength(3);
+    expect(appGroups.find((group) => group.requirements[0].id === "undated")?.key).toBe("medical-requirement:undated");
+    expect(appGroups.every((group) => !group.key.includes("::"))).toBe(true);
+    const filled = buildRoadmapGroups({ ...data, requirements: [{ ...undated, targetMonth: "2027-03" }] }, "2027H1", "2027H1", { medicalDemandRows: true });
+    expect(filled[0].key).toBe("medical-requirement:undated");
+    expect(buildRoadmapGroups(data, "2027H1", "2027H1")).toHaveLength(1);
+    expect(requirementsInRange(data.requirements, "2027H1", "2027H1").map((item) => item.id)).toEqual(["dated"]);
+    expect(buildHalfYearSummaries(data.requirements, "2027H1", "2027H1")[0]).toMatchObject({ requirementCount: 1, totalWorkload: 1 });
+    const months = medicalRoadmapTimelineMonths(appGroups, "2027H1", "2027H1");
+    expect(months[0]).toBe("2027-01");
+    expect(months.at(-1)).toBe("2029-01");
+    const emptyGroups = buildRoadmapGroups({ ...data, requirements: [empty] }, "2027H1", "2027H1", { medicalDemandRows: true });
+    expect(medicalRoadmapTimelineMonths(emptyGroups, "2027H1", "2027H1")).toEqual(monthsForHalfYear("2027H1"));
+    expect(roadmapGroupForRequirement(emptyGroups[0], "empty")?.requirements).toEqual([empty]);
+  });
+
+  it("将同一分组中的每条 NMPA/CE 需求拆成独立行", () => {
+    const medicalRequirements = [
+      { ...requirement("medical-1", "血压软件注册", "d1", "NMPA认证", "平台演进", "2026-05", [], 1), description: "血压风险筛查软件" },
+      { ...requirement("medical-2", "心电软件注册", "d1", "NMPA认证", "平台演进", "2026-05", ["p1"], 2), description: "心电异常筛查软件" },
+      { ...requirement("medical-3", "海外认证", "d2", "CE认证", "平台演进", "2026-06", [], 3), description: "海外健康软件" },
+    ];
+    const groups = buildRoadmapGroups({ ...snapshot, requirements: medicalRequirements, groupOverrides: [] }, "2026H1", "2026H1");
+    const rows = medicalRoadmapDemandRows(groups);
+
+    expect(groups).toHaveLength(2);
+    expect(rows.map((row) => row.requirement.id)).toEqual(["medical-2", "medical-1", "medical-3"]);
+    expect(rows.map((row) => row.requirement.source)).toEqual(["NMPA认证", "NMPA认证", "CE认证"]);
+  });
+
+  it("打开独立泳道时只保留该需求的详情和工作量", () => {
+    const medicalRequirements = [
+      requirement("medical-a", "需求 A", "d1", "NMPA认证", "体验优化", "2026-05", [], 1, { device: 1 }),
+      requirement("medical-b", "需求 B", "d1", "NMPA认证", "产品专属", "2026-05", ["p1"], 2, { app: 2 }),
+    ];
+    const [group] = buildRoadmapGroups({ ...snapshot, requirements: medicalRequirements, groupOverrides: [] }, "2026H1", "2026H1");
+    const single = roadmapGroupForRequirement(group, "medical-b");
+
+    expect(single?.requirements.map((item) => item.id)).toEqual(["medical-b"]);
+    expect(single?.productNames).toEqual(["产品A"]);
+    expect(single?.totalWorkloadPm).toBe(2);
+    expect(single?.categories).toEqual(["产品专属"]);
+    expect(roadmapGroupForRequirement(group, "missing")).toBeNull();
+  });
+
+  it("所有需求共用实际月份轴并自动覆盖区间外节点", () => {
+    const medicalRequirements = [
+      {
+        ...requirement("medical-range-a", "需求 A", "d1", "NMPA认证", "平台演进", "2027-03", [], 1),
+        medicalSubmissionMilestones: { registrationStartMonth: "2026-11", certificateMonth: "2027-10" },
+      },
+      {
+        ...requirement("medical-range-b", "需求 B", "d2", "CE认证", "平台演进", "2027-05", [], 1),
+        medicalSubmissionMilestones: { clinicalStartMonth: "2027-06" },
+      },
+    ];
+    const groups = buildRoadmapGroups({ ...snapshot, requirements: medicalRequirements, groupOverrides: [] }, "2027H1", "2027H1");
+    const months = medicalRoadmapTimelineMonths(groups, "2027H1", "2027H1");
+
+    expect(months[0]).toBe("2027-01");
+    expect(months.at(-1)).toBe("2027-10");
+    expect(months).toHaveLength(10);
+  });
+});
+
 describe("工作量汇总", () => {
   it("按半年、来源、运动健康和分类准确汇总", () => {
     const summaries = buildHalfYearSummaries(baseRequirements, "2026H1", "2026H2");
     expect(summaries[0]).toMatchObject({
       halfYear: "2026H1",
-      byTrack: { 运动: 0, 健康: 6, 行业: 0, 全场景: 0, health平台: 0, AI: 0, 医疗送检: 0 },
+      byTrack: { 运动: 0, 健康: 6, 行业: 0, 全场景: 0, health平台: 0, AI: 0, 医疗认证: 0 },
       healthWorkload: 6,
       sportsWorkload: 0,
       byCategory: { 体验优化: 1.5, 平台演进: 0, 产品专属: 4.5 },
@@ -177,15 +254,15 @@ describe("工作量汇总", () => {
     expect(categoryPercentagesForSide(summaries[0], "app")).toEqual({ 体验优化: 0, 平台演进: 0, 产品专属: 0 });
   });
 
-  it("把 NMPA送检和 CE送检合并计入医疗送检路标投入", () => {
+  it("把 NMPA认证和 CE认证合并计入医疗认证路标投入", () => {
     const medical = [
-      requirement("nmpa", "NMPA需求", "d1", "NMPA送检", "平台演进", "2026-05", [], 1, { device: 1 }),
-      requirement("ce", "CE需求", "d1", "CE送检", "体验优化", "2026-05", [], 2, { app: 2 }),
+      requirement("nmpa", "NMPA需求", "d1", "NMPA认证", "平台演进", "2026-05", [], 1, { device: 1 }),
+      requirement("ce", "CE需求", "d1", "CE认证", "体验优化", "2026-05", [], 2, { app: 2 }),
     ];
     const [summary] = buildHalfYearSummaries(medical, "2026H1", "2026H1");
-    expect(summary.bySource.NMPA送检).toBe(1);
-    expect(summary.bySource.CE送检).toBe(2);
-    expect(summary.byTrack.医疗送检).toBe(3);
+    expect(summary.bySource.NMPA认证).toBe(1);
+    expect(summary.bySource.CE认证).toBe(2);
+    expect(summary.byTrack.医疗认证).toBe(3);
   });
 
   it("历史待拆分工作量不混入三端投入与占比", () => {
@@ -242,7 +319,7 @@ describe("路标首屏排序", () => {
 
   it("只有健康需求时优先展示健康路标", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H1");
-    expect(roadmapTrackOrder(groups)).toEqual(["健康", "运动", "行业", "全场景", "health平台", "AI", "医疗送检"]);
+    expect(roadmapTrackOrder(groups)).toEqual(["健康", "运动", "行业", "全场景", "health平台", "AI", "医疗认证"]);
   });
 
   it("运动和健康泳道按高阶、进阶、基础自上而下排列", () => {
@@ -252,7 +329,7 @@ describe("路标首屏排序", () => {
 
   it("存在运动需求时保持运动路标在前", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
-    expect(roadmapTrackOrder(groups)).toEqual(["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"]);
+    expect(roadmapTrackOrder(groups)).toEqual(["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗认证"]);
   });
 
   it("行业、全场景和health平台各自成为单泳道路标", () => {
@@ -265,16 +342,16 @@ describe("路标首屏排序", () => {
     }
   });
 
-  it("医疗送检路标按 NMPA送检、CE送检两条来源泳道匹配", () => {
-    const sources = ["NMPA送检", "CE送检"] as const;
+  it("医疗认证路标按 NMPA认证、CE认证两条来源泳道匹配", () => {
+    const sources = ["NMPA认证", "CE认证"] as const;
     const groups = buildRoadmapGroups({
       ...snapshot,
       requirements: sources.map((source, index) => requirement(`medical-${index}`, `${source}需求`, "d1", source, "平台演进", "2026-05", [], 1)),
     }, "2026H1", "2026H1");
-    expect(roadmapLanesForTrack("医疗送检")).toEqual(sources);
+    expect(roadmapLanesForTrack("医疗认证")).toEqual(sources);
     for (const source of sources) {
       const group = groups.find((item) => item.source === source)!;
-      expect(group).toMatchObject({ track: "医疗送检", level: null });
+      expect(group).toMatchObject({ track: "医疗认证", level: null });
       expect(groupMatchesRoadmapLane(group, source)).toBe(true);
       expect(roadmapPrimaryLane(group)).toBe(source);
     }
@@ -297,10 +374,10 @@ describe("路标首屏排序", () => {
 });
 
 describe("路标月份列宽", () => {
-  it("空月份固定为56px，有需求月份保持宽列", () => {
+  it("空月份固定为40px，有需求月份保持宽列", () => {
     const months = ["2026-05", "2026-06", "2026-07"];
     expect(roadmapMonthColumnTemplate(months, [{ targetMonth: "2026-06" }])).toBe(
-      "56px minmax(280px, 1fr) 56px",
+      "40px minmax(280px, 1fr) 40px",
     );
   });
 
@@ -308,7 +385,7 @@ describe("路标月份列宽", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
     const months = ["2026-05", "2026-06", "2026-07", "2026-08"];
     expect(roadmapMonthColumnTemplate(months, groups)).toBe(
-      "minmax(280px, 1fr) minmax(280px, 1fr) minmax(280px, 1fr) 56px",
+      "minmax(280px, 1fr) minmax(280px, 1fr) minmax(280px, 1fr) 40px",
     );
   });
 
@@ -316,55 +393,65 @@ describe("路标月份列宽", () => {
     const groups = buildRoadmapGroups(snapshot, "2026H1", "2026H2");
     const months = ["2026-05", "2026-06", "2026-07", "2026-08"];
     expect(roadmapMonthColumnTemplateForTrack(months, groups, "运动")).toBe(
-      "56px 56px minmax(280px, 1fr) 56px",
+      "40px 40px minmax(280px, 1fr) 40px",
     );
     expect(roadmapMonthColumnTemplateForTrack(months, groups, "健康")).toBe(
-      "minmax(280px, 1fr) minmax(280px, 1fr) 56px 56px",
+      "minmax(280px, 1fr) minmax(280px, 1fr) 40px 40px",
     );
   });
 
   it("整段没有需求时全部压缩", () => {
-    expect(roadmapMonthColumnTemplate(["2027-01", "2027-02", "2027-03"], [])).toBe("56px 56px 56px");
+    expect(roadmapMonthColumnTemplate(["2027-01", "2027-02", "2027-03"], [])).toBe("40px 40px 40px");
   });
 });
 
-describe("路标长条卡片文案", () => {
+describe("路标左右分栏卡片文案", () => {
   it("一条需求时显示标题和需求标题", () => {
     expect(roadmapCardLabel({ cardTitle: "健康摘要", requirements: [baseRequirements[0]] })).toBe("健康摘要：早间血压测量");
   });
 
-  it("最多显示三条需求，超过时追加等", () => {
+  it("完整保留全部独立需求，不再限制为三条", () => {
     expect(roadmapCardLabel({ cardTitle: "健康摘要", requirements: baseRequirements.slice(0, 3) })).toBe("健康摘要：早间血压测量、午间血压测量、夜间血压测量");
-    expect(roadmapCardLabel({ cardTitle: "健康摘要", requirements: baseRequirements })).toBe("健康摘要：早间血压测量、午间血压测量、夜间血压测量等");
+    expect(roadmapCardLabel({ cardTitle: "健康摘要", requirements: baseRequirements })).toBe("健康摘要：早间血压测量、午间血压测量、夜间血压测量、跑姿纠正");
   });
 
-  it("每行最多20个字符并且最多显示两行", () => {
-    expect(roadmapCardDisplayLines("字".repeat(20))).toEqual(["字".repeat(20)]);
-    expect(roadmapCardDisplayLines("字".repeat(21))).toEqual(["字".repeat(20), "字"]);
-    expect(roadmapCardDisplayLines("字".repeat(40))).toEqual(["字".repeat(20), "字".repeat(20)]);
-    expect(roadmapCardDisplayLines("字".repeat(41))).toEqual(["字".repeat(20), `${"字".repeat(19)}…`]);
+  it("连续英文和长标题保持完整", () => {
+    const longTitle = "ContinuousRunningPerformancePredictionWithLongEnglishText";
+    expect(roadmapCardLabel({
+      cardTitle: "跑步能力",
+      requirements: [requirement("long", longTitle, "d2", "运动进阶", "平台演进", "2026-07", [], 0)],
+    })).toBe(`跑步能力：${longTitle}`);
   });
 
-  it("中文、英文、数字和标点统一按Unicode字符计数", () => {
-    const mixed = "中文AB12，。";
-    expect(roadmapCardDisplayLines(`${mixed.repeat(5)}尾`)).toEqual([
-      `${mixed}${mixed}中文AB`,
-      `12，。${mixed}中文AB12，…`,
-    ]);
-  });
+  describe("兼容分行工具", () => {
+    it("每行最多20个字符并且最多显示两行", () => {
+      expect(roadmapCardDisplayLines("字".repeat(20))).toEqual(["字".repeat(20)]);
+      expect(roadmapCardDisplayLines("字".repeat(21))).toEqual(["字".repeat(20), "字"]);
+      expect(roadmapCardDisplayLines("字".repeat(40))).toEqual(["字".repeat(20), "字".repeat(20)]);
+      expect(roadmapCardDisplayLines("字".repeat(41))).toEqual(["字".repeat(20), `${"字".repeat(19)}…`]);
+    });
 
-  it("冒号前后拆分为强调标题和常规需求内容", () => {
-    expect(roadmapCardDisplayParts("健康摘要：早间血压测量", 5)).toEqual([
-      { emphasis: "健康摘要：", content: "早间血压测量" },
-    ]);
-  });
+    it("中文、英文、数字和标点统一按Unicode字符计数", () => {
+      const mixed = "中文AB12，。";
+      expect(roadmapCardDisplayLines(`${mixed.repeat(5)}尾`)).toEqual([
+        `${mixed}${mixed}中文AB`,
+        `12，。${mixed}中文AB12，…`,
+      ]);
+    });
 
-  it("标题跨行时继续保留正确的字重分界", () => {
-    const title = "标".repeat(21);
-    expect(roadmapCardDisplayParts(`${title}：需求A`, 22)).toEqual([
-      { emphasis: "标".repeat(20), content: "" },
-      { emphasis: "标：", content: "需求A" },
-    ]);
+    it("冒号前后拆分为强调标题和常规需求内容", () => {
+      expect(roadmapCardDisplayParts("健康摘要：早间血压测量", 5)).toEqual([
+        { emphasis: "健康摘要：", content: "早间血压测量" },
+      ]);
+    });
+
+    it("标题跨行时继续保留正确的字重分界", () => {
+      const title = "标".repeat(21);
+      expect(roadmapCardDisplayParts(`${title}：需求A`, 22)).toEqual([
+        { emphasis: "标".repeat(20), content: "" },
+        { emphasis: "标：", content: "需求A" },
+      ]);
+    });
   });
 });
 

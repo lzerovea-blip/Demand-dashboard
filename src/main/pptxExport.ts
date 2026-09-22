@@ -6,7 +6,8 @@ import {
   type PptExportPlan,
   type PptRoadmapPagePlan,
 } from "../shared/pptExport.js";
-import { groupMatchesRoadmapLane, hmosVersionForHalfYear, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
+import { groupMatchesRoadmapLane, halfYearOf, medicalRoadmapDemandRows, hmosVersionForHalfYear, roadmapLanesForTrack, type HalfYearSummary, type RoadmapGroup } from "../shared/roadmap.js";
+import { medicalSubmissionTimeline } from "../shared/medicalSubmission.js";
 import { CATEGORIES } from "../shared/types.js";
 import type { AppSnapshot, PptExportRequest, RequirementCategory, Track } from "../shared/types.js";
 import type { WorkloadSide } from "../shared/workload.js";
@@ -42,7 +43,7 @@ const CATEGORY_COLORS: Record<RequirementCategory, string> = {
 
 const SIDE_META: Record<WorkloadSide, { label: string; color: string }> = {
   device: { label: "设备侧", color: C.mintDeep },
-  app: { label: "App 侧", color: C.blue },
+  app: { label: "运动健康 App", color: C.blue },
   cloud: { label: "云侧", color: C.coral },
 };
 
@@ -163,7 +164,7 @@ function addCoverSlide(pptx: PptxPresentation, plan: PptExportPlan, security: Pp
   roundRect(slide, 760, 116, 457, 471, C.navy, C.navy2, 1, 18);
   text(slide, "MATERIAL WINDOW", 796, 149, 220, 20, 10, C.mint, true);
   text(slide, "统一的半年度路标视图", 796, 177, 340, 36, 24, C.white, true);
-  text(slide, "汇总分析与七类路标采用一致页眉、间距、卡片和标识规则。", 796, 221, 350, 48, 13, "AFC0CB");
+  text(slide, "数量、工作量及汇总按所选区间统计；医疗认证路标独立展示全部需求及完整节点时间范围。", 796, 221, 350, 58, 12, "AFC0CB");
   line(slide, 830, 299, 0, 205, "60717D", 2);
   plan.halfYears.forEach((halfYear, index) => {
     const y = 289 + index * 68;
@@ -182,10 +183,11 @@ function addSummarySlide(pptx: PptxPresentation, plan: PptExportPlan): void {
   const metrics: Array<[string, number, string]> = [
     ["总工作量", total.total + total.unallocated, C.ink],
     ["设备侧", total.device, C.mintDeep],
-    ["App 侧", total.app, C.blue],
+    ["运动健康 App", total.app, C.blue],
     ["云侧", total.cloud, C.coral],
   ];
   metrics.forEach(([label, value, color], index) => metricCard(slide, 64 + index * 288, 194, 266, 101, label, value, color));
+  text(slide, `创新研究 App ${formatNumber(total.researchApp)} PM、算法 ${formatNumber(total.algorithm)} PM 已计入总工作量，未计入下方三端图表。`, 64, 299, 1152, 18, 9, C.muted);
 
   roundRect(slide, 64, 320, 700, 326, C.white, C.faint, 1, 12);
   text(slide, "三端工作量趋势", 88, 342, 230, 24, 16, C.ink, true);
@@ -200,7 +202,7 @@ function addSummarySlide(pptx: PptxPresentation, plan: PptExportPlan): void {
     roundRect(slide, 808, 613, 386, 22, C.coralPale, C.coralPale, 0, 6);
     text(slide, `提示：另有 ${formatNumber(total.unallocated)} PM 历史工作量未拆分至三端`, 820, 616, 362, 16, 9, C.coral, true);
   }
-  notes(slide, "三端和分类均按需求实际工作量计算；本页不展示七类路标投入。");
+  notes(slide, "总工作量包含五项投入及历史待拆分。图表仅统计设备、运动健康 App、云侧的实际工作量，不包含创新研究 App 和算法。本页不展示七类路标投入。");
 }
 
 function addRoadmapSlide(pptx: PptxPresentation, page: PaginatedRoadmapPage): void {
@@ -213,11 +215,13 @@ function addRoadmapSlide(pptx: PptxPresentation, page: PaginatedRoadmapPage): vo
   text(slide, `${page.track}路标${continuation}`, 50, 20, 650, 38, 24, C.ink, true, "left", "mid");
   text(slide, String(slideNumber).padStart(2, "0"), 1170, 26, 46, 18, 9, C.ink, true, "right");
   line(slide, 50, 64, 1170, 0, C.faint, 1);
-  drawRoadmapTable(slide, page);
-  notes(slide, `${page.track}路标按半年展示；每条圆点文本对应一条独立需求记录，不展示产品名称。`);
+  if (page.track === "医疗认证") drawMedicalCertificationTable(slide, page);
+  else drawRoadmapTable(slide, page);
+  notes(slide, page.track === "医疗认证" ? "全部医疗认证需求按独立泳道展示，共享五节点月份轴；超过十二个月或纵向容量时自动续页，产品名称显示在对应需求左侧。" : `${page.track}路标按半年展示；每条圆点文本对应一条独立需求记录，不展示产品名称。`);
 }
 
 export function paginateRoadmapPage(page: PptRoadmapPagePlan): PaginatedRoadmapPage[] {
+  if (page.track === "医疗认证") return paginateMedicalCertificationPage(page);
   const lanes = roadmapLanesForTrack(page.track);
   const cellWidth = (ROADMAP_TABLE.w - ROADMAP_TABLE.laneW) / page.halfYears.length;
   const cellHeight = (ROADMAP_TABLE.h - ROADMAP_TABLE.headerH) / lanes.length;
@@ -400,6 +404,95 @@ function visibleRequirementTitlesForLayout(group: RoadmapGroup, limit: number): 
   return visible;
 }
 
+function medicalRowHeight(group: RoadmapGroup): number {
+  const item = group.requirements[0];
+  const titleLines = wrapText(item.title, 222, 8, true);
+  const products = wrapText((group.requirementProductNames[item.id] ?? []).join("、"), 210, 8, false);
+  return Math.max(112, 42 + (titleLines.length + products.length) * 15);
+}
+
+function paginateMedicalCertificationPage(page: PptRoadmapPagePlan): PaginatedRoadmapPage[] {
+  const groups = medicalRoadmapDemandRows(page.groups).map(({ group }) => group);
+  const batches: RoadmapGroup[][] = [];
+  let batch: RoadmapGroup[] = [];
+  let used = 0;
+  for (const group of groups) {
+    const height = medicalRowHeight(group);
+    if (height > ROADMAP_TABLE.h - ROADMAP_TABLE.headerH) throw new RoadmapCellCapacityError(`医疗认证需求标题或产品名称过长，单泳道无法容纳：${group.requirements[0].title}`);
+    if (batch.length && used + height > ROADMAP_TABLE.h - ROADMAP_TABLE.headerH) { batches.push(batch); batch = []; used = 0; }
+    batch.push(group); used += height;
+  }
+  if (batch.length || !batches.length) batches.push(batch);
+  const months = page.medicalMonths ?? [];
+  const segments: string[][] = [];
+  for (let index = 0; index < months.length; index += 12) segments.push(months.slice(index, index + 12));
+  if (!segments.length) segments.push([]);
+  const pages = batches.flatMap((groups) => segments.map((medicalMonths) => ({ ...page, groups, medicalMonths })));
+  return pages.map((part, continuationIndex) => ({ ...part, continuationIndex, continuationCount: pages.length }));
+}
+
+function drawMedicalCertificationTable(slide: PptxSlide, page: PaginatedRoadmapPage): void {
+  const { x, y, w, h, headerH } = ROADMAP_TABLE;
+  const laneW = 240;
+  const months = page.medicalMonths ?? [];
+  const columnW = (w - laneW) / Math.max(1, months.length);
+  rect(slide, x, y, w, h, C.white, C.faint);
+  rect(slide, x, y, laneW, headerH, C.red, C.faint);
+  text(slide, "认证需求 / 匹配产品", x + 8, y + 20, laneW - 16, 24, 12, C.white, true, "center");
+  if (!months.length) text(slide, "时间节点未填写", x + laneW + 20, y + 20, w - laneW - 40, 24, 12, C.muted, false, "center");
+  let offset = 0;
+  for (const half of [...new Set(months.map(halfYearOf))]) {
+    const count = months.filter((month) => halfYearOf(month) === half).length;
+    rect(slide, x + laneW + offset * columnW, y, count * columnW, 34, C.red, C.faint);
+    text(slide, `${shortHalf(half)}\n${hmosVersionForHalfYear(half)}`, x + laneW + offset * columnW + 2, y + 2, count * columnW - 4, 30, 8, C.white, true, "center");
+    offset += count;
+  }
+  months.forEach((month, index) => {
+    const left = x + laneW + index * columnW;
+    text(slide, `${Number(month.slice(5))}月`, left, y + 40, columnW, 22, 10, C.ink, false, "center");
+    line(slide, left, y + 34, 0, h - 34, C.faint, 0.6);
+  });
+  let rowY = y + headerH;
+  if (!page.groups.length) text(slide, "暂无医疗认证需求", x + laneW + 20, rowY + 28, w - laneW - 40, 30, 12, C.muted, false, "center");
+  for (const { group, requirement } of medicalRoadmapDemandRows(page.groups)) {
+    const height = medicalRowHeight(group);
+    const titleLines = wrapText(requirement.title, laneW - 18, 8, true);
+    const titleH = titleLines.length * 15;
+    text(slide, titleLines.join("\n"), x + 9, rowY + 10, laneW - 18, titleH, 8, C.ink, true, "left", "top", { margin: 0, wrap: false });
+    rect(slide, x + 9, rowY + 13 + titleH, 48, 17, requirement.source === "NMPA认证" ? "D64D85" : C.blue, C.white, 0, 3);
+    text(slide, requirement.source === "NMPA认证" ? "NMPA" : "CE", x + 9, rowY + 13 + titleH, 48, 17, 8, C.white, true, "center", "mid");
+    const names = group.requirementProductNames[requirement.id] ?? [];
+    if (names.length) {
+      const productLines = wrapText(names.join("、"), laneW - 30, 8, false);
+      const productY = rowY + 33 + titleH;
+      rect(slide, x + 9, productY, laneW - 18, productLines.length * 15 + 4, C.ink, C.ink, 0, 4);
+      text(slide, productLines.join("\n"), x + 15, productY + 2, laneW - 30, productLines.length * 15, 8, C.white, false, "left", "top", { margin: 0, wrap: false });
+    }
+    const nodes = medicalSubmissionTimeline(requirement.targetMonth, requirement.medicalSubmissionMilestones).filter((node) => node.month);
+    const sorted = nodes.map((node) => node.month!).sort();
+    const nodeY = rowY + 24;
+    const visible = months.filter((month) => month >= sorted[0] && month <= sorted.at(-1)!);
+    if (visible.length) {
+      const first = sorted[0] < months[0] ? 0 : months.indexOf(visible[0]) + 0.5;
+      const last = sorted.at(-1)! > months.at(-1)! ? months.length : months.indexOf(visible.at(-1)!) + 0.5;
+      line(slide, x + laneW + first * columnW, nodeY, (last - first) * columnW, 0, "BDCED9", 2);
+      if (first === 0) text(slide, "‹", x + laneW, nodeY - 9, 12, 18, 8, C.muted);
+      if (last === months.length) text(slide, "›", x + w - 12, nodeY - 9, 12, 18, 8, C.muted);
+    }
+    months.forEach((month, index) => {
+      const values = nodes.filter((node) => node.month === month);
+      if (!values.length) return;
+      const left = x + laneW + index * columnW;
+      ellipse(slide, left + columnW / 2 - 5, nodeY - 5, 10, 10, values.some((node) => node.derived) ? C.coral : C.blue, C.white, 1);
+      text(slide, values.map((node) => node.label.replace("时间", "")).join("\n"), left + 2, nodeY + 12, columnW - 4, values.length * 13, 8, C.ink, false, "center", "top", { margin: 0 });
+    });
+    if (!nodes.length) text(slide, "时间节点未填写", x + laneW + 16, rowY + 22, w - laneW - 32, 25, 8, C.muted);
+    line(slide, x, rowY + height, w, 0, C.faint, 0.7);
+    rowY += height;
+  }
+  text(slide, months.length ? `全部医疗需求，独立自动范围；本段 ${months[0]} 至 ${months.at(-1)}` : "全部医疗需求，暂无已填写日期", x, y + h + 9, w, 20, 9, C.muted);
+}
+
 function wrapText(value: string, maxWidth: number, fontSize: number, bold: boolean): string[] {
   const chars = Array.from(value || " ");
   const lines: string[] = [];
@@ -460,9 +553,9 @@ function drawSummaryTrend(slide: PptxSlide, summaries: HalfYearSummary[]): void 
     text(slide, shortHalf(summary.halfYear), center - groupWidth / 2, 570, groupWidth, 20, 10, C.muted, true, "center");
   });
   (["device", "app", "cloud"] as WorkloadSide[]).forEach((side, index) => {
-    const x = 240 + index * 125;
+    const x = 180 + index * 160;
     ellipse(slide, x, 611, 8, 8, SIDE_META[side].color, SIDE_META[side].color, 0);
-    text(slide, SIDE_META[side].label, x + 14, 605, 90, 18, 10, C.muted);
+    text(slide, SIDE_META[side].label, x + 14, 605, 140, 18, 10, C.muted);
   });
 }
 
@@ -471,10 +564,10 @@ function drawSideCategoryStructure(slide: PptxSlide, summaries: HalfYearSummary[
     const y = 410 + row * 60;
     const values = CATEGORIES.map((category) => summaries.reduce((sum, item) => sum + item.categoryBySide[category][side], 0));
     const total = values.reduce((sum, value) => sum + value, 0);
-    text(slide, SIDE_META[side].label, 808, y + 8, 58, 18, 11, C.ink, true);
-    let cursor = 870;
+    text(slide, SIDE_META[side].label, 808, y + 8, 98, 18, 10, C.ink, true);
+    let cursor = 910;
     values.forEach((value, index) => {
-      const width = total ? value / total * 280 : index === 0 ? 280 : 0;
+      const width = total ? value / total * 240 : index === 0 ? 240 : 0;
       if (width > 0) rect(slide, cursor, y, width, 34, total ? CATEGORY_COLORS[CATEGORIES[index]] : C.faint2, total ? CATEGORY_COLORS[CATEGORIES[index]] : C.faint2, 0, 4);
       if (total && width >= 48) text(slide, formatNumber(value), cursor, y + 8, width, 18, 9, C.white, true, "center");
       cursor += width;
@@ -501,8 +594,10 @@ function totals(summaries: HalfYearSummary[]) {
     device: result.device + item.bySide.device,
     app: result.app + item.bySide.app,
     cloud: result.cloud + item.bySide.cloud,
+    researchApp: result.researchApp + item.researchAppWorkload,
+    algorithm: result.algorithm + item.algorithmWorkload,
     unallocated: result.unallocated + item.unallocatedWorkload,
-  }), { total: 0, device: 0, app: 0, cloud: 0, unallocated: 0 });
+  }), { total: 0, device: 0, app: 0, cloud: 0, researchApp: 0, algorithm: 0, unallocated: 0 });
 }
 
 function addSlideHeader(slide: PptxSlide, page: number, eyebrow: string, titleValue: string, subtitle: string): void {

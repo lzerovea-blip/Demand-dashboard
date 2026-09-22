@@ -25,6 +25,8 @@ await mkdir(appDir, { recursive: true });
 await cp("dist-electron", join(appDir, "dist-electron"), { recursive: true });
 await cp("dist-renderer", join(appDir, "dist-renderer"), { recursive: true });
 await cp("node_modules/sql.js/dist/sql-wasm.wasm", join(resourcesDir, "sql-wasm.wasm"));
+await cp("build-resources/app-icon.png", join(resourcesDir, "app-icon.png"));
+await cp("build-resources/app-icon.icns", join(resourcesDir, "app-icon.icns"));
 await mkdir(templatesDir, { recursive: true });
 await cp("需求路标模板-共创版-v0.1.pptx", join(templatesDir, "需求路标模板-共创版-v0.1.pptx"));
 
@@ -45,6 +47,7 @@ for (const [key, value] of [
   ["CFBundleIdentifier", "com.local.healthroadmap"],
   ["CFBundleShortVersionString", sourcePackage.version],
   ["CFBundleVersion", sourcePackage.version],
+  ["CFBundleIconFile", "app-icon.icns"],
 ]) {
   await run("/usr/libexec/PlistBuddy", ["-c", `Set :${key} ${value}`, plist]);
 }

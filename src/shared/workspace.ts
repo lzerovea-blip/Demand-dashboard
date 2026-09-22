@@ -1,9 +1,27 @@
-import type { DictionaryItem, GroupOverride, Member, PptAccessPolicy, Requirement, WorkspaceData } from "./types.js";
+import type { DictionaryItem, GroupOverride, LegacyRequirementDecision, Member, PptAccessPolicy, Requirement, RequirementTombstone, WorkspaceData } from "./types.js";
 import { normalizeLegacyGroupOverride, normalizeRequirement } from "./requirements.js";
 import { EMPTY_PPT_ACCESS_POLICY, normalizeMember, normalizePptAccessPolicy, REQUIREMENT_OWNER_FIELDS, backfillRequirementOwners, validateRequirementOwners } from "./members.js";
 import { EMPTY_TIERING_DATA, mergeTieringData, normalizeTieringData } from "./tiering.js";
 
-export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData): WorkspaceData {
+export interface RequirementMergeResolution {
+  id: string;
+  title: string;
+  outcome: "restored" | "ignored" | "ambiguous";
+  requirementUpdatedAt: string;
+  deletedAt?: string;
+}
+
+export interface WorkspaceMergeOptions {
+  legacyRequirementDecisions?: Record<string, LegacyRequirementDecision>;
+  deferAmbiguousRequirements?: boolean;
+  decisionAt?: string;
+}
+
+export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData, options: WorkspaceMergeOptions = {}): WorkspaceData {
+  return mergeWorkspaceDataWithReport(local, incoming, options).data;
+}
+
+export function mergeWorkspaceDataWithReport(local: WorkspaceData, incoming: WorkspaceData, options: WorkspaceMergeOptions = {}): { data: WorkspaceData; requirementResolutions: RequirementMergeResolution[] } {
   const domainMerge = mergeDomainDictionaries(local.domains, incoming.domains);
   const productMerge = mergeDictionaries(local.products, incoming.products);
   const memberMerge = mergeMembers(local.members ?? [], incoming.members ?? [], domainMerge.idMap);
@@ -11,6 +29,10 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
   const remappedRequirements = incoming.requirements.map((item) => {
     const normalized = normalizeRequirement(item);
     const existing = local.requirements.find((localItem) => localItem.id === item.id);
+    // Missing legacy fields are not an instruction to clear locally entered work.
+    normalized.researchAppWorkloadPm = item.researchAppWorkloadPm ?? existing?.researchAppWorkloadPm ?? 0;
+    normalized.algorithmWorkloadPm = item.algorithmWorkloadPm ?? existing?.algorithmWorkloadPm ?? 0;
+    normalized.medicalRoadmapSortOrder = item.medicalRoadmapSortOrder ?? existing?.medicalRoadmapSortOrder;
     for (const { key } of REQUIREMENT_OWNER_FIELDS) {
       normalized[key] = item[key] === undefined
         ? existing?.[key]
@@ -19,14 +41,15 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
     const domainId = domainMerge.idMap.get(normalized.domainId) ?? normalized.domainId;
     const mergedDomainL1 = domainMerge.items.find((domain) => domain.id === domainId);
     return {
-      ...normalized,
+      ...normalizeRequirement(normalized),
       domainL0Id: mergedDomainL1?.parentId ?? domainMerge.idMap.get(normalized.domainL0Id) ?? normalized.domainL0Id,
       domainId,
       productIds: [...new Set(normalized.productIds.map((id) => productMerge.idMap.get(id) ?? id))],
     };
   });
 
-  const requirements = mergeByUpdatedAt(local.requirements.map((item) => normalizeRequirement(item)), remappedRequirements)
+  const requirementMerge = mergeRequirementsWithTombstones(local, incoming, remappedRequirements, options);
+  const requirements = requirementMerge.requirements
     .map((item) => backfillRequirementOwners(item, memberMerge.items));
   for (const item of requirements) validateRequirementOwners(item, memberMerge.items);
   const remappedOverrides = incoming.groupOverrides.map((item) => {
@@ -42,8 +65,10 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
     ? remapPolicy(incomingPolicy, memberMerge.idMap)
     : localPolicy;
 
-  return {
+  const data: WorkspaceData = {
     requirements,
+    requirementTombstones: requirementMerge.tombstones,
+    requirementDeletionTrackingStartedAt: laterTimestamp(local.requirementDeletionTrackingStartedAt, incoming.requirementDeletionTrackingStartedAt),
     domains: domainMerge.items,
     products: productMerge.items,
     groupOverrides: mergeByUpdatedAt(local.groupOverrides, remappedOverrides, (item) => item.groupKey),
@@ -51,6 +76,82 @@ export function mergeWorkspaceData(local: WorkspaceData, incoming: WorkspaceData
     pptAccessPolicy,
     tiering: mergeTieringData(normalizeTieringData(local.tiering), normalizeTieringData(incoming.tiering)),
   };
+  return { data, requirementResolutions: requirementMerge.resolutions };
+}
+
+function mergeRequirementsWithTombstones(
+  local: WorkspaceData,
+  incoming: WorkspaceData,
+  remappedIncoming: Requirement[],
+  options: WorkspaceMergeOptions,
+): { requirements: Requirement[]; tombstones: RequirementTombstone[]; resolutions: RequirementMergeResolution[] } {
+  const localRequirements = local.requirements.map(normalizeRequirement);
+  const localById = new Map(localRequirements.map((item) => [item.id, item]));
+  const localTombstones = new Map((local.requirementTombstones ?? []).map((item) => [item.id, item]));
+  const incomingTombstones = new Map((incoming.requirementTombstones ?? []).map((item) => [item.id, item]));
+  const resolutions: RequirementMergeResolution[] = [];
+  const incomingAllowed: Requirement[] = [];
+  const trackingStartedAt = timestamp(local.requirementDeletionTrackingStartedAt ?? "");
+
+  for (const requirement of remappedIncoming) {
+    const isAmbiguous = !localById.has(requirement.id)
+      && !localTombstones.has(requirement.id)
+      && trackingStartedAt > 0
+      && timestamp(requirement.updatedAt) < trackingStartedAt;
+    if (!isAmbiguous) {
+      incomingAllowed.push(requirement);
+      continue;
+    }
+    const decision = options.legacyRequirementDecisions?.[requirement.id];
+    if (decision === "merge" || (!options.deferAmbiguousRequirements && !decision)) {
+      incomingAllowed.push(requirement);
+      continue;
+    }
+    resolutions.push({ id: requirement.id, title: requirement.title, outcome: "ambiguous", requirementUpdatedAt: requirement.updatedAt });
+    if (decision === "keep-deleted") {
+      const deletedAt = options.decisionAt ?? new Date().toISOString();
+      incomingTombstones.set(requirement.id, { id: requirement.id, title: requirement.title, deletedAt });
+    }
+  }
+
+  const active = new Map(localRequirements.map((item) => [item.id, item]));
+  for (const requirement of incomingAllowed) {
+    const existing = active.get(requirement.id);
+    if (!existing || timestamp(requirement.updatedAt) > timestamp(existing.updatedAt)) active.set(requirement.id, requirement);
+  }
+  const tombstones = new Map(localTombstones);
+  for (const tombstone of incomingTombstones.values()) {
+    const existing = tombstones.get(tombstone.id);
+    if (!existing || timestamp(tombstone.deletedAt) > timestamp(existing.deletedAt)) tombstones.set(tombstone.id, tombstone);
+  }
+
+  const keptRequirements: Requirement[] = [];
+  const keptTombstones: RequirementTombstone[] = [];
+  for (const id of new Set([...active.keys(), ...tombstones.keys()])) {
+    const requirement = active.get(id);
+    const tombstone = tombstones.get(id);
+    if (tombstone && (!requirement || timestamp(tombstone.deletedAt) >= timestamp(requirement.updatedAt))) {
+      keptTombstones.push(tombstone);
+      const incomingRequirement = incomingAllowed.find((item) => item.id === id);
+      if (incomingRequirement && localTombstones.has(id)) {
+        resolutions.push({ id, title: tombstone.title || incomingRequirement.title, outcome: "ignored", requirementUpdatedAt: incomingRequirement.updatedAt, deletedAt: tombstone.deletedAt });
+      }
+      continue;
+    }
+    if (requirement) {
+      keptRequirements.push(requirement);
+      if (localTombstones.has(id) && incomingAllowed.some((item) => item.id === id)) {
+        resolutions.push({ id, title: requirement.title, outcome: "restored", requirementUpdatedAt: requirement.updatedAt, deletedAt: localTombstones.get(id)?.deletedAt });
+      }
+    }
+  }
+  return { requirements: keptRequirements, tombstones: keptTombstones, resolutions };
+}
+
+function laterTimestamp(left?: string, right?: string): string | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return timestamp(left) >= timestamp(right) ? left : right;
 }
 
 function mergeMembers(
@@ -185,6 +286,7 @@ export function workspaceCounts(data: WorkspaceData) {
   const tiering = normalizeTieringData(data.tiering ?? EMPTY_TIERING_DATA);
   return {
     requirements: data.requirements.length,
+    requirementTombstones: (data.requirementTombstones ?? []).length,
     images: data.requirements.reduce((sum, item) => sum + item.images.length, 0),
     domains: data.domains.length,
     products: data.products.length,

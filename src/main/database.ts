@@ -8,9 +8,11 @@ import type {
   BackupEnvelope,
   DictionaryItem,
   GroupOverride,
+  LegacyRequirementDecision,
   Member,
   PptAccessPolicy,
   Requirement,
+  RequirementTombstone,
   SaveDictionaryInput,
   SaveGroupOrderInput,
   SaveGroupOverrideInput,
@@ -20,6 +22,7 @@ import type {
   SaveTieringSupportInput,
   SaveTieringEvidenceSourceInput,
   UpdateTieringIssueInput,
+  UpdateTieringChangeLogInput,
   TieringChangeLog,
   TieringEvidenceSource,
   TieringFeature,
@@ -30,6 +33,7 @@ import type {
   WorkspaceData,
   WorkspaceImportMode,
   WorkspaceWorkbookConflictMode,
+  WorkspaceWorkbookFieldSelection,
 } from "../shared/types.js";
 import {
   MAX_REQUIREMENT_IMAGES,
@@ -44,6 +48,7 @@ import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, norm
 import { groupKeyFor } from "../shared/roadmap.js";
 import { mergeWorkspaceData } from "../shared/workspace.js";
 import { roundWorkload } from "../shared/workload.js";
+import { reorderedMedicalRequirements } from "../shared/medicalRoadmapOrder.js";
 import { applyPreparedWorkspaceWorkbook, type PreparedWorkspaceWorkbookImport } from "./workspaceWorkbook.js";
 import {
   buildHistoricalRequirement,
@@ -53,9 +58,11 @@ import {
   domainReferenceMessages,
   EMPTY_TIERING_DATA,
   isHistoricalTieringFeature,
+  isTieringEligibleRequirement,
   migrateArchivedHistoricalRequirement,
   missingBuiltInTieringProductSeries,
   normalizeTieringData,
+  normalizeWorkspaceTieringScope,
   renameIndependentTieringDomain,
   resolveTieringFeature,
   resolveTieringRequirementDomains,
@@ -63,9 +70,10 @@ import {
   validateTieringSupportRecord,
 } from "../shared/tiering.js";
 import { historicalLaunchForFeatureId, normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
+import { isMedicalSubmissionSource, normalizeMedicalSubmissionMilestones, validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission.js";
 
 const BACKUP_SCHEMA_VERSION = 1;
-const DATABASE_SCHEMA_VERSION = 8;
+const DATABASE_SCHEMA_VERSION = 11;
 
 export class LocalDatabase {
   private sql!: SqlJsStatic;
@@ -89,7 +97,7 @@ export class LocalDatabase {
     if (bytes && version < DATABASE_SCHEMA_VERSION) {
       const backupDir = join(app.getPath("userData"), "backups");
       await mkdir(backupDir, { recursive: true });
-      await writeFile(join(backupDir, `roadmap-before-v0.8.10-${Date.now()}-${crypto.randomUUID()}.db`), bytes, { flag: "wx" });
+      await writeFile(join(backupDir, `roadmap-before-v0.8.24-${Date.now()}-${crypto.randomUUID()}.db`), bytes, { flag: "wx" });
     }
     this.db.run("BEGIN");
     let skippedTieringRequirements: number;
@@ -140,7 +148,9 @@ export class LocalDatabase {
     const deviceWorkloadPm = roundWorkload(input.deviceWorkloadPm);
     const appWorkloadPm = roundWorkload(input.appWorkloadPm);
     const cloudWorkloadPm = roundWorkload(input.cloudWorkloadPm);
-    const workloadPm = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm);
+    const researchAppWorkloadPm = roundWorkload(input.researchAppWorkloadPm);
+    const algorithmWorkloadPm = roundWorkload(input.algorithmWorkloadPm);
+    const workloadPm = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm + researchAppWorkloadPm + algorithmWorkloadPm);
     const requirementId = input.id ?? crypto.randomUUID();
     const requirement: Requirement = {
       ...input,
@@ -153,36 +163,56 @@ export class LocalDatabase {
       deviceWorkloadPm,
       appWorkloadPm,
       cloudWorkloadPm,
+      researchAppWorkloadPm,
+      algorithmWorkloadPm,
       unallocatedWorkloadPm: 0,
       workloadPm,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      tieringFeatureId: input.tieringFeatureId ?? existing?.tieringFeatureId ?? tieringFeatureIdForRequirement(requirementId),
-      historicalLaunch: existing?.historicalLaunch
+      tieringFeatureId: isTieringEligibleRequirement(input)
+        ? input.tieringFeatureId ?? existing?.tieringFeatureId ?? tieringFeatureIdForRequirement(requirementId)
+        : undefined,
+      historicalLaunch: existing?.historicalLaunch && input.targetMonth
         ? { ...existing.historicalLaunch, suggestedTargetMonth: input.targetMonth }
         : undefined,
+      medicalSubmissionMilestones: normalizeMedicalSubmissionMilestones(input.source, input.medicalSubmissionMilestones),
+      medicalRoadmapSortOrder: isMedicalSubmissionSource(input.source) ? existing?.medicalRoadmapSortOrder : undefined,
     };
+    const previousBytes = this.db.export();
+    let committed = false;
     this.db.run("BEGIN");
     try {
       this.run(
         "INSERT OR REPLACE INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)",
         [requirement.id, requirement.updatedAt, JSON.stringify(requirement)],
       );
-      this.upsertTieringForRequirement(requirement, domains, now);
+      this.run("DELETE FROM requirement_tombstones WHERE id = ?", [requirement.id]);
+      this.syncTieringForRequirement(requirement, domains, now, existing?.tieringFeatureId ?? input.tieringFeatureId);
       this.db.run("COMMIT");
+      committed = true;
+      await this.persist();
     } catch (error) {
-      this.db.run("ROLLBACK");
+      if (!committed) this.db.run("ROLLBACK");
+      else {
+        this.db.close();
+        this.db = new this.sql.Database(previousBytes);
+      }
       throw error;
     }
-    await this.persist();
     return this.getSnapshot();
   }
 
   async deleteRequirement(id: string): Promise<AppSnapshot> {
     const requirement = this.getPayload<Requirement>("requirements", "id", id);
+    const previousBytes = this.db.export();
+    let committed = false;
     this.db.run("BEGIN");
     try {
       this.run("DELETE FROM requirements WHERE id = ?", [id]);
+      if (requirement) {
+        const tombstone: RequirementTombstone = { id, title: requirement.title, deletedAt: new Date().toISOString() };
+        this.run("INSERT OR REPLACE INTO requirement_tombstones (id, deleted_at, payload) VALUES (?, ?, ?)", [id, tombstone.deletedAt, JSON.stringify(tombstone)]);
+      }
       const tiering = normalizeTieringData({ features: this.payloads<TieringFeature>("tiering_features", "sort_order, id") });
       for (const feature of tiering.features.filter((item) => item.requirementId === id || item.id === requirement?.tieringFeatureId)) {
         if (isHistoricalTieringFeature(feature)) {
@@ -196,11 +226,16 @@ export class LocalDatabase {
         }
       }
       this.db.run("COMMIT");
+      committed = true;
+      await this.persist();
     } catch (error) {
-      this.db.run("ROLLBACK");
+      if (!committed) this.db.run("ROLLBACK");
+      else {
+        this.db.close();
+        this.db = new this.sql.Database(previousBytes);
+      }
       throw error;
     }
-    await this.persist();
     return this.getSnapshot();
   }
 
@@ -209,21 +244,31 @@ export class LocalDatabase {
     const source = snapshot.requirements.find((item) => item.id === id);
     if (!source) throw new Error("要复制的需求不存在或已被删除");
     const copy = cloneRequirementAsCopy(source, snapshot.requirements.map((item) => item.title));
-    const normalizedCopy = { ...copy, tieringFeatureId: tieringFeatureIdForRequirement(copy.id) };
+    const normalizedCopy: Requirement = {
+      ...copy,
+      tieringFeatureId: isTieringEligibleRequirement(copy) ? tieringFeatureIdForRequirement(copy.id) : undefined,
+    };
     const domains = new Map(snapshot.domains.map((item) => [item.id, item]));
+    const previousBytes = this.db.export();
+    let committed = false;
     this.db.run("BEGIN");
     try {
       this.run(
         "INSERT INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)",
         [normalizedCopy.id, normalizedCopy.updatedAt, JSON.stringify(normalizedCopy)],
       );
-      this.upsertTieringForRequirement(normalizedCopy, domains, normalizedCopy.updatedAt);
+      this.syncTieringForRequirement(normalizedCopy, domains, normalizedCopy.updatedAt);
       this.db.run("COMMIT");
+      committed = true;
+      await this.persist();
     } catch (error) {
-      this.db.run("ROLLBACK");
+      if (!committed) this.db.run("ROLLBACK");
+      else {
+        this.db.close();
+        this.db = new this.sql.Database(previousBytes);
+      }
       throw error;
     }
-    await this.persist();
     return this.getSnapshot();
   }
 
@@ -335,6 +380,32 @@ export class LocalDatabase {
     return this.getSnapshot();
   }
 
+  async saveMedicalRoadmapOrder(input: { requirementIds: string[] }): Promise<AppSnapshot> {
+    const ordered = reorderedMedicalRequirements(this.getSnapshot().requirements, input?.requirementIds);
+    const now = new Date().toISOString();
+    const previousBytes = this.db.export();
+    let committed = false;
+    this.db.run("BEGIN");
+    try {
+      ordered.forEach((item, medicalRoadmapSortOrder) => {
+        if (item.medicalRoadmapSortOrder === medicalRoadmapSortOrder) return;
+        const updated = { ...item, medicalRoadmapSortOrder, updatedAt: now };
+        this.run("UPDATE requirements SET payload=?, updated_at=? WHERE id=?", [JSON.stringify(updated), now, item.id]);
+      });
+      this.db.run("COMMIT");
+      committed = true;
+      await this.persist();
+    } catch (error) {
+      if (!committed) this.db.run("ROLLBACK");
+      else {
+        this.db.close();
+        this.db = new this.sql.Database(previousBytes);
+      }
+      throw error;
+    }
+    return this.getSnapshot();
+  }
+
   async saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot> {
     if (!SOURCES.includes(input.source)) throw new Error("路标泳道无效");
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetMonth)) throw new Error("上线月份无效");
@@ -407,6 +478,7 @@ export class LocalDatabase {
       reviewer: "",
       recordStatus: "有效",
       note: "",
+      updatedAt: record.updatedAt,
     };
     this.db.run("BEGIN");
     try {
@@ -445,6 +517,33 @@ export class LocalDatabase {
     return this.getSnapshot();
   }
 
+  async updateTieringChangeLog(input: UpdateTieringChangeLogInput): Promise<AppSnapshot> {
+    const log = this.getPayload<TieringChangeLog>("tiering_change_logs", "id", input.logId);
+    if (!log) throw new Error("变更记录不存在，请刷新后重试");
+    const updated: TieringChangeLog = {
+      ...log,
+      reason: input.reason.trim(),
+      reviewer: input.reviewer.trim(),
+      recordStatus: input.recordStatus.trim() || "有效",
+      note: input.note.trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (!updated.reason) throw new Error("变更原因不能为空");
+    if (updated.reason.length > 500 || updated.reviewer.length > 100 || updated.note.length > 1000) throw new Error("变更记录管理信息超出长度限制");
+    if (!['有效', '待审核', '已归档'].includes(updated.recordStatus)) throw new Error("请选择有效的记录状态");
+    this.run("UPDATE tiering_change_logs SET payload = ? WHERE id = ?", [JSON.stringify(updated), updated.id]);
+    await this.persist();
+    return this.getSnapshot();
+  }
+
+  async deleteTieringChangeLog(logId: string): Promise<AppSnapshot> {
+    const log = this.getPayload<TieringChangeLog>("tiering_change_logs", "id", logId);
+    if (!log) throw new Error("变更记录不存在，请刷新后重试");
+    this.run("DELETE FROM tiering_change_logs WHERE id = ?", [logId]);
+    await this.persist();
+    return this.getSnapshot();
+  }
+
   async regenerateTieringRequirement(featureId: string): Promise<AppSnapshot> {
     const snapshot = this.getSnapshot();
     const tiering = normalizeTieringData(snapshot.tiering);
@@ -460,6 +559,7 @@ export class LocalDatabase {
     this.db.run("BEGIN");
     try {
       this.run("INSERT INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)", [requirement.id, requirement.updatedAt, JSON.stringify(requirement)]);
+      this.run("DELETE FROM requirement_tombstones WHERE id = ?", [requirement.id]);
       this.run("UPDATE tiering_features SET updated_at = ?, payload = ? WHERE id = ?", [linkedFeature.updatedAt, JSON.stringify(linkedFeature), linkedFeature.id]);
       this.db.run("COMMIT");
     } catch (error) {
@@ -490,11 +590,16 @@ export class LocalDatabase {
 
   getWorkspaceData(): WorkspaceData {
     const { templates: _templates, ...data } = this.getSnapshot();
-    return data;
+    return {
+      ...data,
+      requirementTombstones: this.payloads<RequirementTombstone>("requirement_tombstones", "deleted_at DESC, id"),
+      requirementDeletionTrackingStartedAt: this.getPayload<string>("settings", "key", "requirement_deletion_tracking_started_at"),
+    };
   }
 
-  async importWorkspace(incoming: WorkspaceData, mode: WorkspaceImportMode): Promise<AppSnapshot> {
+  async importWorkspace(incoming: WorkspaceData, mode: WorkspaceImportMode, legacyRequirementDecisions: Record<string, LegacyRequirementDecision> = {}): Promise<AppSnapshot> {
     const local = this.getWorkspaceData();
+    const decisionAt = new Date().toISOString();
     const incomingMembers = [...(incoming.members ?? [])];
     const preparedIncoming = {
       ...incoming,
@@ -517,17 +622,24 @@ export class LocalDatabase {
         return updated;
       }),
     };
-    const data = mode === "merge" ? mergeWorkspaceData(local, preparedIncoming) : preparedIncoming;
+    const mergedData = mode === "merge"
+      ? mergeWorkspaceData(local, preparedIncoming, { legacyRequirementDecisions, decisionAt })
+      : prepareReplacementWorkspace(local, preparedIncoming, decisionAt);
+    const data = normalizeWorkspaceTieringScope(mergedData);
     const requirements = data.requirements.map((item) => backfillRequirementOwners(normalizeRequirement(item), data.members ?? []));
     for (const item of requirements) validateRequirementOwners(item, data.members ?? []);
     const tiering = normalizeTieringData(data.tiering ?? EMPTY_TIERING_DATA);
+    const previousBytes = this.db.export();
+    let committed = false;
     this.db.run("BEGIN");
     try {
-      for (const table of ["requirements", "domains", "products", "group_overrides", "members", "tiering_features", "tiering_product_series", "tiering_support_records", "tiering_evidence_sources", "tiering_issues", "tiering_change_logs"]) this.db.run(`DELETE FROM ${table}`);
+      for (const table of ["requirements", "requirement_tombstones", "domains", "products", "group_overrides", "members", "tiering_features", "tiering_product_series", "tiering_support_records", "tiering_evidence_sources", "tiering_issues", "tiering_change_logs"]) this.db.run(`DELETE FROM ${table}`);
       for (const item of requirements) {
         const normalized = normalizeRequirement(item);
         this.run("INSERT INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)", [normalized.id, normalized.updatedAt, JSON.stringify(normalized)]);
       }
+      for (const item of data.requirementTombstones ?? []) this.run("INSERT INTO requirement_tombstones (id, deleted_at, payload) VALUES (?, ?, ?)", [item.id, item.deletedAt, JSON.stringify(item)]);
+      this.run("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)", ["requirement_deletion_tracking_started_at", JSON.stringify(data.requirementDeletionTrackingStartedAt ?? decisionAt)]);
       for (const item of data.domains) {
         const normalized = { ...item, level: item.level ?? "L1" };
         this.run("INSERT INTO domains (id, level, sort_order, name, payload) VALUES (?, ?, ?, ?, ?)", [normalized.id, normalized.level, normalized.sortOrder, normalized.name, JSON.stringify(normalized)]);
@@ -555,16 +667,23 @@ export class LocalDatabase {
       this.reconcileTieringRequirements(true);
       this.ensureTieringSupportMatrix();
       this.db.run("COMMIT");
+      committed = true;
+      await this.persist();
     } catch (error) {
-      this.db.run("ROLLBACK");
+      if (!committed) this.db.run("ROLLBACK");
+      else {
+        this.db.close();
+        this.db = new this.sql.Database(previousBytes);
+      }
       throw error;
     }
-    await this.persist();
     return this.getSnapshot();
   }
 
-  async importWorkspaceWorkbook(prepared: PreparedWorkspaceWorkbookImport, conflictMode: WorkspaceWorkbookConflictMode): Promise<AppSnapshot> {
-    const data = applyPreparedWorkspaceWorkbook(this.getWorkspaceData(), prepared, conflictMode);
+  async importWorkspaceWorkbook(prepared: PreparedWorkspaceWorkbookImport, conflictMode: WorkspaceWorkbookConflictMode, fieldSelection?: WorkspaceWorkbookFieldSelection): Promise<AppSnapshot> {
+    const current = this.getWorkspaceData();
+    const data = applyPreparedWorkspaceWorkbook(current, prepared, conflictMode, new Date().toISOString(), fieldSelection);
+    if (data === current) return this.getSnapshot();
     return this.importWorkspace(data, "replace");
   }
 
@@ -626,6 +745,51 @@ export class LocalDatabase {
       throw error;
     }
     return this.getSnapshot();
+  }
+
+  private syncTieringForRequirement(
+    requirement: Requirement,
+    domains: ReadonlyMap<string, DictionaryItem>,
+    updatedAt: string,
+    previousFeatureId?: string,
+  ): void {
+    if (isTieringEligibleRequirement(requirement)) {
+      this.upsertTieringForRequirement(requirement, domains, updatedAt);
+      return;
+    }
+    this.removeTieringForRequirement(requirement.id, previousFeatureId ?? requirement.tieringFeatureId, updatedAt);
+  }
+
+  private removeTieringForRequirement(requirementId: string, featureId: string | undefined, updatedAt: string): void {
+    const features = normalizeTieringData({
+      features: this.payloads<TieringFeature>("tiering_features", "sort_order, id"),
+    }).features.filter((item) => item.requirementId === requirementId || item.id === featureId);
+    for (const feature of features) {
+      if (feature.requirementId && feature.requirementId !== requirementId) continue;
+      if (isHistoricalTieringFeature(feature)) {
+        if (!feature.requirementId) continue;
+        const unlinked = { ...feature, requirementId: undefined, updatedAt };
+        this.run(
+          "UPDATE tiering_features SET updated_at = ?, payload = ? WHERE id = ?",
+          [unlinked.updatedAt, JSON.stringify(unlinked), unlinked.id],
+        );
+        continue;
+      }
+      this.deleteOrdinaryTieringFeature(feature.id);
+    }
+  }
+
+  private deleteOrdinaryTieringFeature(featureId: string): void {
+    for (const record of this.payloads<TieringSupportRecord>("tiering_support_records", "id").filter((item) => item.featureId === featureId)) {
+      this.run("DELETE FROM tiering_support_records WHERE id = ?", [record.id]);
+    }
+    for (const issue of this.payloads<TieringVerificationIssue>("tiering_issues", "id").filter((item) => item.featureId === featureId)) {
+      this.run("DELETE FROM tiering_issues WHERE id = ?", [issue.id]);
+    }
+    for (const log of this.payloads<TieringChangeLog>("tiering_change_logs", "changed_at DESC, id").filter((item) => item.featureId === featureId)) {
+      this.run("DELETE FROM tiering_change_logs WHERE id = ?", [log.id]);
+    }
+    this.run("DELETE FROM tiering_features WHERE id = ?", [featureId]);
   }
 
   private upsertTieringForRequirement(
@@ -703,11 +867,20 @@ export class LocalDatabase {
     const domains = new Map(this.getSnapshot().domains.map((item) => [item.id, item]));
     const requirements = this.all<{ id: string; payload: string }>("SELECT id, payload FROM requirements")
       .map((row) => normalizeRequirement(JSON.parse(row.payload)));
-    const existingFeatures = normalizeTieringData({ features: this.payloads<TieringFeature>("tiering_features", "sort_order, id") }).features;
     let skippedTieringRequirements = 0;
     if (!transactionOpen) this.db.run("BEGIN");
     try {
-      for (const requirement of requirements) {
+      for (let index = 0; index < requirements.length; index += 1) {
+        const requirement = requirements[index];
+        if (!isTieringEligibleRequirement(requirement)) {
+          this.removeTieringForRequirement(requirement.id, requirement.tieringFeatureId, now);
+          if (requirement.tieringFeatureId) {
+            const withoutTiering = { ...requirement, tieringFeatureId: undefined };
+            this.run("UPDATE requirements SET payload = ? WHERE id = ?", [JSON.stringify(withoutTiering), withoutTiering.id]);
+            requirements[index] = withoutTiering;
+          }
+          continue;
+        }
         const resolvedDomains = resolveTieringRequirementDomains(requirement, [...domains.values()]);
         if (!resolvedDomains) {
           if (!tolerateInvalidDomainLinks) {
@@ -719,8 +892,9 @@ export class LocalDatabase {
         const requirementWithDomain = requirement.domainL0Id === resolvedDomains.domainL0.id
           ? requirement
           : { ...requirement, domainL0Id: resolvedDomains.domainL0.id };
-        const linked = existingFeatures.find((item) => item.id === requirement.tieringFeatureId)
-          ?? existingFeatures.find((item) => item.requirementId === requirement.id);
+        const currentFeatures = normalizeTieringData({ features: this.payloads<TieringFeature>("tiering_features", "sort_order, id") }).features;
+        const linked = currentFeatures.find((item) => item.id === requirement.tieringFeatureId)
+          ?? currentFeatures.find((item) => item.requirementId === requirement.id);
         if (linked && resolveTieringFeature(linked, requirements, [...domains.values()]).invalidLink) {
           if (!tolerateInvalidDomainLinks) throw new Error(`分层规格“${linked.requirementTitle}”的需求关联存在冲突，请先修复关联`);
           skippedTieringRequirements += 1;
@@ -734,12 +908,26 @@ export class LocalDatabase {
         const normalized = withLink;
         if (normalized !== requirement) {
           this.run("UPDATE requirements SET payload = ? WHERE id = ?", [JSON.stringify(normalized), normalized.id]);
+          requirements[index] = normalized;
         }
         const changed = linked && (linked.l0 !== resolvedDomains.domainL0.name || linked.l1 !== resolvedDomains.domainL1.name || linked.requirementTitle !== normalized.title || linked.requirementId !== normalized.id);
         this.upsertTieringForRequirement(normalized, domains, !linked || changed ? now : linked.updatedAt);
       }
-      // A broken association is not authorization to erase a specification or its support history.
-      skippedTieringRequirements += existingFeatures.filter((feature) => feature.requirementId && !requirements.some((item) => item.id === feature.requirementId || item.tieringFeatureId === feature.id)).length;
+      // 普通规格必须依附于一条纳入范围的需求；历史 F001–F156 仍可独立保留以便恢复需求。
+      const reconciledRequirements = this.all<{ payload: string }>("SELECT payload FROM requirements")
+        .map((row) => normalizeRequirement(JSON.parse(row.payload)));
+      const reconciledFeatures = normalizeTieringData({ features: this.payloads<TieringFeature>("tiering_features", "sort_order, id") }).features;
+      for (const feature of reconciledFeatures) {
+        if (isHistoricalTieringFeature(feature)) continue;
+        const linkedRequirements = reconciledRequirements.filter((item) => item.id === feature.requirementId || item.tieringFeatureId === feature.id);
+        if (linkedRequirements.length === 0) {
+          this.deleteOrdinaryTieringFeature(feature.id);
+          continue;
+        }
+        if (linkedRequirements.length !== 1 || !isTieringEligibleRequirement(linkedRequirements[0])) {
+          skippedTieringRequirements += 1;
+        }
+      }
       if (!transactionOpen) this.db.run("COMMIT");
       return skippedTieringRequirements;
     } catch (error) {
@@ -752,6 +940,7 @@ export class LocalDatabase {
     this.db.run(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requirements (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS requirement_tombstones (id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS domains (id TEXT PRIMARY KEY, level TEXT NOT NULL, sort_order INTEGER NOT NULL, name TEXT NOT NULL COLLATE NOCASE, payload TEXT NOT NULL, UNIQUE(level, name));
       CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, sort_order INTEGER NOT NULL, name TEXT NOT NULL COLLATE NOCASE UNIQUE, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS group_overrides (group_key TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload TEXT NOT NULL);
@@ -768,12 +957,20 @@ export class LocalDatabase {
     if (!this.getPayload<PptAccessPolicy>("settings", "key", "ppt_access_policy")) {
       this.run("INSERT INTO settings (key, payload) VALUES (?, ?)", ["ppt_access_policy", JSON.stringify(EMPTY_PPT_ACCESS_POLICY)]);
     }
+    if (!this.getPayload<string>("settings", "key", "requirement_deletion_tracking_started_at")) {
+      this.run("INSERT INTO settings (key, payload) VALUES (?, ?)", ["requirement_deletion_tracking_started_at", JSON.stringify(new Date().toISOString())]);
+    }
     this.migrateDomainLevels();
     this.migrateTieringSchema();
     this.ensureBuiltInTieringProductSeries();
     this.migrateLegacySources();
     this.migrateRequirementScopes();
     this.migrateHistoricalLaunches();
+    for (const row of this.all<{ id: string; payload: string }>("SELECT id, payload FROM tiering_change_logs")) {
+      const raw = JSON.parse(row.payload) as TieringChangeLog;
+      const updated = { ...raw, updatedAt: raw.updatedAt || raw.changedAt };
+      this.run("UPDATE tiering_change_logs SET payload = ? WHERE id = ?", [JSON.stringify(updated), row.id]);
+    }
     const members = this.getSnapshot().members;
     for (const item of this.getSnapshot().requirements) {
       const updated = backfillRequirementOwners(item, members);
@@ -899,14 +1096,36 @@ export class LocalDatabase {
   }
 }
 
+function prepareReplacementWorkspace(local: WorkspaceData, incoming: WorkspaceData, deletedAt: string): WorkspaceData {
+  const incomingIds = new Set(incoming.requirements.map((item) => item.id));
+  const tombstones = new Map((incoming.requirementTombstones ?? []).map((item) => [item.id, item]));
+  for (const requirement of local.requirements) {
+    if (incomingIds.has(requirement.id) || tombstones.has(requirement.id)) continue;
+    tombstones.set(requirement.id, { id: requirement.id, title: requirement.title, deletedAt });
+  }
+  for (const requirement of incoming.requirements) {
+    const tombstone = tombstones.get(requirement.id);
+    if (tombstone && Date.parse(requirement.updatedAt) > Date.parse(tombstone.deletedAt)) tombstones.delete(requirement.id);
+  }
+  const starts = [local.requirementDeletionTrackingStartedAt, incoming.requirementDeletionTrackingStartedAt]
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => Date.parse(b) - Date.parse(a));
+  return {
+    ...incoming,
+    requirementTombstones: [...tombstones.values()],
+    requirementDeletionTrackingStartedAt: starts[0] ?? deletedAt,
+  };
+}
+
 function validateRequirement(input: SaveRequirementInput): void {
   if (!input.title.trim()) throw new Error("需求标题不能为空");
   if (!input.domainL0Id) throw new Error("请选择领域 L0");
   if (!input.domainId) throw new Error("请选择领域 L1");
   if (!REQUIREMENT_SCOPES.includes(input.scope)) throw new Error("请选择有效的适用范围");
   if (typeof input.allowLatestVersionUpgrade !== "boolean") throw new Error("请选择是否允许最近版本升级");
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetMonth)) throw new Error("上线年月格式应为 YYYY-MM");
-  const workloadParts = [input.deviceWorkloadPm, input.appWorkloadPm, input.cloudWorkloadPm];
+  validateRequirementTargetMonth(input.source, input.targetMonth);
+  validateMedicalSubmissionMilestones(input.source, input.targetMonth, input.medicalSubmissionMilestones);
+  const workloadParts = [input.deviceWorkloadPm, input.appWorkloadPm, input.cloudWorkloadPm, input.researchAppWorkloadPm, input.algorithmWorkloadPm];
   if (workloadParts.some((value) => !Number.isFinite(value) || value < 0)) throw new Error("各侧工作量必须是大于或等于0的人月数");
   if (input.description.length > 5000) throw new Error("需求描述不能超过5000字");
   if (input.images.length > MAX_REQUIREMENT_IMAGES) throw new Error(`每条需求最多添加${MAX_REQUIREMENT_IMAGES}张图片`);

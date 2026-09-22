@@ -11,14 +11,15 @@ import type {
 } from "../shared/types.js";
 import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, MEMBER_ROLES, REQUIREMENT_IMAGE_MIME_TYPES, REQUIREMENT_SCOPES, SOURCES } from "../shared/types.js";
 import { normalizeLegacyGroupOverride, normalizeLegacySource, normalizeRequirement } from "../shared/requirements.js";
-import { mergeWorkspaceData, workspaceCounts } from "../shared/workspace.js";
+import { mergeWorkspaceDataWithReport, workspaceCounts } from "../shared/workspace.js";
 import { diffWorkspaceData, workspaceDifferenceDigest } from "../shared/workspaceDiff.js";
 import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizePptAccessPolicy, validateRequirementOwners } from "../shared/members.js";
-import { EMPTY_TIERING_DATA, normalizeTieringData, validateTieringData } from "../shared/tiering.js";
+import { EMPTY_TIERING_DATA, normalizeTieringData, normalizeWorkspaceTieringScope, validateTieringData } from "../shared/tiering.js";
 import { normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
+import { validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission.js";
 
 const PACKAGE_FORMAT = "health-roadmap-workspace";
-const PACKAGE_VERSION = 5;
+const PACKAGE_VERSION = 9;
 const TEMPLATE_VERSION = "v0.1";
 const DATA_PATH = "data.json";
 
@@ -87,6 +88,8 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
 
   const packedData: PackedWorkspaceData = {
     requirements: packedRequirements,
+    requirementTombstones: data.requirementTombstones ?? [],
+    requirementDeletionTrackingStartedAt: data.requirementDeletionTrackingStartedAt,
     domains: normalizeDomains(data.domains),
     products: data.products,
     groupOverrides: data.groupOverrides,
@@ -115,7 +118,7 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
 
 export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, current?: WorkspaceData): Promise<PreparedWorkspaceImport> {
   if (fileName.toLowerCase().endsWith(".json") || firstNonWhitespace(bytes) === "{") {
-    return withMergeDifferences(inspectLegacyBackup(bytes), current);
+    return withMergeDifferences(inspectLegacyBackup(bytes, current), current);
   }
 
   const zip = await JSZip.loadAsync(bytes, { checkCRC32: true });
@@ -140,6 +143,8 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, c
   if (!dataBytes) throw new Error("数据包缺少结构化数据");
   const packedData = JSON.parse(dataBytes.toString("utf8")) as PackedWorkspaceData;
   const data: WorkspaceData = {
+    requirementTombstones: packedData.requirementTombstones ?? [],
+    requirementDeletionTrackingStartedAt: packedData.requirementDeletionTrackingStartedAt,
     domains: normalizeDomains(packedData.domains),
     products: packedData.products,
     groupOverrides: packedData.groupOverrides.map(normalizeLegacyGroupOverride),
@@ -147,7 +152,7 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, c
     pptAccessPolicy: normalizePptAccessPolicy(packedData.pptAccessPolicy),
     tiering: normalizeTieringData(packedData.tiering),
     requirements: packedData.requirements.map((requirement) => ({
-      ...normalizeRequirement({ ...requirement, images: [] }),
+      ...normalizeImportedRequirement({ ...requirement, images: [] }, manifest.formatVersion >= 7),
       images: requirement.images.map((image) => {
         const content = verifiedFiles.get(image.path);
         if (!content) throw new Error(`需求图片缺失：${image.name}`);
@@ -162,29 +167,35 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, c
       }),
     })),
   };
+  if (manifest.formatVersion <= 5 && current) preserveLegacyMedicalMilestones(data, current);
   validateWorkspaceData(data);
   const actualCounts = workspaceCounts(data);
   if (!sameCounts(actualCounts, manifest.counts)) throw new Error("数据包数量清单与实际内容不一致");
+  const normalizedData = normalizeWorkspaceTieringScope(data);
+  validateWorkspaceData(normalizedData);
 
   return withMergeDifferences({
-    data,
+    data: normalizedData,
     preview: {
       sourceFormat: "roadmap",
       packageKind: manifest.packageKind ?? "workspace",
       exportedAt: manifest.exportedAt,
       templateVersion: manifest.templateVersion,
-      counts: actualCounts,
+      counts: workspaceCounts(normalizedData),
       differences: [],
+      ambiguousRequirementIds: [],
       differenceDigest: workspaceDifferenceDigest([]),
     },
   }, current);
 }
 
-function inspectLegacyBackup(bytes: Buffer): PreparedWorkspaceImport {
+function inspectLegacyBackup(bytes: Buffer, current?: WorkspaceData): PreparedWorkspaceImport {
   const backup = JSON.parse(bytes.toString("utf8")) as BackupEnvelope;
   if (backup.schemaVersion !== 1 || !backup.data) throw new Error("不支持的旧版备份格式");
   const data: WorkspaceData = {
-    requirements: backup.data.requirements.map((item) => normalizeRequirement(item)),
+    requirementTombstones: backup.data.requirementTombstones ?? [],
+    requirementDeletionTrackingStartedAt: backup.data.requirementDeletionTrackingStartedAt,
+    requirements: backup.data.requirements.map((item) => normalizeImportedRequirement(item)),
     domains: normalizeDomains(backup.data.domains),
     products: backup.data.products,
     groupOverrides: backup.data.groupOverrides.map(normalizeLegacyGroupOverride),
@@ -192,36 +203,83 @@ function inspectLegacyBackup(bytes: Buffer): PreparedWorkspaceImport {
     pptAccessPolicy: normalizePptAccessPolicy(backup.data.pptAccessPolicy),
     tiering: normalizeTieringData(backup.data.tiering),
   };
+  if (current) preserveLegacyMedicalMilestones(data, current);
   validateWorkspaceData(data);
+  const normalizedData = normalizeWorkspaceTieringScope(data);
+  validateWorkspaceData(normalizedData);
   return {
-    data,
+    data: normalizedData,
     preview: {
       sourceFormat: "legacy-json",
       packageKind: "workspace",
       exportedAt: backup.exportedAt,
       templateVersion: "旧版备份",
-      counts: workspaceCounts(data),
+      counts: workspaceCounts(normalizedData),
       differences: [],
+      ambiguousRequirementIds: [],
       differenceDigest: workspaceDifferenceDigest([]),
     },
   };
 }
 
+function preserveLegacyMedicalMilestones(data: WorkspaceData, current: WorkspaceData): void {
+  const currentById = new Map(current.requirements.map((item) => [item.id, item]));
+  data.requirements = data.requirements.map((item) => {
+    const existing = currentById.get(item.id);
+    return !item.medicalSubmissionMilestones && existing?.medicalSubmissionMilestones
+      ? { ...item, medicalSubmissionMilestones: { ...existing.medicalSubmissionMilestones } }
+      : item;
+  });
+}
+
+function normalizeImportedRequirement(raw: Requirement, requireExtendedWorkload = false): Requirement {
+  if (requireExtendedWorkload && (raw.researchAppWorkloadPm === undefined || raw.algorithmWorkloadPm === undefined)) {
+    throw new Error(`需求“${raw.title}”缺少创新研究 App 或算法工作量字段`);
+  }
+  validateRawWorkload(raw);
+  const normalized = normalizeRequirement(raw);
+  // Preserve absence until merge/replace has been selected. Merge keeps local values;
+  // replace and newly added records are normalized to zero by the database.
+  if (raw.researchAppWorkloadPm === undefined) delete normalized.researchAppWorkloadPm;
+  if (raw.algorithmWorkloadPm === undefined) delete normalized.algorithmWorkloadPm;
+  return normalized;
+}
+
 function withMergeDifferences(prepared: PreparedWorkspaceImport, current?: WorkspaceData): PreparedWorkspaceImport {
   if (!current) return prepared;
-  const differences = diffWorkspaceData(current, mergeWorkspaceData(current, prepared.data));
+  const normalizedCurrent = normalizeWorkspaceTieringScope(current);
+  const merge = mergeWorkspaceDataWithReport(normalizedCurrent, prepared.data, { deferAmbiguousRequirements: true });
+  const finalData = normalizeWorkspaceTieringScope(merge.data);
+  const differences = diffWorkspaceData(normalizedCurrent, finalData);
+  for (const resolution of merge.requirementResolutions) {
+    const existing = differences.find((item) => item.entity === "需求" && item.key === resolution.id);
+    if (resolution.outcome === "restored" && existing) {
+      existing.change = "恢复";
+      existing.fields.unshift({ field: "删除同步", currentValue: `已于 ${resolution.deletedAt ?? "未知时间"} 删除`, incomingValue: `对方于 ${resolution.requirementUpdatedAt} 后续修改` });
+      continue;
+    }
+    if (resolution.outcome === "ignored") {
+      differences.push({ entity: "需求", key: resolution.id, title: resolution.title, change: "忽略", fields: [{ field: "删除同步", currentValue: `已于 ${resolution.deletedAt ?? "未知时间"} 删除`, incomingValue: `旧需求更新时间 ${resolution.requirementUpdatedAt}，保持删除` }] });
+      continue;
+    }
+    if (resolution.outcome === "ambiguous") {
+      differences.push({ entity: "需求", key: resolution.id, title: resolution.title, change: "待确认", decisionRequired: true, fields: [{ field: "旧版新增判断", currentValue: "本机无需求及删除记录，无法判断是否曾被删除", incomingValue: `导入记录更新时间 ${resolution.requirementUpdatedAt}，早于本机删除追踪启用时间` }] });
+    }
+  }
+  const ambiguousRequirementIds = merge.requirementResolutions.filter((item) => item.outcome === "ambiguous").map((item) => item.id).sort();
   return {
     ...prepared,
     preview: {
       ...prepared.preview,
       differences,
+      ambiguousRequirementIds,
       differenceDigest: workspaceDifferenceDigest(differences),
     },
   };
 }
 
 function validateManifest(value: WorkspacePackageManifest): void {
-  if (value?.format !== PACKAGE_FORMAT || ![1, 2, 3, 4, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
+  if (value?.format !== PACKAGE_FORMAT || ![1, 2, 3, 4, 5, 6, 7, 8, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
   if (value.packageKind && !["workspace", "tiering-seed"].includes(value.packageKind)) throw new Error("数据包类型无效");
   if (value.dataPath !== DATA_PATH || !value.files || !value.files[DATA_PATH]) throw new Error("数据包清单不完整");
   if (!value.exportedAt || !value.templateVersion || !value.counts) throw new Error("数据包元信息不完整");
@@ -241,6 +299,12 @@ export function validateWorkspaceData(data: WorkspaceData): void {
   const domainsById = new Map(data.domains.map((item) => [item.id, { ...item, level: item.level ?? "L1" }]));
   const productIds = validateDictionaries(data.products, "产品");
   const requirementIds = new Set<string>();
+  const tombstoneIds = new Set<string>();
+  for (const tombstone of data.requirementTombstones ?? []) {
+    if (!tombstone?.id || tombstoneIds.has(tombstone.id) || !validTimestamp(tombstone.deletedAt)) throw new Error("数据包包含无效或重复的需求删除记录");
+    tombstoneIds.add(tombstone.id);
+  }
+  if (data.requirementDeletionTrackingStartedAt && !validTimestamp(data.requirementDeletionTrackingStartedAt)) throw new Error("数据包的需求删除追踪时间无效");
 
   for (const domain of domainsById.values()) {
     if (domain.level === "L0" && domain.parentId) throw new Error(`领域 L0“${domain.name}”不能设置上游领域`);
@@ -251,6 +315,7 @@ export function validateWorkspaceData(data: WorkspaceData): void {
 
   for (const raw of data.requirements) {
     validateRawWorkload(raw);
+    if (raw.medicalRoadmapSortOrder !== undefined && (!Number.isSafeInteger(raw.medicalRoadmapSortOrder) || raw.medicalRoadmapSortOrder < 0)) throw new Error(`需求“${raw.title}”的医疗泳道顺序无效`);
     const rawScope = (raw as Requirement & { scope?: unknown }).scope;
     if (rawScope !== undefined && !REQUIREMENT_SCOPES.includes(rawScope as Requirement["scope"])) {
       throw new Error(`需求“${raw.title}”的适用范围无效`);
@@ -270,7 +335,12 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (!domainIds.has(item.domainId) || domainsById.get(item.domainId)?.level !== "L1") throw new Error(`需求“${item.title}”引用了不存在的领域 L1`);
     if (item.domainL0Id && domainsById.get(item.domainId)?.parentId !== item.domainL0Id) throw new Error(`需求“${item.title}”的领域 L1 不属于所选领域 L0`);
     if (!SOURCES.includes(item.source) || !CATEGORIES.includes(item.category)) throw new Error(`需求“${item.title}”的来源或分类无效`);
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(item.targetMonth)) throw new Error(`需求“${item.title}”的上线年月无效`);
+    try {
+      validateRequirementTargetMonth(item.source, item.targetMonth);
+      validateMedicalSubmissionMilestones(item.source, item.targetMonth, item.medicalSubmissionMilestones);
+    } catch (error) {
+      throw new Error(`需求“${item.title}”的${error instanceof Error ? error.message : "医疗认证时间节点无效"}`);
+    }
     if (item.historicalLaunch && item.historicalLaunch.suggestedTargetMonth !== item.targetMonth) {
       throw new Error(`需求“${item.title}”的历史上线时间与需求月份不一致`);
     }
@@ -327,7 +397,7 @@ export function validateWorkspaceData(data: WorkspaceData): void {
 
 function validateRawWorkload(raw: Requirement): void {
   const keys = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "unallocatedWorkloadPm"] as const;
-  const hasBreakdown = keys.some((key) => Object.prototype.hasOwnProperty.call(raw, key));
+  const hasBreakdown = [...keys, "researchAppWorkloadPm", "algorithmWorkloadPm"].some((key) => Object.prototype.hasOwnProperty.call(raw, key));
   if (!hasBreakdown) {
     if (!Number.isFinite(raw.workloadPm) || raw.workloadPm < 0) throw new Error(`需求“${raw.title}”的工作量无效`);
     return;
@@ -336,7 +406,11 @@ function validateRawWorkload(raw: Requirement): void {
     const value = raw[key];
     if (!Number.isFinite(value) || value < 0) throw new Error(`需求“${raw.title}”的${key === "deviceWorkloadPm" ? "设备" : key === "appWorkloadPm" ? "App" : key === "cloudWorkloadPm" ? "云侧" : "待拆分"}工作量无效`);
   }
-  const total = raw.deviceWorkloadPm + raw.appWorkloadPm + raw.cloudWorkloadPm + raw.unallocatedWorkloadPm;
+  for (const [key, label] of [["researchAppWorkloadPm", "创新研究 App"], ["algorithmWorkloadPm", "算法"]] as const) {
+    const value = raw[key];
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) throw new Error(`需求“${raw.title}”的${label}工作量无效`);
+  }
+  const total = raw.deviceWorkloadPm + raw.appWorkloadPm + raw.cloudWorkloadPm + raw.unallocatedWorkloadPm + (raw.researchAppWorkloadPm ?? 0) + (raw.algorithmWorkloadPm ?? 0);
   if (!Number.isFinite(raw.workloadPm) || Math.abs(total - raw.workloadPm) > 0.001) {
     throw new Error(`需求“${raw.title}”的工作量合计不一致`);
   }
@@ -410,6 +484,7 @@ function validTimestamp(value: string): boolean {
 
 function sameCounts(left: WorkspacePackageCounts, right: WorkspacePackageCounts): boolean {
   return left.requirements === right.requirements
+    && (right.requirementTombstones === undefined || left.requirementTombstones === right.requirementTombstones)
     && left.images === right.images
     && left.domains === right.domains
     && left.products === right.products

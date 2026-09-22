@@ -4,6 +4,7 @@ import {
   halfYearOf,
   halfYearSequence,
   requirementsInRange,
+  medicalRoadmapTimelineMonths,
   type HalfYearSummary,
   type RoadmapGroup,
 } from "./roadmap.js";
@@ -23,6 +24,7 @@ export interface PptRoadmapPagePlan {
   track: Track;
   halfYears: string[];
   groups: RoadmapGroup[];
+  medicalMonths?: string[];
 }
 
 export interface PptExportPlan {
@@ -62,10 +64,12 @@ export function buildPptExportPlan(snapshot: AppSnapshot, startOrRequest: string
   const requirements = requirementsInRange(snapshot.requirements, request.start, request.end);
   const summaries = buildHalfYearSummaries(snapshot.requirements, request.start, request.end);
   const groups = buildRoadmapGroups(snapshot, request.start, request.end);
+  const medicalGroups = buildRoadmapGroups(snapshot, request.start, request.end, { medicalDemandRows: true }).filter((group) => group.track === "医疗认证");
   const roadmapPages = ROADMAP_TRACKS.filter((track) => request.sections.includes(track)).map((track) => ({
     track,
     halfYears,
-    groups: groups.filter((group) => group.track === track),
+    groups: track === "医疗认证" ? medicalGroups : groups.filter((group) => group.track === track),
+    ...(track === "医疗认证" ? { medicalMonths: medicalRoadmapTimelineMonths(medicalGroups) } : {}),
   }));
   return {
     start: request.start,

@@ -2,18 +2,22 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent a
 import { IconTrendingUp } from "@tabler/icons-react";
 import {
   buildHalfYearSummaries,
+  analysisWorkloadTotal,
   buildRoadmapGroups,
   categoryPercentagesForSide,
   formatHalfYearWithHmos,
   groupMatchesRoadmapLane,
+  halfYearOf,
   halfYearSequence,
   hmosVersionForMonth,
+  medicalRoadmapDemandRows,
+  medicalRoadmapTimelineMonths,
   monthsForHalfYear,
   roadmapCardLabel,
-  roadmapCardDisplayParts,
   roadmapLanesForTrack,
   moveRoadmapGroupKey,
   roadmapMonthColumnTemplateForTrack,
+  roadmapGroupForRequirement,
   roadmapPrimaryLane,
   roadmapTrackOrder,
   requirementsInRange,
@@ -24,12 +28,14 @@ import {
 } from "../shared/roadmap";
 import { latestRequirementSelections } from "../shared/entryDefaults";
 import { ALL_DICTIONARY_PARENTS, domainFilterSelection, filterDictionaryItemsByParent, toggleDomainSelection } from "../shared/dictionaries";
-import { filterRequirements, filterRequirementsForRegion, listReleaseVersionOptions, type RoadmapRegion } from "../shared/requirements";
+import { compactRequirementScope, filterRequirements, filterRequirementsForRegion, listReleaseVersionOptions, requirementPoolTitle, type RoadmapRegion } from "../shared/requirements";
 import { filterMembers, isMemberFilterValid, requirementMatchesResponsibleMember, responsibleMembers, savedResponsibleMembers, REQUIREMENT_OWNER_FIELDS, type RequirementOwnerKey, UNASSIGNED_MEMBER, visibleMembersForRole } from "../shared/members";
 import { formatHistoricalLaunch, historicalLaunchStatusLabel } from "../shared/tieringLaunches";
+import { isTieringEligibleRequirement } from "../shared/tiering";
 import { restoreFocusAfterConfirmation } from "./confirmation";
 import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS } from "../shared/pptExport";
 import { moveImageViewerIndex } from "./imageViewer";
+import { formatMedicalSubmissionMonth, initialRequirementTargetMonth, isMedicalSubmissionSource, medicalSubmissionTimeline, validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission";
 import { TieringPage } from "./TieringPage";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
 import {
@@ -46,6 +52,7 @@ import {
   type AppSnapshot,
   type DictionaryItem,
   type IrmEnvironmentStatus,
+  type LegacyRequirementDecision,
   type Member,
   type MemberRole,
   type Requirement,
@@ -63,16 +70,20 @@ import {
   type WorkspaceImportPreview,
   type WorkspaceWorkbookConflictMode,
   type WorkspaceWorkbookImportPreview,
+  type WorkspaceWorkbookFieldSelection,
 } from "../shared/types";
 import {
   isWorkloadPendingEvaluation,
   normalizeWorkloadEdit,
   parseWorkloadPart,
+  roundWorkload,
   sumWorkloadBreakdown,
   workloadBreakdownOf,
+  WORKLOAD_INPUTS,
   type WorkloadBreakdown,
   type WorkloadSide,
 } from "../shared/workload";
+import { moveMedicalRoadmapRow } from "../shared/medicalRoadmapOrder";
 
 type Page = "requirements" | "summary" | "roadmap" | "tiering" | "dictionaries" | "template";
 
@@ -93,8 +104,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.8.10",
-  releasedAt: "2026-09-04",
+  version: "0.8.26",
+  releasedAt: "2026-09-22",
   author: "林忠维",
 };
 
@@ -129,8 +140,8 @@ const SOURCE_COLORS: Record<RequirementSource, string> = {
   AI运动: "#5b6ee1",
   AI健康: "#8b5cf6",
   AI综合: "#b14ac4",
-  NMPA送检: "#d64d85",
-  CE送检: "#287ef0",
+  NMPA认证: "#d64d85",
+  CE认证: "#287ef0",
 };
 
 const TRACK_COLORS: Record<Track, string> = {
@@ -140,12 +151,12 @@ const TRACK_COLORS: Record<Track, string> = {
   全场景: "#5b6ee1",
   health平台: "#11a8c7",
   AI: "#8b5cf6",
-  医疗送检: "#d64d85",
+  医疗认证: "#d64d85",
 };
 
 const WORKLOAD_SIDE_META: Record<WorkloadSide, { label: string; color: string }> = {
   device: { label: "设备侧", color: "#12a99a" },
-  app: { label: "App 侧", color: "#287ef0" },
+  app: { label: "运动健康 App", color: "#287ef0" },
   cloud: { label: "云侧", color: "#7357d9" },
 };
 
@@ -157,7 +168,7 @@ export default function App() {
   const [notice, setNotice] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [editor, setEditor] = useState<Requirement | "new" | null>(null);
-  const [selectedGroupContext, setSelectedGroupContext] = useState<{ key: string; region: RoadmapRegion | null } | null>(null);
+  const [selectedGroupContext, setSelectedGroupContext] = useState<{ key: string; region: RoadmapRegion | null; requirementId?: string } | null>(null);
   const [summaryStartHalf, setSummaryStartHalf] = useState(DEFAULT_START_HALF);
   const [summaryEndHalf, setSummaryEndHalf] = useState(DEFAULT_END_HALF);
   const [roadmapStartHalf, setRoadmapStartHalf] = useState(DEFAULT_START_HALF);
@@ -179,8 +190,25 @@ export default function App() {
     window.roadmapApi
       .getSnapshot()
       .then(setSnapshot)
-      .catch((reason) => setError(messageOf(reason)))
-      .finally(() => setLoading(false));
+      .catch((reason) => {
+        setError(messageOf(reason));
+        void window.roadmapApi.reportRendererDiagnostic({ event: "renderer-error", detail: messageOf(reason) });
+      })
+      .finally(() => {
+        setLoading(false);
+        void window.roadmapApi.reportRendererDiagnostic({ event: "renderer-ready", detail: "app-mounted-and-snapshot-request-complete" });
+      });
+  }, []);
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => void window.roadmapApi.reportRendererDiagnostic({ event: "renderer-error", detail: event.message });
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => void window.roadmapApi.reportRendererDiagnostic({ event: "renderer-unhandled-rejection", detail: messageOf(event.reason) });
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+    };
   }, []);
 
   useEffect(() => {
@@ -221,7 +249,7 @@ export default function App() {
 
   const groups = useMemo(() => {
     try {
-      return buildRoadmapGroups(snapshot, roadmapStartHalf, roadmapEndHalf);
+      return buildRoadmapGroups(snapshot, roadmapStartHalf, roadmapEndHalf, { medicalDemandRows: true, medicalRange: "selected" });
     } catch {
       return [];
     }
@@ -234,6 +262,7 @@ export default function App() {
           { ...snapshot, requirements: filterRequirementsForRegion(snapshot.requirements, region) },
           roadmapStartHalf,
           roadmapEndHalf,
+          { medicalDemandRows: true, medicalRange: "selected" },
         );
       } catch {
         return [];
@@ -241,10 +270,13 @@ export default function App() {
     };
     return { domestic: build("domestic"), overseas: build("overseas") };
   }, [snapshot, roadmapStartHalf, roadmapEndHalf]);
-  const selectedGroup = selectedGroupContext
-    ? (selectedGroupContext.region ? regionalGroups[selectedGroupContext.region] : groups)
-      .find((item) => item.key === selectedGroupContext.key) ?? null
-    : null;
+  const selectedGroup = (() => {
+    if (!selectedGroupContext) return null;
+    const group = (selectedGroupContext.region ? regionalGroups[selectedGroupContext.region] : groups)
+      .find((item) => item.key === selectedGroupContext.key) ?? null;
+    if (!group || !selectedGroupContext.requirementId) return group;
+    return roadmapGroupForRequirement(group, selectedGroupContext.requirementId);
+  })();
   const summaries = useMemo(() => {
     try {
       return buildHalfYearSummaries(snapshot.requirements, summaryStartHalf, summaryEndHalf);
@@ -366,6 +398,14 @@ export default function App() {
           </div>
           <small>制作者：{appInfo.author}</small>
           <button type="button" className="about-trigger" onClick={() => setAboutOpen(true)}>使用说明与版本信息</button>
+          <button type="button" className="about-trigger diagnostics-trigger" onClick={async () => {
+            try {
+              const info = await window.roadmapApi.openDiagnosticDirectory();
+              setNotice(`已打开诊断日志目录：${info.directory}`);
+            } catch (reason) {
+              setError(messageOf(reason));
+            }
+          }}>打开诊断日志目录</button>
         </div>
       </aside>
 
@@ -411,9 +451,12 @@ export default function App() {
                 setRoadmapRegion(region);
                 setSelectedGroupContext(null);
               }}
-              onOpenGroup={(group, region) => setSelectedGroupContext({ key: group.key, region })}
+              onOpenGroup={(group, region, requirementId) => setSelectedGroupContext({ key: group.key, region, requirementId })}
               onReorderGroups={async (input) => {
                 await update(() => window.roadmapApi.saveGroupOrder(input), "卡片顺序已更新");
+              }}
+              onReorderMedicalRows={async (requirementIds) => {
+                await update(() => window.roadmapApi.saveMedicalRoadmapOrder({ requirementIds }), "医疗泳道顺序已更新");
               }}
             />
           )}
@@ -437,6 +480,13 @@ export default function App() {
               onSaveSupport={async (input) => { await update(() => window.roadmapApi.saveTieringSupport(input), "系列支持状态已保存"); }}
               onOpenRequirement={setEditor}
               onRegenerateRequirement={async (featureId) => { await update(() => window.roadmapApi.regenerateTieringRequirement(featureId), "历史需求已重新生成"); }}
+              onUpdateChangeLog={async (input) => { await update(() => window.roadmapApi.updateTieringChangeLog(input), "变更记录已更新"); }}
+              onDeleteChangeLog={(log, trigger) => requestConfirmation({
+                title: "永久删除变更记录",
+                message: `确认永久删除 ${log.featureId}${log.seriesId ? ` / ${log.seriesId}` : ""} 的这条变更记录？当前系列支持状态不会改变。`,
+                confirmLabel: "永久删除",
+                action: async () => { await update(() => window.roadmapApi.deleteTieringChangeLog(log.id), "变更记录已永久删除"); },
+              }, trigger)}
             />
           )}
           {page === "template" && (
@@ -473,9 +523,9 @@ export default function App() {
                   return undefined;
                 }
               }}
-              onApplyWorkspace={async (token, mode, differenceDigest) => {
+              onApplyWorkspace={async (token, mode, differenceDigest, legacyRequirementDecisions) => {
                 try {
-                  const result = await window.roadmapApi.applyWorkspacePackage({ token, mode, differenceDigest });
+                  const result = await window.roadmapApi.applyWorkspacePackage({ token, mode, differenceDigest, legacyRequirementDecisions });
                   setSnapshot(result.snapshot);
                   setNotice(mode === "merge" ? "数据包已合并导入" : "数据包已整体替换导入");
                   return true;
@@ -487,7 +537,15 @@ export default function App() {
               onExportWorkbook={async () => {
                 try {
                   const result = await window.roadmapApi.exportWorkspaceWorkbook({ start: exportStartHalf, end: exportEndHalf });
-                  if (!result.canceled) setNotice(`协作 Excel 已导出：${result.path}`);
+                  if (!result.canceled) setNotice(`需求池 Excel 已导出：${result.path}`);
+                } catch (reason) {
+                  setError(messageOf(reason));
+                }
+              }}
+              onExportTieringWorkbook={async () => {
+                try {
+                  const result = await window.roadmapApi.exportTieringWorkbook({ start: exportStartHalf, end: exportEndHalf });
+                  if (!result.canceled) setNotice(`分层分级 Excel 已导出：${result.path}`);
                 } catch (reason) {
                   setError(messageOf(reason));
                 }
@@ -501,11 +559,11 @@ export default function App() {
                   return undefined;
                 }
               }}
-              onApplyWorkbook={async (token, conflictMode, differenceDigest) => {
+              onApplyWorkbook={async (token, conflictMode, differenceDigest, fieldSelection) => {
                 try {
-                  const result = await window.roadmapApi.applyWorkspaceWorkbook({ token, conflictMode, differenceDigest });
+                  const result = await window.roadmapApi.applyWorkspaceWorkbook({ token, conflictMode, differenceDigest, fieldSelection });
                   setSnapshot(result.snapshot);
-                  setNotice(conflictMode === "local-wins" ? "协作 Excel 已合并，冲突保留本机版本" : "协作 Excel 已合并，冲突采用 Excel 版本");
+                  setNotice(fieldSelection ? "已合入勾选的 Excel 差异" : conflictMode === "local-wins" ? "协作 Excel 已合并，冲突保留本机版本" : "协作 Excel 已合并，冲突采用 Excel 版本");
                   return true;
                 } catch (reason) {
                   setError(messageOf(reason));
@@ -549,6 +607,7 @@ export default function App() {
                 { ...nextSnapshot, requirements: visibleRequirements },
                 roadmapStartHalf,
                 roadmapEndHalf,
+                { medicalDemandRows: true, medicalRange: "selected" },
               );
               const nextGroup = nextGroups.find((group) => group.requirements.some((item) => item.id === input.id));
               if (nextGroup) {
@@ -715,8 +774,8 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
             <table className="requirements-table">
               <colgroup>
                 <col className="requirement-col-title" />
-                <col className="requirement-col-domain" />
                 <col className="requirement-col-source" />
+                <col className="requirement-col-scope" />
                 <col className="requirement-col-month" />
                 <col className="requirement-col-product" />
                 <col className="requirement-col-owner" />
@@ -725,14 +784,14 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
                 <col className="requirement-col-workload" />
                 <col className="requirement-col-actions" />
               </colgroup>
-              <thead><tr><th>需求标题</th><th>领域 L1</th><th>来源</th><th>上线月份 / 版本</th><th>匹配产品</th><th>规划</th><th>产品经理</th><th>SE</th><th className="numeric">工作量</th><th /></tr></thead>
+              <thead><tr><th>需求标题</th><th>来源</th><th>适用范围</th><th>上线月份 / 版本</th><th>匹配产品</th><th>规划</th><th>产品经理</th><th>SE</th><th className="numeric">工作量</th><th /></tr></thead>
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
-                    <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={item.title}>{item.title}</strong><div className="requirement-badges">{item.historicalLaunch && <span className="historical-baseline-badge">历史基线</span>}{item.historicalLaunch?.verificationStatus === "pending" && <span className="historical-pending-badge">{historicalLaunchStatusLabel(item.historicalLaunch)}</span>}{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></div></td>
-                    <td>{domains.get(item.domainId) ?? "未命名"}</td>
+                    <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={requirementPoolTitle(domains.get(item.domainId), item.title)}>{requirementPoolTitle(domains.get(item.domainId), item.title)}</strong><div className="requirement-badges">{item.historicalLaunch && <span className="historical-baseline-badge">历史基线</span>}{item.historicalLaunch?.verificationStatus === "pending" && <span className="historical-pending-badge">{historicalLaunchStatusLabel(item.historicalLaunch)}</span>}{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></div></td>
                     <td><SourceBadge source={item.source} /></td>
-                    <td><div className="release-cell"><b>{formatRequirementLaunch(item)}</b><small>{hmosVersionForMonth(item.targetMonth)}</small></div></td>
+                    <td><ScopeBadge scope={item.scope} compact /></td>
+                    <td><div className="release-cell"><b>{formatRequirementLaunch(item)}</b>{item.targetMonth && <small>{hmosVersionForMonth(item.targetMonth)}</small>}</div></td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
                     <td><ResponsibilityCell members={savedResponsibleMembers(item, snapshot.members, "规划")} /></td>
                     <td><ResponsibilityCell members={savedResponsibleMembers(item, snapshot.members, "产品经理")} /></td>
@@ -750,12 +809,13 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
   );
 }
 
-function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
+export function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
   const [selectedSide, setSelectedSide] = useState<WorkloadSide>("device");
   const device = summaries.reduce((sum, item) => sum + item.deviceWorkload, 0);
   const app = summaries.reduce((sum, item) => sum + item.appWorkload, 0);
   const cloud = summaries.reduce((sum, item) => sum + item.cloudWorkload, 0);
-  const total = device + app + cloud;
+  const researchApp = summaries.reduce((sum, item) => sum + item.researchAppWorkload, 0);
+  const total = analysisWorkloadTotal(summaries);
   const trackWorkload = Object.fromEntries(ROADMAP_TRACKS.map((track) => [
     track,
     summaries.reduce((sum, item) => sum + item.byTrack[track], 0),
@@ -779,16 +839,17 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
   return (
     <>
       <div className="metric-row summary-kpis">
-        <Metric label="总工作量（三端合计）" value={formatNumber(total)} suffix="人月" accent="ink" />
+        <Metric label="总工作量（四项合计）" value={formatNumber(total)} suffix="人月" accent="ink" />
         <Metric label="设备侧总工作量" value={formatNumber(device)} suffix="人月" accent="cyan" />
-        <Metric label="App 侧总工作量" value={formatNumber(app)} suffix="人月" accent="blue" />
+        <Metric label="运动健康 App 总工作量" value={formatNumber(app)} suffix="人月" accent="blue" />
         <Metric label="云侧总工作量" value={formatNumber(cloud)} suffix="人月" accent="violet" />
       </div>
-      {unallocated > 0 && <div className="workload-warning">选定区间仍有 {formatNumber(unallocated)} 人月历史工作量待拆分，当前不会计入三侧明细。</div>}
+      <div className="workload-warning">创新研究 App {formatNumber(researchApp)} 人月已计入总工作量，未纳入下方三端图表。算法工作量不纳入本页汇总分析。</div>
+      {unallocated > 0 && <div className="workload-warning">选定区间仍有 {formatNumber(unallocated)} 人月历史工作量待拆分，当前不会计入四项合计或下方图表。</div>}
       <div className="summary-pies">
-        <DonutChart title="三端投入占比" subtitle="设备 / App / 云侧" items={[
+        <DonutChart title="三端投入占比" subtitle="设备 / 运动健康 App / 云侧" items={[
           { label: "设备侧", value: device, color: WORKLOAD_SIDE_META.device.color },
-          { label: "App 侧", value: app, color: WORKLOAD_SIDE_META.app.color },
+          { label: "运动健康 App", value: app, color: WORKLOAD_SIDE_META.app.color },
           { label: "云侧", value: cloud, color: WORKLOAD_SIDE_META.cloud.color },
         ]} />
         <DonutChart title="各路标来源投入占比" subtitle="按需求来源归属" items={ROADMAP_TRACKS.map((track) => ({
@@ -804,7 +865,7 @@ function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
       </div>
       <div className="summary-charts">
         <div className="panel summary-chart-panel">
-          <PanelTitle title="三端投入工作量" subtitle="固定展示设备侧、App 侧、云侧 · 单位：人月" />
+          <PanelTitle title="三端投入工作量" subtitle="固定展示设备、运动健康 App、云侧 · 单位：人月" />
           <ThreeSideBarChart summaries={summaries} />
           <div className="chart-legend">{(["device", "app", "cloud"] as WorkloadSide[]).map((side) => <span key={side}><i style={{ background: WORKLOAD_SIDE_META[side].color }} />{WORKLOAD_SIDE_META[side].label}</span>)}</div>
         </div>
@@ -841,7 +902,7 @@ function DonutChart({ title, subtitle, items, action }: { title: string; subtitl
             const segment = total ? (item.value / total) * 100 : 0;
             const start = offset;
             offset += segment;
-            return <circle key={item.label} cx="21" cy="21" r="15.9155" fill="none" stroke={item.color} strokeWidth="7" pathLength="100" strokeDasharray={`${segment} ${100 - segment}`} strokeDashoffset={-start} transform="rotate(-90 21 21)"><title>{item.label}：{formatNumber(item.value)} 人月，占 {total ? Math.round(segment) : 0}%</title></circle>;
+            return <circle key={item.label} cx="21" cy="21" r="15.9155" fill="none" stroke={item.color} strokeWidth="7" pathLength="100" strokeDasharray={`${segment} ${100 - segment}`} strokeDashoffset={-start} transform="rotate(-90 21 21)"><title>{`${item.label}：${formatNumber(item.value)} 人月，占 ${total ? Math.round(segment) : 0}%`}</title></circle>;
           })}
           <text x="21" y="20" textAnchor="middle" className="donut-total">{formatNumber(total)}</text>
           <text x="21" y="25" textAnchor="middle" className="donut-unit">人月</text>
@@ -869,12 +930,12 @@ function ThreeSideBarChart({ summaries }: { summaries: HalfYearSummary[] }) {
   const y = (value: number) => top + chartHeight - (value / max) * chartHeight;
   const ticks = [0, 0.25, 0.5, 0.75, 1];
   return (
-    <svg className="summary-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="设备侧、App侧、云侧投入工作量柱状图">
+    <svg className="summary-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="设备、运动健康 App、云侧投入工作量柱状图">
       {ticks.map((ratio) => { const tickY = top + chartHeight * (1 - ratio); return <g key={ratio}><line x1={left} x2={width - right} y1={tickY} y2={tickY} stroke="#e8edef" /><text x={left - 10} y={tickY + 4} textAnchor="end">{formatNumber(max * ratio)}</text></g>; })}
       {summaries.map((item, index) => {
         const center = left + groupWidth * (index + 0.5);
         const start = center - groupBarsWidth / 2;
-        return <g key={item.halfYear}>{(["device", "app", "cloud"] as WorkloadSide[]).map((side, sideIndex) => { const value = item.bySide[side]; return <rect key={side} x={start + sideIndex * (barWidth + gap)} y={y(value)} width={barWidth} height={Math.max(0, top + chartHeight - y(value))} rx="3" fill={WORKLOAD_SIDE_META[side].color}><title>{shortHalf(item.halfYear)} · {WORKLOAD_SIDE_META[side].label}：{formatNumber(value)} 人月</title></rect>; })}<text x={center} y={height - 17} textAnchor="middle">{shortHalf(item.halfYear)}</text></g>;
+        return <g key={item.halfYear}>{(["device", "app", "cloud"] as WorkloadSide[]).map((side, sideIndex) => { const value = item.bySide[side]; return <rect key={side} x={start + sideIndex * (barWidth + gap)} y={y(value)} width={barWidth} height={Math.max(0, top + chartHeight - y(value))} rx="3" fill={WORKLOAD_SIDE_META[side].color}><title>{`${shortHalf(item.halfYear)} · ${WORKLOAD_SIDE_META[side].label}：${formatNumber(value)} 人月`}</title></rect>; })}<text x={center} y={height - 17} textAnchor="middle">{shortHalf(item.halfYear)}</text></g>;
       })}
     </svg>
   );
@@ -903,14 +964,14 @@ function SideCategoryChart({ summaries, side }: { summaries: HalfYearSummary[]; 
         const start = x(index) - groupBarsWidth / 2;
         return <g key={item.halfYear}>{CATEGORIES.map((category, categoryIndex) => {
           const percentage = percentages[category];
-          return <rect key={category} x={start + categoryIndex * (barWidth + barGap)} y={percentY(percentage)} width={barWidth} height={Math.max(0, top + chartHeight - percentY(percentage))} rx="3" fill={CATEGORY_META[category].background} stroke={CATEGORY_META[category].color} strokeWidth="1"><title>{shortHalf(item.halfYear)} · {category}占比：{formatNumber(percentage)}%</title></rect>;
+          return <rect key={category} x={start + categoryIndex * (barWidth + barGap)} y={percentY(percentage)} width={barWidth} height={Math.max(0, top + chartHeight - percentY(percentage))} rx="3" fill={CATEGORY_META[category].background} stroke={CATEGORY_META[category].color} strokeWidth="1"><title>{`${shortHalf(item.halfYear)} · ${category}占比：${formatNumber(percentage)}%`}</title></rect>;
         })}<text x={x(index)} y={height - 17} textAnchor="middle">{shortHalf(item.halfYear)}</text></g>;
       })}
     </svg>
   );
 }
 
-function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onRegionChange, onOpenGroup, onReorderGroups }: {
+function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onRegionChange, onOpenGroup, onReorderGroups, onReorderMedicalRows }: {
   groups: RoadmapGroup[];
   focusGroups: RoadmapGroup[];
   start: string;
@@ -918,8 +979,9 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
   focusMode: boolean;
   region: RoadmapRegion;
   onRegionChange: (region: RoadmapRegion) => void;
-  onOpenGroup: (group: RoadmapGroup, region: RoadmapRegion | null) => void;
+  onOpenGroup: (group: RoadmapGroup, region: RoadmapRegion | null, requirementId?: string) => void;
   onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
+  onReorderMedicalRows: (requirementIds: string[]) => Promise<void>;
 }) {
   const tracks = roadmapTrackOrder(groups);
   const [focusIndex, setFocusIndex] = useState(0);
@@ -954,8 +1016,9 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
             focusActive={focusMode && index === focusIndex}
             region={region}
             onRegionChange={onRegionChange}
-            onOpenGroup={(group) => onOpenGroup(group, focusMode ? region : null)}
+            onOpenGroup={(group, requirementId) => onOpenGroup(group, focusMode ? region : null, requirementId)}
             onReorderGroups={onReorderGroups}
+            onReorderMedicalRows={onReorderMedicalRows}
           />
         </div>
       ))}
@@ -982,7 +1045,7 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
   );
 }
 
-function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup, onReorderGroups }: {
+interface RoadmapBoardProps {
   title: string;
   track: Track;
   groups: RoadmapGroup[];
@@ -992,9 +1055,201 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
   focusActive: boolean;
   region: RoadmapRegion;
   onRegionChange: (region: RoadmapRegion) => void;
-  onOpenGroup: (group: RoadmapGroup) => void;
+  onOpenGroup: (group: RoadmapGroup, requirementId?: string) => void;
   onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
-}) {
+  onReorderMedicalRows: (requirementIds: string[]) => Promise<void>;
+}
+
+function RoadmapBoard(props: RoadmapBoardProps) {
+  if (props.track === "医疗认证") return <MedicalSubmissionRoadmapBoard {...props} />;
+  return <StandardRoadmapBoard {...props} />;
+}
+
+export function MedicalSubmissionRoadmapBoard({ title, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup, onReorderMedicalRows }: RoadmapBoardProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pendingMonthAnchorRef = useRef<RoadmapMonthAnchor | null>(null);
+  const [hoveredRequirementId, setHoveredRequirementId] = useState<string | null>(null);
+  const [focusedRequirementId, setFocusedRequirementId] = useState<string | null>(null);
+  const dragIdRef = useRef<string | null>(null);
+  const suppressOpenRef = useRef(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [orderSaving, setOrderSaving] = useState(false);
+  const [dropTarget, setDropTarget] = useState<{ id: string; placement: "before" | "after" } | null>(null);
+  const rows = medicalRoadmapDemandRows(groups);
+  const timelineMonths = medicalRoadmapTimelineMonths(groups, start, end);
+  const timelineHalves = [...new Set(timelineMonths.map(halfYearOf))];
+  const timelineWidth = Math.max(360, timelineMonths.length * 72);
+  const reorderEnabled = !focusMode && rows.length > 1 && !orderSaving;
+
+  function finishDrag() {
+    dragIdRef.current = null;
+    setDraggingId(null);
+    setDropTarget(null);
+    window.setTimeout(() => { suppressOpenRef.current = false; }, 0);
+  }
+
+  function openRow(group: RoadmapGroup, requirementId: string) {
+    if (!suppressOpenRef.current) onOpenGroup(group, requirementId);
+  }
+
+  async function dropRow(event: ReactDragEvent<HTMLDivElement>, targetId: string) {
+    if (!reorderEnabled || !dragIdRef.current || dragIdRef.current === targetId) return;
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const placement = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+    const ids = rows.map((row) => row.requirement.id);
+    const next = moveMedicalRoadmapRow(ids, dragIdRef.current, targetId, placement);
+    finishDrag();
+    if (next.every((id, index) => id === ids[index])) return;
+    setOrderSaving(true);
+    try { await onReorderMedicalRows(next); }
+    catch { /* The global update reports failure; keep the unchanged snapshot order. */ }
+    finally { setOrderSaving(false); }
+  }
+
+  useEffect(() => {
+    if (focusActive) scrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [focusActive]);
+
+  useEffect(() => {
+    setHoveredRequirementId(null);
+    setFocusedRequirementId(null);
+  }, [focusMode, focusActive, region]);
+
+  useLayoutEffect(() => {
+    const anchor = pendingMonthAnchorRef.current;
+    const scroller = scrollRef.current;
+    if (!anchor || !scroller) return;
+    scroller.scrollLeft = roadmapScrollLeftForAnchor(
+      anchor,
+      roadmapMonthColumns(scroller),
+      Math.max(0, scroller.scrollWidth - scroller.clientWidth),
+    );
+    pendingMonthAnchorRef.current = null;
+  }, [region, timelineMonths.join("|")]);
+
+  function changeRegion(nextRegion: RoadmapRegion) {
+    const scroller = scrollRef.current;
+    if (scroller) {
+      const frozenLaneWidth = scroller.querySelector<HTMLElement>(".medical-roadmap-head-label")?.offsetWidth ?? 240;
+      pendingMonthAnchorRef.current = captureRoadmapMonthAnchor(scroller.scrollLeft, frozenLaneWidth, roadmapMonthColumns(scroller)) ?? null;
+    }
+    onRegionChange(nextRegion);
+  }
+
+  return (
+    <div className="panel roadmap-board medical-roadmap-board" style={{ borderTopColor: TRACK_COLORS["医疗认证"] }}>
+      <PanelTitle
+        title={title}
+        action={<span className="roadmap-empty-count">{rows.length ? `${rows.length} 条需求` : "暂无需求"}</span>}
+      />
+      <div className="roadmap-scroll medical-roadmap-scroll" ref={scrollRef}>
+        <div className="medical-roadmap-table" style={{ width: `calc(var(--medical-lane-width) + ${timelineWidth}px)` }}>
+          <div className="medical-roadmap-head">
+            <div className="medical-roadmap-head-label">
+              {focusMode
+                ? <button
+                  type="button"
+                  className="roadmap-region-toggle"
+                  aria-label={`当前${region === "domestic" ? "国内" : "海外"}路标，${region === "domestic" ? "切换海外" : "切换国内"}`}
+                  onClick={() => changeRegion(region === "domestic" ? "overseas" : "domestic")}
+                >{region === "domestic" ? "切换海外" : "切换国内"}</button>
+                : <strong>认证需求</strong>}
+            </div>
+            <div className="medical-roadmap-calendar-head" style={{ width: timelineWidth }}>
+              <div className="medical-roadmap-half-axis" style={{ gridTemplateColumns: timelineMonths.length ? `repeat(${timelineMonths.length}, 72px)` : "1fr" }}>
+                {!timelineMonths.length && <strong>时间节点未填写</strong>}
+                {timelineHalves.map((half) => <strong key={half} style={{ gridColumn: `span ${timelineMonths.filter((month) => halfYearOf(month) === half).length}` }}>{formatHalfYearWithHmos(half)}</strong>)}
+              </div>
+              <div className="medical-roadmap-month-axis" style={{ gridTemplateColumns: timelineMonths.length ? `repeat(${timelineMonths.length}, 72px)` : "1fr" }}>
+                {timelineMonths.map((month) => <span key={month} data-roadmap-month-header={month}>{Number(month.slice(5))}月</span>)}
+              </div>
+            </div>
+          </div>
+          {rows.length ? rows.map(({ group, requirement }) => {
+            const timeline = medicalSubmissionTimeline(requirement.targetMonth, requirement.medicalSubmissionMilestones);
+            const active = requirement.id === (hoveredRequirementId ?? focusedRequirementId);
+            const accessibleTimeline = timeline
+              .map((node) => `${node.label}${node.month ? formatMedicalSubmissionMonth(node.month) : "未填写"}`)
+              .join("，");
+            const missingNodes = timeline.filter((node) => !node.month);
+            return <div
+              className={`medical-roadmap-demand-row${active ? " is-active" : ""}${draggingId === requirement.id ? " is-dragging" : ""}${dropTarget?.id === requirement.id ? ` drop-${dropTarget.placement}` : ""}`}
+              key={requirement.id}
+              data-medical-requirement-id={requirement.id}
+              onMouseEnter={() => setHoveredRequirementId(requirement.id)}
+              onMouseLeave={() => setHoveredRequirementId(null)}
+              onFocus={() => setFocusedRequirementId(requirement.id)}
+              onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedRequirementId(null); }}
+              onDragOver={(event) => {
+                if (!reorderEnabled || !dragIdRef.current || dragIdRef.current === requirement.id) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                const bounds = event.currentTarget.getBoundingClientRect();
+                setDropTarget({ id: requirement.id, placement: event.clientY < bounds.top + bounds.height / 2 ? "before" : "after" });
+              }}
+              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
+              onDrop={(event) => void dropRow(event, requirement.id)}
+            >
+              <button
+                type="button"
+                className={`medical-roadmap-demand-label${reorderEnabled ? " is-reorderable" : ""}`}
+                draggable={reorderEnabled}
+                onDragStart={(event) => {
+                  if (!reorderEnabled) { event.preventDefault(); return; }
+                  dragIdRef.current = requirement.id;
+                  suppressOpenRef.current = true;
+                  setDraggingId(requirement.id);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", requirement.id);
+                }}
+                onDragEnd={finishDrag}
+                onClick={() => openRow(group, requirement.id)}
+                aria-label={`${requirement.title}，${requirement.source}，点击查看需求详情`}
+              >
+                <strong>{requirement.title}</strong>
+                <span style={{ background: SOURCE_COLORS[requirement.source] }}>{requirement.source === "NMPA认证" ? "NMPA" : "CE"}</span>
+                <div className="medical-roadmap-products">{(group.requirementProductNames[requirement.id] ?? []).map((name) => <span key={name}>{name}</span>)}</div>
+                {missingNodes.length > 0 && <small>{missingNodes.length === timeline.length ? "时间节点未填写" : `待填写：${missingNodes.map((node) => node.label.replace("时间", "")).join("、")}`}</small>}
+              </button>
+              <button
+                type="button"
+                className="medical-roadmap-inline-timeline"
+                onClick={() => openRow(group, requirement.id)}
+                aria-label={`${requirement.title}：${accessibleTimeline}，点击查看需求详情`}
+              >
+                <MedicalSubmissionCalendarTimeline requirement={requirement} months={timelineMonths} width={timelineWidth} />
+              </button>
+            </div>;
+          }) : <div className="medical-roadmap-empty">当前区间暂无医疗认证需求</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MedicalSubmissionCalendarTimeline({ requirement, months, width }: { requirement: Requirement; months: string[]; width: number }) {
+  const populated = medicalSubmissionTimeline(requirement.targetMonth, requirement.medicalSubmissionMilestones)
+    .filter((node): node is ReturnType<typeof medicalSubmissionTimeline>[number] & { month: string } => Boolean(node.month));
+  const byMonth = new Map<string, typeof populated>();
+  for (const node of populated) byMonth.set(node.month, [...(byMonth.get(node.month) ?? []), node]);
+  const indexes = populated.map((node) => months.indexOf(node.month)).filter((index) => index >= 0);
+  const firstIndex = Math.min(...indexes);
+  const lastIndex = Math.max(...indexes);
+  return <span className="medical-calendar-timeline" style={{ width, gridTemplateColumns: `repeat(${months.length}, 72px)` }} aria-hidden="true">
+    {Number.isFinite(firstIndex) && <i className="medical-calendar-connector" style={{ left: firstIndex * 72 + 36, width: Math.max(0, (lastIndex - firstIndex) * 72) }} />}
+    {months.map((month) => {
+      const nodes = byMonth.get(month) ?? [];
+      if (!nodes.length) return <span className="medical-calendar-month-slot" key={month} />;
+      return <span className="medical-calendar-month-slot has-node" key={month}>
+        <span className={`medical-calendar-dot${nodes.some((node) => node.derived) ? " is-submission" : ""}`} />
+        <b>{nodes.map((node) => node.label.replace("时间", "")).join(" / ")}</b>
+      </span>;
+    })}
+  </span>;
+}
+
+function StandardRoadmapBoard({ title, track, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup, onReorderGroups }: RoadmapBoardProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingMonthAnchorRef = useRef<RoadmapMonthAnchor | null>(null);
   const skipAutoLocateRef = useRef(false);
@@ -1009,12 +1264,17 @@ function RoadmapBoard({ title, track, groups, start, end, focusMode, focusActive
 
   function locateFirstGroup(behavior: ScrollBehavior = "auto") {
     if (!firstGroup || !firstLane || !scrollRef.current) return;
-    const target = scrollRef.current.querySelector<HTMLElement>(
+    const scroller = scrollRef.current;
+    const target = scroller.querySelector<HTMLElement>(
       `[data-roadmap-month="${firstGroup.targetMonth}"][data-roadmap-lane="${firstLane}"]`,
     );
     if (!target) return;
-    const centeredOffset = Math.max(116, (scrollRef.current.clientWidth - target.clientWidth) / 2);
-    scrollRef.current.scrollTo({ left: Math.max(0, target.offsetLeft - centeredOffset), behavior });
+    const frozenLaneWidth = 116;
+    const visibleMonthWidth = Math.max(0, scroller.clientWidth - frozenLaneWidth);
+    const monthOffset = frozenLaneWidth + Math.max(8, (visibleMonthWidth - target.clientWidth) / 2);
+    const desiredViewportLeft = scroller.getBoundingClientRect().left + monthOffset;
+    const nextLeft = scroller.scrollLeft + target.getBoundingClientRect().left - desiredViewportLeft;
+    scroller.scrollTo({ left: Math.max(0, nextLeft), behavior });
   }
 
   useEffect(() => {
@@ -1253,18 +1513,23 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
   onDragOver: (event: ReactDragEvent<HTMLButtonElement>) => void;
   onDrop: (event: ReactDragEvent<HTMLButtonElement>) => void;
 }) {
-  const hasExclusive = group.categories.includes("产品专属");
   const hasExperience = group.categories.includes("体验优化");
   const historicalPending = group.requirements.find((item) => item.historicalLaunch?.verificationStatus === "pending");
   const label = roadmapCardLabel(group);
-  const displayLines = roadmapCardDisplayParts(label, Array.from(`${group.cardTitle}：`).length);
   const visibleProducts = group.productNames.slice(0, 2);
   const hiddenProductCount = Math.max(group.productNames.length - visibleProducts.length, 0);
   const productLabel = group.productNames.length ? `涉及产品：${group.productNames.join("、")}` : "";
-  const accessibleLabel = [label, productLabel, draggable ? "可上下拖动排序，点击查看全部需求" : "点击查看全部需求"].filter(Boolean).join("；");
+  const pendingLabel = historicalPending ? historicalLaunchStatusLabel(historicalPending.historicalLaunch) : "";
+  const accessibleLabel = [
+    label,
+    productLabel,
+    hasExperience ? "体验优化" : "",
+    pendingLabel,
+    draggable ? "可上下拖动排序，点击查看全部需求" : "点击查看全部需求",
+  ].filter(Boolean).join("；");
   return (
     <button
-      className={`roadmap-card${hasExclusive ? " has-exclusive" : ""}${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${related ? " is-l1-related" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
+      className={`roadmap-card${draggable ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}${related ? " is-l1-related" : ""}${dropPosition === "before" ? " drop-before" : ""}${dropPosition === "after" ? " drop-after" : ""}`}
       draggable={draggable}
       onMouseEnter={() => onRelatedChange(true)}
       onMouseLeave={() => onRelatedChange(false)}
@@ -1277,27 +1542,34 @@ function RoadmapCard({ group, draggable, dragging, related, dropPosition, onRela
       onDrop={onDrop}
       aria-label={accessibleLabel}
     >
-      <span className="roadmap-card-copy" aria-hidden="true">
-        {displayLines.map((line, index) => (
-          <span className="roadmap-card-line" key={`${index}-${line.emphasis}-${line.content}`}>
-            {line.emphasis && <strong>{line.emphasis}</strong>}
-            {line.content && <span>{line.content}</span>}
+      <span className="roadmap-card-meta" aria-hidden="true">
+        <strong className="roadmap-card-domain">{group.cardTitle}</strong>
+        {(visibleProducts.length > 0 || hasExperience || historicalPending) && (
+          <span className="roadmap-card-markers">
+            {visibleProducts.length > 0 && (
+              <span className="roadmap-card-products">
+                {visibleProducts.map((name) => <b key={name}>{name}</b>)}
+                {hiddenProductCount > 0 && <b>+{hiddenProductCount}</b>}
+              </span>
+            )}
+            {hasExperience && (
+              <span className="roadmap-card-experience-icon">
+                <IconTrendingUp size={15} stroke={2.2} />
+              </span>
+            )}
+            {historicalPending && <span className="roadmap-card-time-pending">时间待核验</span>}
+          </span>
+        )}
+      </span>
+      <span className="roadmap-card-divider" aria-hidden="true" />
+      <span className="roadmap-card-requirements" aria-hidden="true">
+        {group.requirements.map((item) => (
+          <span className="roadmap-card-requirement" key={item.id}>
+            <span className="roadmap-card-bullet">•</span>
+            <span className="roadmap-card-requirement-text">{item.title}</span>
           </span>
         ))}
       </span>
-      {visibleProducts.length > 0 && (
-        <span className="roadmap-card-products" aria-label={productLabel}>
-          <i>涉及产品</i>
-          {visibleProducts.map((name) => <b key={name}>{name}</b>)}
-          {hiddenProductCount > 0 && <b>+{hiddenProductCount}</b>}
-        </span>
-      )}
-      {hasExperience && (
-        <span className="roadmap-card-experience-icon" aria-label="体验优化">
-          <IconTrendingUp size={18} stroke={2.2} aria-hidden="true" />
-        </span>
-      )}
-      {historicalPending && <span className="roadmap-card-time-pending" aria-label={historicalLaunchStatusLabel(historicalPending.historicalLaunch)}>时间待核验</span>}
     </button>
   );
 }
@@ -1312,9 +1584,9 @@ function roadmapMonthColumns(scroller: HTMLElement): RoadmapMonthColumnMetrics[]
     .filter((item) => Boolean(item.month));
 }
 
-type WorkloadTexts = { device: string; app: string; cloud: string };
+type WorkloadTexts = Record<(typeof WORKLOAD_INPUTS)[number]["key"], string>;
 
-function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, requestConfirmation }: { value?: Requirement; snapshot: AppSnapshot; onClose: () => void; onSave: (input: SaveRequirementInput, keepOpen: boolean) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
+export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, requestConfirmation }: { value?: Requirement; snapshot: AppSnapshot; onClose: () => void; onSave: (input: SaveRequirementInput, keepOpen: boolean) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const domainL0s = snapshot.domains.filter((item) => item.active && item.level === "L0");
   const allDomainL1s = snapshot.domains.filter((item) => item.active && (item.level ?? "L1") === "L1");
   const [form, setForm] = useState<SaveRequirementInput>(() => {
@@ -1322,6 +1594,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
       planningMemberId: value.planningMemberId ?? "",
       productManagerMemberId: value.productManagerMemberId ?? "",
       seMemberId: value.seMemberId ?? "",
+      algorithmMemberId: value.algorithmMemberId ?? "",
       id: value.id,
       title: value.title,
       description: value.description ?? "",
@@ -1338,6 +1611,9 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
       deviceWorkloadPm: value.deviceWorkloadPm,
       appWorkloadPm: value.appWorkloadPm,
       cloudWorkloadPm: value.cloudWorkloadPm,
+      researchAppWorkloadPm: value.researchAppWorkloadPm ?? 0,
+      algorithmWorkloadPm: value.algorithmWorkloadPm ?? 0,
+      medicalSubmissionMilestones: value.medicalSubmissionMilestones ? { ...value.medicalSubmissionMilestones } : undefined,
     };
     const previous = latestRequirementSelections(snapshot.requirements);
     const domainL0Id = domainL0s.some((item) => item.id === previous?.domainL0Id) ? previous?.domainL0Id ?? "" : domainL0s[0]?.id ?? "";
@@ -1346,6 +1622,7 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
       planningMemberId: "",
       productManagerMemberId: "",
       seMemberId: "",
+      algorithmMemberId: "",
       title: "",
       description: "",
       images: [],
@@ -1356,15 +1633,19 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
       allowLatestVersionUpgrade: false,
       overseasRegions: previous?.overseasRegions ?? [],
       category: previous?.category ?? "体验优化",
-      targetMonth: previous?.targetMonth ?? new Date().toISOString().slice(0, 7),
+      targetMonth: initialRequirementTargetMonth(previous?.source ?? "运动基础", previous?.targetMonth, new Date().toISOString().slice(0, 7)),
       productIds: [],
       deviceWorkloadPm: 0,
       appWorkloadPm: 0,
       cloudWorkloadPm: 0,
+      researchAppWorkloadPm: 0,
+      algorithmWorkloadPm: 0,
+      medicalSubmissionMilestones: undefined,
     };
   });
   const domainL1s = allDomainL1s.filter((item) => item.parentId === form.domainL0Id);
-  const manualOwners = useRef(new Set<RequirementOwnerKey>(REQUIREMENT_OWNER_FIELDS.filter(({ key }) => value?.[key]).map(({ key }) => key)));
+  const userSelectedTargetMonth = useRef(Boolean(value?.targetMonth));
+  const manualOwners = useRef(new Set<RequirementOwnerKey>(REQUIREMENT_OWNER_FIELDS.filter(({ key }) => value?.[key] || (key === "algorithmMemberId" && value?.algorithmMemberId !== undefined)).map(({ key }) => key)));
   useEffect(() => {
     setForm((current) => {
       const next = { ...current };
@@ -1380,9 +1661,12 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
     device: value?.deviceWorkloadPm ? String(value.deviceWorkloadPm) : "",
     app: value?.appWorkloadPm ? String(value.appWorkloadPm) : "",
     cloud: value?.cloudWorkloadPm ? String(value.cloudWorkloadPm) : "",
+    researchApp: value?.researchAppWorkloadPm ? String(value.researchAppWorkloadPm) : "",
+    algorithm: value?.algorithmWorkloadPm ? String(value.algorithmWorkloadPm) : "",
   }));
   const [workloadError, setWorkloadError] = useState("");
   const [imageError, setImageError] = useState("");
+  const [medicalMilestoneError, setMedicalMilestoneError] = useState("");
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [keepOpen, setKeepOpen] = useState(false);
@@ -1390,9 +1674,11 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
     device: parseWorkloadPart(workloadTexts.device),
     app: parseWorkloadPart(workloadTexts.app),
     cloud: parseWorkloadPart(workloadTexts.cloud),
+    researchApp: parseWorkloadPart(workloadTexts.researchApp),
+    algorithm: parseWorkloadPart(workloadTexts.algorithm),
   };
   const draftTotal = Object.values(draftParts).every((item) => item !== null)
-    ? (draftParts.device ?? 0) + (draftParts.app ?? 0) + (draftParts.cloud ?? 0)
+    ? roundWorkload(Object.values(draftParts).reduce<number>((sum, part) => sum + roundWorkload(part ?? 0), 0))
     : null;
 
   function updateWorkloadText(key: keyof WorkloadTexts, raw: string) {
@@ -1404,9 +1690,17 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const parsed = [draftParts.device, draftParts.app, draftParts.cloud];
+    const parsed = Object.values(draftParts);
     if (parsed.some((item) => item === null)) {
       setWorkloadError("工作量只能填写大于或等于 0 的整数或小数，也可以留空");
+      return;
+    }
+    try {
+      validateRequirementTargetMonth(form.source, form.targetMonth);
+      validateMedicalSubmissionMilestones(form.source, form.targetMonth, form.medicalSubmissionMilestones);
+      setMedicalMilestoneError("");
+    } catch (reason) {
+      setMedicalMilestoneError(messageOf(reason));
       return;
     }
     setSaving(true);
@@ -1417,10 +1711,12 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
         deviceWorkloadPm: draftParts.device ?? 0,
         appWorkloadPm: draftParts.app ?? 0,
         cloudWorkloadPm: draftParts.cloud ?? 0,
+        researchAppWorkloadPm: draftParts.researchApp ?? 0,
+        algorithmWorkloadPm: draftParts.algorithm ?? 0,
       }, keepOpen && !value);
       if (keepOpen && !value) {
-        setForm((current) => ({ ...current, title: "", description: "", images: [], productIds: [], deviceWorkloadPm: 0, appWorkloadPm: 0, cloudWorkloadPm: 0 }));
-        setWorkloadTexts({ device: "", app: "", cloud: "" });
+        setForm((current) => ({ ...current, title: "", description: "", images: [], productIds: [], deviceWorkloadPm: 0, appWorkloadPm: 0, cloudWorkloadPm: 0, researchAppWorkloadPm: 0, algorithmWorkloadPm: 0, targetMonth: isMedicalSubmissionSource(current.source) ? "" : current.targetMonth, medicalSubmissionMilestones: undefined }));
+        setWorkloadTexts({ device: "", app: "", cloud: "", researchApp: "", algorithm: "" });
         setImageError("");
       }
     } finally {
@@ -1486,10 +1782,22 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
           <div className="form-row-pair">
             <Field label="来源" required><select value={form.source} onChange={(event) => {
               const source = event.target.value as RequirementSource;
-              setForm({ ...form, source, overseasRegions: [] });
+              setMedicalMilestoneError("");
+              setForm({ ...form, source, overseasRegions: [], targetMonth: isMedicalSubmissionSource(source) && !userSelectedTargetMonth.current ? "" : form.targetMonth });
             }}>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select></Field>
-            <Field label="上线年月" required><input type="month" value={form.targetMonth} onChange={(event) => setForm({ ...form, targetMonth: event.target.value })} /></Field>
+            <Field label={isMedicalSubmissionSource(form.source) ? "送检版本" : "上线年月"} required={!isMedicalSubmissionSource(form.source)}><input type="month" required={!isMedicalSubmissionSource(form.source)} value={form.targetMonth} onChange={(event) => { userSelectedTargetMonth.current = true; setMedicalMilestoneError(""); setForm({ ...form, targetMonth: event.target.value }); }} />{isMedicalSubmissionSource(form.source) && <small>选填年月；送检时间与此处保持一致。</small>}</Field>
           </div>
+          {isMedicalSubmissionSource(form.source) && <Field label="医疗认证时间节点">
+            <div className="medical-milestone-grid">
+              <label><span>注册启动时间</span><input type="month" value={form.medicalSubmissionMilestones?.registrationStartMonth ?? ""} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, medicalSubmissionMilestones: { ...form.medicalSubmissionMilestones, registrationStartMonth: event.target.value || undefined } }); }} /></label>
+              <label><span>送检时间</span>{form.targetMonth ? <input type="month" value={form.targetMonth} readOnly aria-readonly="true" /> : <input value="未填写" readOnly aria-readonly="true" />}</label>
+              <label><span>临床启动时间</span><input type="month" value={form.medicalSubmissionMilestones?.clinicalStartMonth ?? ""} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, medicalSubmissionMilestones: { ...form.medicalSubmissionMilestones, clinicalStartMonth: event.target.value || undefined } }); }} /></label>
+              <label><span>临床完成时间</span><input type="month" value={form.medicalSubmissionMilestones?.clinicalCompleteMonth ?? ""} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, medicalSubmissionMilestones: { ...form.medicalSubmissionMilestones, clinicalCompleteMonth: event.target.value || undefined } }); }} /></label>
+              <label><span>获证时间</span><input type="month" value={form.medicalSubmissionMilestones?.certificateMonth ?? ""} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, medicalSubmissionMilestones: { ...form.medicalSubmissionMilestones, certificateMonth: event.target.value || undefined } }); }} /></label>
+            </div>
+            <small>送检时间使用送检版本的年月；五个节点均可留空，不限制先后顺序，时间轴按实际年月对齐。</small>
+          </Field>}
+          {medicalMilestoneError && <small className="input-error" role="alert">{medicalMilestoneError}</small>}
           <div className="form-row-pair">
             <Field label="适用范围" required>
               <div className="segmented scope-segmented" role="radiogroup" aria-label="适用范围">
@@ -1521,9 +1829,9 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
             </Field>
           </div>
           <div className="requirement-owner-row">
-            {REQUIREMENT_OWNER_FIELDS.map(({ key, role }) => {
+            {REQUIREMENT_OWNER_FIELDS.map(({ key, role, required }) => {
               const options = snapshot.members.filter((member) => member.role === role);
-              return <Field key={key} label={role} required><select aria-label={`需求${role}`} required value={form[key]} onChange={(event) => { manualOwners.current.add(key); setForm({ ...form, [key]: event.target.value }); }}><option value="">请选择{role}</option>{options.map((member) => <option key={member.id} value={member.id}>{member.name}{options.some((other) => other.id !== member.id && other.name === member.name) ? `（${member.employeeNumber}）` : ""}</option>)}</select>{!options.length && <small>请先在字典设置添加{role}成员</small>}</Field>;
+              return <Field key={key} label={role} required={required}><select aria-label={`需求${role}`} required={required} value={form[key] ?? ""} onChange={(event) => { manualOwners.current.add(key); setForm({ ...form, [key]: event.target.value }); }}><option value="">{required ? `请选择${role}` : "未匹配算法人员"}</option>{options.map((member) => <option key={member.id} value={member.id}>{member.name}{options.some((other) => other.id !== member.id && other.name === member.name) ? `（${member.employeeNumber}）` : ""}</option>)}</select>{!options.length && <small>请先在字典设置添加{role}成员</small>}</Field>;
             })}
           </div>
           <div className="form-row-pair category-product-row">
@@ -1538,17 +1846,15 @@ function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, request
           </div>
           <div className="workload-section">
             <div className="workload-section-head"><span>工作量（人月）</span><strong>合计 {draftTotal === null ? "—" : formatNumber(draftTotal)} 人月</strong></div>
-            {Boolean(value?.unallocatedWorkloadPm) && <div className="legacy-workload-warning">这条历史需求有 {formatNumber(value?.unallocatedWorkloadPm ?? 0)} 人月尚未拆分，请分配到下方三项后保存。</div>}
+            {Boolean(value?.unallocatedWorkloadPm) && <div className="legacy-workload-warning">这条历史需求有 {formatNumber(value?.unallocatedWorkloadPm ?? 0)} 人月尚未拆分，请分配到下方五项后保存。</div>}
             <div className="workload-input-grid">
-              <label><span>设备工作量</span><input type="text" inputMode="decimal" value={workloadTexts.device} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="可留空，默认 0" onChange={(event) => updateWorkloadText("device", event.target.value)} /></label>
-              <label><span>App 工作量</span><input type="text" inputMode="decimal" value={workloadTexts.app} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="可留空，默认 0" onChange={(event) => updateWorkloadText("app", event.target.value)} /></label>
-              <label><span>云侧工作量</span><input type="text" inputMode="decimal" value={workloadTexts.cloud} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="可留空，默认 0" onChange={(event) => updateWorkloadText("cloud", event.target.value)} /></label>
+              {WORKLOAD_INPUTS.map(({ key, label }) => <label key={key}><span>{label}</span><input type="text" inputMode="decimal" value={workloadTexts[key]} className={workloadError ? "input-invalid" : undefined} aria-invalid={Boolean(workloadError)} placeholder="可留空，默认 0" onChange={(event) => updateWorkloadText(key, event.target.value)} /></label>)}
             </div>
             {workloadError
               ? <small className="input-error">{workloadError}</small>
-              : <small>三项均可留空或填写 0；若三项合计为 0，需求池会标记“工作量待评估”。</small>}
+              : <small>五项均可留空或填写 0，按两位小数保存；若五项合计为 0，需求池会标记“工作量待评估”。</small>}
           </div>
-          <div className="merge-hint"><b>自动合并规则</b><span>同领域 L1、同来源、同上线年月的需求会合并为一张路标卡片；路标卡片只显示领域 L1。</span></div>
+          <div className="merge-hint"><b>{isMedicalSubmissionSource(form.source) ? "医疗认证路标" : "自动合并规则"}</b><span>{isMedicalSubmissionSource(form.source) ? "每条医疗需求独立成行；时间轴按当前区域需求全部五节点自动计算，不受外部时间窗限制，五节点全空仍保留泳道。" : "同领域 L1、同来源、同上线年月的需求会合并为一张路标卡片；路标卡片只显示领域 L1。"}</span></div>
         </div>
         <div className="drawer-footer">
           {!value ? <label className="keep-open"><input type="checkbox" checked={keepOpen} onChange={(event) => setKeepOpen(event.target.checked)} /> 保存后继续录入</label> : <button type="button" className="button danger" onClick={(event) => requestConfirmation({ title: "删除需求", message: `确定删除“${value.title}”？删除后无法直接撤销。`, confirmLabel: "确认删除", action: () => onDelete(value.id) }, event.currentTarget)}>删除需求</button>}
@@ -1915,17 +2221,18 @@ function DictionaryPanel({ title, subtitle, items, parentOptions, onSave, onDele
   );
 }
 
-function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onInspectWorkbook, onApplyWorkbook, onSavePptAccessPolicy, onCheckIrm }: {
+export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, onInspectWorkspace, onApplyWorkspace, onExportWorkbook, onExportTieringWorkbook, onInspectWorkbook, onApplyWorkbook, onSavePptAccessPolicy, onCheckIrm }: {
   snapshot: AppSnapshot;
   start: string;
   end: string;
   onExportPpt: (config: { materialName: string; sections: PptExportSectionId[] }) => Promise<void>;
   onExportWorkspace: () => Promise<void>;
   onInspectWorkspace: () => Promise<WorkspaceImportPreview | undefined>;
-  onApplyWorkspace: (token: string, mode: WorkspaceImportMode, differenceDigest?: string) => Promise<boolean>;
+  onApplyWorkspace: (token: string, mode: WorkspaceImportMode, differenceDigest?: string, legacyRequirementDecisions?: Record<string, LegacyRequirementDecision>) => Promise<boolean>;
   onExportWorkbook: () => Promise<void>;
+  onExportTieringWorkbook: () => Promise<void>;
   onInspectWorkbook: () => Promise<WorkspaceWorkbookImportPreview | undefined>;
-  onApplyWorkbook: (token: string, conflictMode: WorkspaceWorkbookConflictMode, differenceDigest: string) => Promise<boolean>;
+  onApplyWorkbook: (token: string, conflictMode: WorkspaceWorkbookConflictMode, differenceDigest: string, fieldSelection?: WorkspaceWorkbookFieldSelection) => Promise<boolean>;
   onSavePptAccessPolicy: (input: SavePptAccessPolicyInput) => Promise<void>;
   onCheckIrm: () => Promise<IrmEnvironmentStatus>;
 }) {
@@ -1936,7 +2243,10 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   const [applying, setApplying] = useState<WorkspaceImportMode | null>(null);
   const [workbookApplying, setWorkbookApplying] = useState<WorkspaceWorkbookConflictMode | null>(null);
   const [packageDifferencesConfirmed, setPackageDifferencesConfirmed] = useState(false);
+  const [legacyRequirementDecisions, setLegacyRequirementDecisions] = useState<Record<string, LegacyRequirementDecision>>({});
   const [workbookDifferencesConfirmed, setWorkbookDifferencesConfirmed] = useState(false);
+  const [workbookSelectedChanges, setWorkbookSelectedChanges] = useState<string[]>([]);
+  const [workbookConflictDecisions, setWorkbookConflictDecisions] = useState<Record<string, "local" | "excel">>({});
   const [exporting, setExporting] = useState(false);
   const [pptMaterialName, setPptMaterialName] = useState("解决方案需求路标");
   const [pptSections, setPptSections] = useState<PptExportSectionId[]>([...DEFAULT_PPT_EXPORT_SECTIONS]);
@@ -1948,6 +2258,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   const [securityMessage, setSecurityMessage] = useState("");
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
   const workbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).length;
+  const tieringWorkbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).filter(isTieringEligibleRequirement).length;
   const memberById = new Map(snapshot.members.map((item) => [item.id, item]));
   const availableMembers = snapshot.members.filter((item) => !whitelistEntries.some((entry) => entry.memberId === item.id));
   const policyDirty = JSON.stringify(whitelistEntries) !== JSON.stringify(snapshot.pptAccessPolicy.entries);
@@ -1965,6 +2276,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
       if (result) {
         setPreview(result);
         setPackageDifferencesConfirmed(false);
+        setLegacyRequirementDecisions({});
       }
     } finally {
       setInspecting(false);
@@ -1974,9 +2286,10 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   async function applyPackage(mode: WorkspaceImportMode) {
     if (!preview) return;
     if (mode === "merge" && preview.differences.length > 0 && !packageDifferencesConfirmed) return;
+    if (mode === "merge" && preview.ambiguousRequirementIds.some((id) => !legacyRequirementDecisions[id])) return;
     setApplying(mode);
     try {
-      if (await onApplyWorkspace(preview.token, mode, mode === "merge" ? preview.differenceDigest : undefined)) setPreview(null);
+      if (await onApplyWorkspace(preview.token, mode, mode === "merge" ? preview.differenceDigest : undefined, mode === "merge" ? legacyRequirementDecisions : undefined)) setPreview(null);
     } finally {
       setApplying(null);
     }
@@ -1989,6 +2302,8 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
       if (result) {
         setWorkbookPreview(result);
         setWorkbookDifferencesConfirmed(false);
+        setWorkbookSelectedChanges([]);
+        setWorkbookConflictDecisions({});
       }
     } finally {
       setWorkbookInspecting(false);
@@ -1996,10 +2311,13 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
   }
 
   async function applyWorkbook(conflictMode: WorkspaceWorkbookConflictMode) {
-    if (!workbookPreview || workbookPreview.errors.length || (workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed)) return;
+    if (!workbookPreview || workbookPreview.errors.length) return;
+    const isV8 = workbookPreview.formatVersion === "v8";
+    if (!isV8 && workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed) return;
+    if (isV8 && workbookSelectedChanges.some((id) => workbookPreview.fieldChanges?.find((change) => change.id === id)?.conflict && !workbookConflictDecisions[id])) return;
     setWorkbookApplying(conflictMode);
     try {
-      if (await onApplyWorkbook(workbookPreview.token, conflictMode, workbookPreview.differenceDigest)) setWorkbookPreview(null);
+      if (await onApplyWorkbook(workbookPreview.token, conflictMode, workbookPreview.differenceDigest, isV8 ? { selectedChangeIds: workbookSelectedChanges, conflictDecisions: workbookConflictDecisions } : undefined)) setWorkbookPreview(null);
     } finally {
       setWorkbookApplying(null);
     }
@@ -2072,6 +2390,8 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           </dl>
         </section>
 
+        <p className="callout">封面数量、工作量、汇总分析及其他路标按所选区间统计；医疗认证 PPT 独立展示全部医疗需求及完整节点时间范围。未填写送检版本不计入半年统计或时间范围 Excel，完整需求包仍完整保存。</p>
+        <p className="callout">需求池协作 Excel v8 可编辑需求字段与 13 个系列支持状态，回导时逐项勾选差异。来源、匹配产品及创新研究 App、算法工作量不在表格中编辑，回导保留本机值。医疗认证 PPT 使用全部医疗需求的独立自动时间范围，不受导出区间限制。</p>
         <div className="export-type-grid">
           <section className="panel export-type-card roadmap-export-card">
             <div className="export-type-head"><span className="export-type-icon">P</span><span className="eyebrow">POWERPOINT</span></div>
@@ -2098,15 +2418,20 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           <section className="panel export-type-card excel-export-card">
             <div className="export-type-head"><span className="export-type-icon">X</span><span className="eyebrow">EXCEL COLLABORATION</span></div>
             <h3>Excel 表格</h3>
-            <p>按当前半年区间导出需求用于多人协作编辑，完整领域和产品字典会随表格保留。</p>
+            <p>需求池 Excel 可逐项编辑需求和 13 个系列支持状态，导入时逐字段勾选合入；分层分级 Excel 包含支持矩阵和规格明细，仅供查看。</p>
             <dl className="export-type-meta">
               <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
-              <div><dt>需求</dt><dd>{workbookRequirementCount} 条</dd></div>
+              <div><dt>需求池</dt><dd>{workbookRequirementCount} 条</dd></div>
+              <div><dt>分层分级</dt><dd>{tieringWorkbookRequirementCount} 条符合需求</dd></div>
               <div><dt>图片</dt><dd>不包含</dd></div>
             </dl>
             <div className="export-card-actions">
-              <button className="button primary" onClick={onExportWorkbook}>导出协作 Excel</button>
-              <button className="button ghost" onClick={inspectWorkbook} disabled={workbookInspecting}>{workbookInspecting ? "检查中…" : "导入协作 Excel"}</button>
+              <button className="button primary" onClick={onExportWorkbook}>导出需求池</button>
+              <button className="button primary" onClick={onExportTieringWorkbook}>导出分层分级</button>
+              <div className="excel-import-action">
+                <button className="button ghost" onClick={inspectWorkbook} disabled={workbookInspecting}>{workbookInspecting ? "检查中…" : "导入协作 Excel"}</button>
+                <span>仅需求池协作 Excel 可回导；分层分级 Excel 不支持通过应用回导。</span>
+              </div>
             </div>
           </section>
 
@@ -2149,7 +2474,7 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           </div>
         </section>
 
-        <p className="export-footnote">Excel 适合多人协作编辑；完整需求包适合跨电脑无损交接，并兼容旧版 JSON 备份。</p>
+        <p className="export-footnote">需求池 Excel 可用于多人协作回导；分层分级 Excel 仅供查看分享。完整需求包适合跨电脑无损交接，并兼容旧版 JSON 备份。</p>
       </div>
       {workbookPreview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !workbookApplying && setWorkbookPreview(null)}>
         <div className="import-dialog workbook-import-dialog panel" role="dialog" aria-modal="true" aria-labelledby="workbook-import-title">
@@ -2157,22 +2482,39 @@ function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorkspace, on
           <div className="import-file"><b>{workbookPreview.fileName}</b><span>{workbookPreview.formatVersion} · 导出于 {formatDateTime(workbookPreview.exportedAt)}</span></div>
           <dl className="import-counts workbook-counts"><div><dt>新增需求</dt><dd>{workbookPreview.counts.added} 条</dd></div><div><dt>修改需求</dt><dd>{workbookPreview.counts.updated} 条</dd></div><div><dt>删除需求</dt><dd>{workbookPreview.counts.deleted} 条</dd></div><div><dt>未变化</dt><dd>{workbookPreview.counts.unchanged} 条</dd></div><div><dt>领域 / 产品调整</dt><dd>{workbookPreview.counts.domainsChanged} / {workbookPreview.counts.productsChanged}</dd></div><div><dt>卡片调整</dt><dd>{workbookPreview.counts.groupOverridesChanged} 项</dd></div><div><dt>冲突</dt><dd>{workbookPreview.counts.conflicts} 项</dd></div><div><dt>校验错误</dt><dd>{workbookPreview.errors.length} 项</dd></div></dl>
           {workbookPreview.errors.length > 0 && <ImportIssueList title="需要先修正的错误" tone="error" items={workbookPreview.errors} />}
-          {workbookPreview.errors.length === 0 && workbookPreview.conflicts.length > 0 && <ImportIssueList title="本机与 Excel 同时修改" tone="warning" items={workbookPreview.conflicts} />}
-          {workbookPreview.errors.length === 0 && <ImportDifferenceList differences={workbookPreview.differences} />}
-          {workbookPreview.errors.length === 0 && workbookPreview.differences.length > 0 && <label className="import-difference-confirm"><input type="checkbox" checked={workbookDifferencesConfirmed} onChange={(event) => setWorkbookDifferencesConfirmed(event.target.checked)} /><span>我已逐项核对以上全部差异，确认按所选冲突策略合并。</span></label>}
-          {workbookPreview.errors.length === 0 && <div className="import-guidance"><b>图片处理</b><span>同 ID 需求保留本机图片；Excel 新增需求不带图片。默认按钮会保留发生冲突的本机版本。</span></div>}
-          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setWorkbookPreview(null)} disabled={Boolean(workbookApplying)}>取消</button><button className="button dark" onClick={() => applyWorkbook("local-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0 || (workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed)}>{workbookApplying === "local-wins" ? "合并中…" : "合并并保留本机冲突"}</button>{workbookPreview.conflicts.length > 0 && <button className="button danger" onClick={() => applyWorkbook("excel-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0 || (workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed)}>{workbookApplying === "excel-wins" ? "合并中…" : "Excel 覆盖冲突"}</button>}</div>
+          {workbookPreview.formatVersion === "v8" ? <>
+            {workbookPreview.errors.length === 0 && <div className="import-differences workbook-field-differences"><div className="import-differences-head"><b>逐项选择合入</b><span>{workbookPreview.fieldChanges?.length ?? 0} 项差异，默认均不勾选</span></div><div className="import-difference-scroll">
+              {(workbookPreview.fieldChanges ?? []).map((change) => {
+                const checked = workbookSelectedChanges.includes(change.id);
+                const deleteSelected = workbookSelectedChanges.includes(`${change.requirementId}:delete`);
+                return <div className="workbook-field-change" key={change.id}>
+                  <label><input type="checkbox" checked={checked} disabled={change.kind !== "delete" && deleteSelected} onChange={(event) => setWorkbookSelectedChanges((current) => event.target.checked ? change.kind === "delete" ? [...current.filter((id) => !id.startsWith(`${change.requirementId}:`)), change.id] : [...current, change.id] : current.filter((id) => id !== change.id))} /><span><b>{change.title}</b> · {change.field}{change.kind === "delete" && <em>整条删除优先，其他字段不会合入</em>}</span></label>
+                  <div className="workbook-field-values"><span>本机：{change.currentValue || "—"}</span><span>Excel：{change.excelValue || "—"}</span></div>
+                  {change.conflict && checked && <div className="workbook-field-conflict"><strong>本机与 Excel 均已修改，请选择：</strong><label><input type="radio" name={`conflict-${change.id}`} checked={workbookConflictDecisions[change.id] === "local"} onChange={() => setWorkbookConflictDecisions((current) => ({ ...current, [change.id]: "local" }))} />保留本机</label><label><input type="radio" name={`conflict-${change.id}`} checked={workbookConflictDecisions[change.id] === "excel"} onChange={() => setWorkbookConflictDecisions((current) => ({ ...current, [change.id]: "excel" }))} />采用 Excel</label></div>}
+                </div>;
+              })}
+              {!workbookPreview.fieldChanges?.length && <p className="workbook-no-changes">文件与本机没有可合入的差异。</p>}
+            </div></div>}
+            {workbookPreview.errors.length === 0 && <div className="import-guidance"><b>合入规则</b><span>只写入勾选并选择采用 Excel 的字段；未勾选的需求字段、来源、匹配产品、图片和详细规格均保留本机。删除需求仅由“操作”列触发。</span></div>}
+            <div className="import-dialog-actions"><button className="button ghost" onClick={() => setWorkbookPreview(null)} disabled={Boolean(workbookApplying)}>取消</button><button className="button dark" onClick={() => applyWorkbook("local-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0 || workbookSelectedChanges.some((id) => workbookPreview.fieldChanges?.find((change) => change.id === id)?.conflict && !workbookConflictDecisions[id])}>{workbookApplying ? "合入中…" : `合入已选 ${workbookSelectedChanges.length} 项`}</button></div>
+          </> : <>
+            {workbookPreview.errors.length === 0 && workbookPreview.conflicts.length > 0 && <ImportIssueList title="本机与 Excel 同时修改" tone="warning" items={workbookPreview.conflicts} />}
+            {workbookPreview.errors.length === 0 && <ImportDifferenceList differences={workbookPreview.differences} />}
+            {workbookPreview.errors.length === 0 && workbookPreview.differences.length > 0 && <label className="import-difference-confirm"><input type="checkbox" checked={workbookDifferencesConfirmed} onChange={(event) => setWorkbookDifferencesConfirmed(event.target.checked)} /><span>我已逐项核对以上全部差异，确认按所选冲突策略合并。</span></label>}
+            {workbookPreview.errors.length === 0 && <div className="import-guidance"><b>图片处理</b><span>同 ID 需求保留本机图片；旧版 Excel 仍沿用整行冲突处理。</span></div>}
+            <div className="import-dialog-actions"><button className="button ghost" onClick={() => setWorkbookPreview(null)} disabled={Boolean(workbookApplying)}>取消</button><button className="button dark" onClick={() => applyWorkbook("local-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0 || (workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed)}>{workbookApplying === "local-wins" ? "合并中…" : "合并并保留本机冲突"}</button>{workbookPreview.conflicts.length > 0 && <button className="button danger" onClick={() => applyWorkbook("excel-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0 || (workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed)}>{workbookApplying === "excel-wins" ? "合并中…" : "Excel 覆盖冲突"}</button>}</div>
+          </>}
         </div>
       </div>}
       {preview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !applying && setPreview(null)}>
         <div className="import-dialog panel" role="dialog" aria-modal="true" aria-labelledby="import-title">
           <div className="import-dialog-head"><div><span className="eyebrow">WORKSPACE IMPORT</span><h2 id="import-title">确认导入数据包</h2></div><button className="icon-button" onClick={() => setPreview(null)} disabled={Boolean(applying)}>×</button></div>
           <div className="import-file"><b>{preview.fileName}</b><span>{preview.sourceFormat === "roadmap" ? `.roadmap · ${preview.packageKind === "tiering-seed" ? "分层分级初始包" : `模板 ${preview.templateVersion}`}` : "旧版 JSON 备份"}</span></div>
-          <dl className="import-counts"><div><dt>需求</dt><dd>{preview.counts.requirements} 条</dd></div><div><dt>图片</dt><dd>{preview.counts.images} 张</dd></div><div><dt>领域</dt><dd>{preview.counts.domains} 个</dd></div><div><dt>产品</dt><dd>{preview.counts.products} 个</dd></div><div><dt>分层功能</dt><dd>{preview.counts.tieringFeatures} 项</dd></div><div><dt>产品系列</dt><dd>{preview.counts.tieringProductSeries} 个</dd></div><div><dt>支持明细</dt><dd>{preview.counts.tieringSupportRecords} 条</dd></div><div><dt>来源 / 待核验</dt><dd>{preview.counts.tieringEvidenceSources} / {preview.counts.tieringVerificationIssues}</dd></div></dl>
+          <dl className="import-counts"><div><dt>需求</dt><dd>{preview.counts.requirements} 条</dd></div><div><dt>删除记录</dt><dd>{preview.counts.requirementTombstones ?? 0} 条</dd></div><div><dt>图片</dt><dd>{preview.counts.images} 张</dd></div><div><dt>领域</dt><dd>{preview.counts.domains} 个</dd></div><div><dt>产品</dt><dd>{preview.counts.products} 个</dd></div><div><dt>分层功能</dt><dd>{preview.counts.tieringFeatures} 项</dd></div><div><dt>产品系列</dt><dd>{preview.counts.tieringProductSeries} 个</dd></div><div><dt>支持明细</dt><dd>{preview.counts.tieringSupportRecords} 条</dd></div><div><dt>来源 / 待核验</dt><dd>{preview.counts.tieringEvidenceSources} / {preview.counts.tieringVerificationIssues}</dd></div></dl>
           <div className="import-guidance"><b>{preview.packageKind === "tiering-seed" ? "分层分级初始包只能合并" : "选择导入方式"}</b><span>{preview.packageKind === "tiering-seed" ? "合并只写入历史需求、领域与分层分级数据，不覆盖产品、成员、PPT 白名单、卡片编辑和其他需求。" : "合并导入会按名称合并字典，并保留更新时间较新的同 ID 需求；整体替换会用数据包完整覆盖当前业务数据。"}</span></div>
-          <ImportDifferenceList differences={preview.differences} />
+          <ImportDifferenceList differences={preview.differences} legacyRequirementDecisions={legacyRequirementDecisions} onLegacyRequirementDecision={(id, decision) => setLegacyRequirementDecisions((current) => ({ ...current, [id]: decision }))} />
           {preview.differences.length > 0 && <label className="import-difference-confirm"><input type="checkbox" checked={packageDifferencesConfirmed} onChange={(event) => setPackageDifferencesConfirmed(event.target.checked)} /><span>我已逐项核对以上全部差异，确认合并这些变化。</span></label>}
-          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setPreview(null)} disabled={Boolean(applying)}>取消</button><button className="button dark" onClick={() => applyPackage("merge")} disabled={Boolean(applying) || (preview.differences.length > 0 && !packageDifferencesConfirmed)}>{applying === "merge" ? "合并中…" : "确认差异并合并"}</button>{preview.packageKind !== "tiering-seed" && <button className="button danger" onClick={() => applyPackage("replace")} disabled={Boolean(applying)}>{applying === "replace" ? "替换中…" : "整体替换"}</button>}</div>
+          <div className="import-dialog-actions"><button className="button ghost" onClick={() => setPreview(null)} disabled={Boolean(applying)}>取消</button><button className="button dark" onClick={() => applyPackage("merge")} disabled={Boolean(applying) || (preview.differences.length > 0 && !packageDifferencesConfirmed) || preview.ambiguousRequirementIds.some((id) => !legacyRequirementDecisions[id])}>{applying === "merge" ? "合并中…" : "确认差异并合并"}</button>{preview.packageKind !== "tiering-seed" && <button className="button danger" onClick={() => applyPackage("replace")} disabled={Boolean(applying)}>{applying === "replace" ? "替换中…" : "整体替换"}</button>}</div>
         </div>
       </div>}
     </>
@@ -2183,14 +2525,14 @@ function ImportIssueList({ title, tone, items }: { title: string; tone: "error" 
   return <div className={`import-issues ${tone}`}><b>{title}</b><ul>{items.slice(0, 8).map((item, index) => <li key={`${item.sheet}-${item.cell}-${index}`}><span>{item.sheet}!{item.cell}</span>{item.message}</li>)}</ul>{items.length > 8 && <small>另有 {items.length - 8} 项，请修正后重新选择文件检查。</small>}</div>;
 }
 
-function ImportDifferenceList({ differences }: { differences: WorkspaceImportPreview["differences"] }) {
+function ImportDifferenceList({ differences, legacyRequirementDecisions, onLegacyRequirementDecision }: { differences: WorkspaceImportPreview["differences"]; legacyRequirementDecisions?: Record<string, LegacyRequirementDecision>; onLegacyRequirementDecision?: (id: string, decision: LegacyRequirementDecision) => void }) {
   if (!differences.length) return <div className="import-differences empty-differences"><b>合并差异</b><span>当前文件与本机数据没有会被合入的差异。</span></div>;
-  return <div className="import-differences"><div className="import-differences-head"><b>全部合并差异</b><span>{differences.length} 项记录变化，可逐项展开核对</span></div><div className="import-difference-scroll">{differences.map((difference) => <ImportDifferenceItem key={`${difference.entity}-${difference.key}`} difference={difference} />)}</div></div>;
+  return <div className="import-differences"><div className="import-differences-head"><b>全部合并差异</b><span>{differences.length} 项记录变化，可逐项展开核对</span></div><div className="import-difference-scroll">{differences.map((difference) => <ImportDifferenceItem key={`${difference.entity}-${difference.key}`} difference={difference} legacyDecision={legacyRequirementDecisions?.[difference.key]} onLegacyDecision={onLegacyRequirementDecision} />)}</div></div>;
 }
 
-function ImportDifferenceItem({ difference }: { difference: WorkspaceImportPreview["differences"][number] }) {
+function ImportDifferenceItem({ difference, legacyDecision, onLegacyDecision }: { difference: WorkspaceImportPreview["differences"][number]; legacyDecision?: LegacyRequirementDecision; onLegacyDecision?: (id: string, decision: LegacyRequirementDecision) => void }) {
   const [expanded, setExpanded] = useState(false);
-  return <details open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}><summary><span className={`difference-change ${difference.change}`}>{difference.change}</span><b>{difference.entity} · {difference.title}</b><small>{difference.fields.length} 个字段</small></summary>{expanded && <table><thead><tr><th>字段</th><th>本机值</th><th>导入后</th></tr></thead><tbody>{difference.fields.map((field) => <tr key={field.field}><th>{field.field}</th><td>{field.currentValue || "—"}</td><td>{field.incomingValue || "—"}</td></tr>)}</tbody></table>}</details>;
+  return <details open={expanded || difference.decisionRequired} onToggle={(event) => setExpanded(event.currentTarget.open)}><summary><span className={`difference-change ${difference.change}`}>{difference.change}</span><b>{difference.entity} · {difference.title}</b><small>{difference.fields.length} 个字段</small></summary>{(expanded || difference.decisionRequired) && <><table><thead><tr><th>字段</th><th>本机值</th><th>导入后</th></tr></thead><tbody>{difference.fields.map((field) => <tr key={field.field}><th>{field.field}</th><td>{field.currentValue || "—"}</td><td>{field.incomingValue || "—"}</td></tr>)}</tbody></table>{difference.decisionRequired && onLegacyDecision && <div className="legacy-requirement-decision"><span>请选择本次处理：</span><label><input type="radio" name={`legacy-${difference.key}`} checked={legacyDecision === "merge"} onChange={() => onLegacyDecision(difference.key, "merge")} /> 合入需求</label><label><input type="radio" name={`legacy-${difference.key}`} checked={legacyDecision === "keep-deleted"} onChange={() => onLegacyDecision(difference.key, "keep-deleted")} /> 保持删除</label></div>}</>}</details>;
 }
 
 function Metric({ label, value, suffix, accent = "plain" }: { label: string; value: string | number; suffix: string; accent?: string }) {
@@ -2205,9 +2547,10 @@ function SourceBadge({ source }: { source: RequirementSource }) {
   return <span className="source-badge"><i style={{ background: SOURCE_COLORS[source] }} />{source}</span>;
 }
 
-function ScopeBadge({ scope }: { scope: RequirementScope }) {
+function ScopeBadge({ scope, compact = false }: { scope: RequirementScope; compact?: boolean }) {
   const tone = scope === "全球" ? "global" : scope === "仅国内" ? "domestic" : "overseas";
-  return <span className={`scope-badge ${tone}`}>{scope}</span>;
+  const label = compact ? compactRequirementScope(scope) : scope;
+  return <span className={`scope-badge ${tone}`}>{label}</span>;
 }
 
 function ResponsibilityCell({ members }: { members: Member[] }) {
@@ -2228,7 +2571,7 @@ function pageTitle(page: Page): string {
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗送检七类路标", tiering: "离线管理十三个华为产品系列对运动健康原子功能的支持规格", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
+  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗认证七类路标", tiering: "离线管理十三个华为产品系列对运动健康原子功能的支持规格", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {
@@ -2236,7 +2579,7 @@ function formatNumber(value: number): string {
 }
 
 function workloadBreakdownItems(workload: WorkloadBreakdown): Array<[string, number]> {
-  const items: Array<[string, number]> = [["设备", workload.device], ["App", workload.app], ["云侧", workload.cloud]];
+  const items: Array<[string, number]> = [["设备", workload.device], ["运动健康 App", workload.app], ["创新研究 App", workload.researchApp], ["云侧", workload.cloud], ["算法", workload.algorithm]];
   if (workload.unallocated > 0) items.push(["待拆分", workload.unallocated]);
   return items;
 }
@@ -2246,15 +2589,18 @@ function formatWorkloadBreakdown(workload: WorkloadBreakdown): string {
 }
 
 function formatMonth(value: string): string {
+  if (!value) return "未填写";
   const [year, month] = value.split("-");
   return `${year}年${Number(month)}月`;
 }
 
 function formatRequirementLaunch(item: Pick<Requirement, "targetMonth" | "historicalLaunch">): string {
+  if (!item.targetMonth) return "送检版本未填写";
   return item.historicalLaunch ? formatHistoricalLaunch(item.historicalLaunch, item.targetMonth) : formatMonth(item.targetMonth);
 }
 
 function formatRoadmapGroupLaunch(group: RoadmapGroup): string {
+  if (!group.targetMonth) return "送检版本未填写";
   const historical = group.requirements.find((item) => item.historicalLaunch);
   return historical ? formatHistoricalLaunch(historical.historicalLaunch!, group.targetMonth) : formatMonth(group.targetMonth);
 }

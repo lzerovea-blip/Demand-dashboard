@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   TIERING_SUPPORT_STATUSES,
   type AppSnapshot,
   type Requirement,
   type SaveTieringSupportInput,
+  type TieringChangeLog,
   type TieringSupportRecord,
   type TieringSupportStatus,
+  type UpdateTieringChangeLogInput,
 } from "../shared/types";
 import { EMPTY_TIERING_DATA, isHistoricalTieringFeature, normalizeTieringData, resolveTieringFeature, tieringSupportId } from "../shared/tiering";
 import { formatHistoricalLaunch } from "../shared/tieringLaunches";
@@ -21,11 +23,13 @@ interface Props {
   onSaveSupport: (input: SaveTieringSupportInput) => Promise<void>;
   onOpenRequirement: (requirement: Requirement) => void;
   onRegenerateRequirement: (featureId: string) => Promise<void>;
+  onUpdateChangeLog: (input: UpdateTieringChangeLogInput) => Promise<void>;
+  onDeleteChangeLog: (log: TieringChangeLog, trigger: HTMLElement) => void;
 }
 
 const SERIES_SESSION_KEY = "tiering-visible-series";
 
-export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRegenerateRequirement }: Props) {
+export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRegenerateRequirement, onUpdateChangeLog, onDeleteChangeLog }: Props) {
   const tiering = normalizeTieringData(snapshot.tiering ?? EMPTY_TIERING_DATA);
   const resolvedFeatures = tiering.features.map((feature) => resolveTieringFeature(feature, snapshot.requirements, snapshot.domains));
   tiering.features = resolvedFeatures.map((item) => item.feature);
@@ -51,6 +55,7 @@ export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRege
     if (halfYear && !versions.some((item) => item.halfYear === halfYear)) setHalfYear("");
   }, [planningMemberId, productManagerMemberId, halfYear, planningMembers.map((item) => item.id).join("|"), productManagers.map((item) => item.id).join("|"), versions.map((item) => item.halfYear).join("|")]);
   const [busyRecordId, setBusyRecordId] = useState<string | null>(null);
+  const [editingLog, setEditingLog] = useState<TieringChangeLog | null>(null);
   const [selectedSeriesIds, setSelectedSeriesIds] = useState<string[]>(() => readSeriesSelection(allSeriesIds));
   const selectedSeriesSet = useMemo(() => new Set(selectedSeriesIds), [selectedSeriesIds]);
   const selectedSeries = tiering.productSeries.filter((item) => selectedSeriesSet.has(item.id));
@@ -139,7 +144,43 @@ export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRege
         {selectedSeries.length > 0 && !visibleFeatures.length && <div className="tiering-no-series">暂无符合条件的需求；13 个内置系列已就绪，保存需求后会自动生成支持规格。</div>}
       </div>
     </>}
-    {view === "logs" && <div className="panel tiering-ledger"><div className="tiering-section-title"><div><h2>变更记录</h2><p>每次调整系列支持状态都会自动记录修改前后内容。</p></div></div><table><thead><tr><th>时间</th><th>触发类型</th><th>功能 / 系列</th><th>原因</th><th>记录状态</th></tr></thead><tbody>{tiering.changeLogs.map((log) => <tr key={log.id}><td>{formatDate(log.changedAt)}</td><td>{log.triggerType}</td><td>{log.featureId} / {log.seriesId || "—"}</td><td>{log.reason}</td><td>{log.recordStatus}</td></tr>)}</tbody></table></div>}
+    {view === "logs" && <div className="panel tiering-ledger"><div className="tiering-section-title"><div><h2>变更记录</h2><p>支持编辑管理信息或永久删除记录；操作不会改变当前系列支持状态。</p></div></div><table><thead><tr><th>时间</th><th>触发类型</th><th>功能 / 系列</th><th>原因</th><th>审核人</th><th>记录状态</th><th>操作</th></tr></thead><tbody>{tiering.changeLogs.map((log) => <tr key={log.id}><td>{formatDate(log.changedAt)}</td><td>{log.triggerType}</td><td>{log.featureId} / {log.seriesId || "—"}</td><td>{log.reason}</td><td>{log.reviewer || "—"}</td><td>{log.recordStatus}</td><td><div className="row-actions"><button type="button" onClick={() => setEditingLog(log)}>编辑</button><button type="button" className="danger" onClick={(event) => onDeleteChangeLog(log, event.currentTarget)}>删除</button></div></td></tr>)}</tbody></table></div>}
+    {editingLog && <ChangeLogEditor log={editingLog} onClose={() => setEditingLog(null)} onSave={async (input) => { await onUpdateChangeLog(input); setEditingLog(null); }} />}
+  </div>;
+}
+
+function ChangeLogEditor({ log, onClose, onSave }: { log: TieringChangeLog; onClose: () => void; onSave: (input: UpdateTieringChangeLogInput) => Promise<void> }) {
+  const [reason, setReason] = useState(log.reason);
+  const [reviewer, setReviewer] = useState(log.reviewer);
+  const [recordStatus, setRecordStatus] = useState(log.recordStatus || "有效");
+  const [note, setNote] = useState(log.note);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onSave({ logId: log.id, reason, reviewer, recordStatus, note });
+    } catch (value) {
+      setError(value instanceof Error ? value.message : String(value));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <form className="drawer tiering-log-editor" role="dialog" aria-modal="true" aria-labelledby="tiering-log-editor-title" onSubmit={(event) => void submit(event)}>
+      <div className="drawer-header"><div><h2 id="tiering-log-editor-title">编辑变更记录</h2><p>{log.featureId} / {log.seriesId || "—"}</p></div><button type="button" className="icon-button" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div>
+      <div className="form-body">
+        <div className="tiering-log-readonly"><span>变更时间<b>{formatDate(log.changedAt)}</b></span><span>触发类型<b>{log.triggerType}</b></span><span>变更前<b>{log.before || "—"}</b></span><span>变更后<b>{log.after || "—"}</b></span></div>
+        <label className="field"><span>变更原因 *</span><textarea value={reason} maxLength={500} required onChange={(event) => setReason(event.target.value)} /></label>
+        <div className="field-row"><label className="field"><span>审核人</span><input value={reviewer} maxLength={100} onChange={(event) => setReviewer(event.target.value)} /></label><label className="field"><span>记录状态</span><select value={recordStatus} onChange={(event) => setRecordStatus(event.target.value)}><option>有效</option><option>待审核</option><option>已归档</option></select></label></div>
+        <label className="field"><span>备注</span><textarea value={note} maxLength={1000} onChange={(event) => setNote(event.target.value)} /></label>
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </div>
+      <div className="drawer-footer"><span>编辑只更新管理信息，不改变支持状态。</span><div><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button type="submit" className="button primary" disabled={busy}>{busy ? "保存中…" : "保存"}</button></div></div>
+    </form>
   </div>;
 }
 

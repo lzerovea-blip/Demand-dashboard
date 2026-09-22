@@ -1,7 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
 import { basename, join } from "node:path";
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { LocalDatabase } from "./database.js";
 import { createWorkspacePackage, inspectWorkspacePackage, type PreparedWorkspaceImport } from "./workspacePackage.js";
 import type {
@@ -16,7 +17,11 @@ import type {
   SaveTieringSupportInput,
   SaveTieringEvidenceSourceInput,
   UpdateTieringIssueInput,
+  UpdateTieringChangeLogInput,
+  RendererDiagnosticInput,
+  LegacyRequirementDecision,
   WorkspaceImportMode,
+  WorkspaceWorkbookFieldSelection,
 } from "../shared/types.js";
 import { buildPptExportPlan } from "../shared/pptExport.js";
 import { halfYearSequence } from "../shared/roadmap.js";
@@ -29,34 +34,24 @@ import {
   inspectWorkspaceWorkbook,
   type PreparedWorkspaceWorkbookImport,
 } from "./workspaceWorkbook.js";
+import { createTieringWorkbook } from "./tieringWorkbook.js";
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
+import { beginDiagnosticStage, diagnosticInfo, initializeStartupDiagnostics, sanitizeDiagnosticDetail, writeStartupDiagnostic } from "./diagnostics.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-09-04";
+const APP_RELEASED_AT = "2026-09-22";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
 let database: LocalDatabase;
 let mainWindow: BrowserWindow | null = null;
+let startupPhase = "process-start";
 const BUILTIN_TEMPLATE_FILE = "需求路标模板-共创版-v0.1.pptx";
 const pendingImports = new Map<string, PreparedWorkspaceImport>();
 const pendingWorkbookImports = new Map<string, PreparedWorkspaceWorkbookImport>();
 
 function safeErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return message.replace(/需求“[^”]*”/g, "某条需求");
-}
-
-async function writeStartupDiagnostic(event: string, detail: string): Promise<string | undefined> {
-  try {
-    const directory = join(app.getPath("userData"), "logs");
-    const path = join(directory, "startup.log");
-    await mkdir(directory, { recursive: true });
-    await appendFile(path, `[${new Date().toISOString()}] ${event}: ${detail}\n`, "utf8");
-    return path;
-  } catch {
-    return undefined;
-  }
+  return sanitizeDiagnosticDetail(error);
 }
 
 async function getResolvedIrmEnvironment() {
@@ -72,6 +67,9 @@ async function createWindow(): Promise<void> {
     minHeight: 760,
     backgroundColor: "#f4f6f8",
     title: PRODUCT_NAME,
+    icon: app.isPackaged
+      ? join(process.resourcesPath, "app-icon.png")
+      : join(app.getAppPath(), "build-resources", "app-icon.png"),
     show: true,
     webPreferences: {
       preload: join(app.getAppPath(), "dist-electron", "preload", "index.cjs"),
@@ -81,6 +79,7 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow = appWindow;
+  writeStartupDiagnostic("window-created", `bounds=${appWindow.getBounds().width}x${appWindow.getBounds().height}`);
 
   const notifyFullscreenChange = (enabled: boolean) => {
     if (!appWindow.webContents.isDestroyed()) {
@@ -90,13 +89,16 @@ async function createWindow(): Promise<void> {
   appWindow.on("enter-full-screen", () => notifyFullscreenChange(true));
   appWindow.on("leave-full-screen", () => notifyFullscreenChange(false));
   appWindow.on("unresponsive", () => {
-    void writeStartupDiagnostic("window-unresponsive", "主窗口失去响应");
+    writeStartupDiagnostic("window-unresponsive", "main-window");
   });
+  appWindow.on("responsive", () => writeStartupDiagnostic("window-responsive", "main-window"));
+  appWindow.once("ready-to-show", () => writeStartupDiagnostic("window-ready-to-show", "main-window"));
   appWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
-    void writeStartupDiagnostic("renderer-load-failed", `${errorCode} ${errorDescription}`);
+    writeStartupDiagnostic("renderer-load-failed", `${errorCode} ${errorDescription}`);
   });
+  appWindow.webContents.on("did-finish-load", () => writeStartupDiagnostic("preload-and-document-loaded", "main-window"));
   appWindow.webContents.on("render-process-gone", (_event, details) => {
-    void writeStartupDiagnostic("renderer-process-gone", `${details.reason} exitCode=${details.exitCode}`);
+    writeStartupDiagnostic("renderer-process-gone", `${details.reason} exitCode=${details.exitCode}`);
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -137,10 +139,26 @@ function registerIpc(): void {
   ipcMain.handle("ppt-access:check-environment", () => getResolvedIrmEnvironment());
   ipcMain.handle("groups:save", (_event, input: SaveGroupOverrideInput) => database.saveGroupOverride(input));
   ipcMain.handle("groups:reorder", (_event, input: SaveGroupOrderInput) => database.saveGroupOrder(input));
+  ipcMain.handle("medical-roadmap:reorder", (_event, input: { requirementIds: string[] }) => database.saveMedicalRoadmapOrder(input));
   ipcMain.handle("tiering:support:save", (_event, input: SaveTieringSupportInput) => database.saveTieringSupport(input));
   ipcMain.handle("tiering:source:save", (_event, input: SaveTieringEvidenceSourceInput) => database.saveTieringEvidenceSource(input));
   ipcMain.handle("tiering:issue:update", (_event, input: UpdateTieringIssueInput) => database.updateTieringIssue(input));
+  ipcMain.handle("tiering:change-log:update", (_event, input: UpdateTieringChangeLogInput) => database.updateTieringChangeLog(input));
+  ipcMain.handle("tiering:change-log:delete", (_event, logId: string) => database.deleteTieringChangeLog(logId));
   ipcMain.handle("tiering:requirement:regenerate", (_event, featureId: string) => database.regenerateTieringRequirement(featureId));
+  ipcMain.handle("diagnostics:renderer-report", async (_event, input: RendererDiagnosticInput) => {
+    const allowed = new Set(["renderer-ready", "renderer-error", "renderer-unhandled-rejection", "react-error"]);
+    if (!input || !allowed.has(input.event)) throw new Error("无效的前端诊断事件");
+    writeStartupDiagnostic(input.event, input.detail ?? "");
+    if (input.event === "renderer-ready") writeStartupDiagnostic("window-interactive", "renderer-reported-ready");
+  });
+  ipcMain.handle("diagnostics:info", () => diagnosticInfo());
+  ipcMain.handle("diagnostics:open-directory", async () => {
+    const { directory } = diagnosticInfo();
+    const result = await shell.openPath(directory);
+    if (result) throw new Error(`无法打开诊断日志目录：${result}`);
+    return { directory, currentLogPath: join(directory, "startup.log") };
+  });
 
   ipcMain.handle("workspace:export", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -173,14 +191,19 @@ function registerIpc(): void {
     return { canceled: false, preview: { token, fileName: basename(filePath), ...prepared.preview } };
   });
 
-  ipcMain.handle("workspace:apply", async (_event, input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string }) => {
+  ipcMain.handle("workspace:apply", async (_event, input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string; legacyRequirementDecisions?: Record<string, LegacyRequirementDecision> }) => {
     if (!input || !["merge", "replace"].includes(input.mode)) throw new Error("请选择有效的导入方式");
     const prepared = pendingImports.get(input.token);
     if (!prepared) throw new Error("导入数据已失效，请重新选择数据包");
     if (prepared.preview.packageKind === "tiering-seed" && input.mode !== "merge") throw new Error("分层分级初始包只能选择合并导入，不能整体替换");
     if (input.mode === "merge" && input.differenceDigest !== prepared.preview.differenceDigest) throw new Error("请先核对并确认全部合并差异");
+    if (input.mode === "merge") {
+      const decisions = input.legacyRequirementDecisions ?? {};
+      const unresolved = prepared.preview.ambiguousRequirementIds.filter((id) => !["merge", "keep-deleted"].includes(decisions[id]));
+      if (unresolved.length) throw new Error(`仍有 ${unresolved.length} 条旧版新增需求未选择“合入”或“保持删除”`);
+    }
     pendingImports.delete(input.token);
-    return { snapshot: await database.importWorkspace(prepared.data, input.mode) };
+    return { snapshot: await database.importWorkspace(prepared.data, input.mode, input.legacyRequirementDecisions) };
   });
 
   ipcMain.handle("workbook:export", async (_event, input: HalfYearRange) => {
@@ -197,6 +220,21 @@ function registerIpc(): void {
     return { canceled: false, path: outputPath };
   });
 
+  ipcMain.handle("tiering-workbook:export", async (_event, input: HalfYearRange) => {
+    if (!input) throw new Error("请选择有效的分层分级 Excel 导出区间");
+    halfYearSequence(input.start, input.end);
+    const generatedAt = new Date().toISOString();
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: "导出分层分级 Excel",
+      defaultPath: `分层分级-${input.start.slice(2)}-${input.end.slice(2)}-${generatedAt.slice(0, 10)}.xlsx`,
+      filters: [{ name: "Excel 工作簿", extensions: ["xlsx"] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    const outputPath = result.filePath.toLowerCase().endsWith(".xlsx") ? result.filePath : `${result.filePath}.xlsx`;
+    await writeFile(outputPath, await createTieringWorkbook(database.getWorkspaceData(), app.getVersion(), generatedAt, input));
+    return { canceled: false, path: outputPath };
+  });
+
   ipcMain.handle("workbook:inspect", async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: "选择企业协作 Excel",
@@ -205,21 +243,32 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     const filePath = result.filePaths[0];
-    const prepared = await inspectWorkspaceWorkbook(await readFile(filePath), basename(filePath), database.getWorkspaceData());
+    const bytes = await readFile(filePath);
+    const prepared = await inspectWorkspaceWorkbook(bytes, basename(filePath), database.getWorkspaceData());
+    if (prepared.parsed.formatVersion === "v8") {
+      prepared.sourceFilePath = filePath;
+      prepared.sourceSha256 = createHash("sha256").update(bytes).digest("hex");
+    }
     const token = crypto.randomUUID();
     pendingWorkbookImports.clear();
     pendingWorkbookImports.set(token, prepared);
     return { canceled: false, preview: { token, fileName: basename(filePath), ...prepared.preview } };
   });
 
-  ipcMain.handle("workbook:apply", async (_event, input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string }) => {
+  ipcMain.handle("workbook:apply", async (_event, input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string; fieldSelection?: WorkspaceWorkbookFieldSelection }) => {
     if (!input || !["local-wins", "excel-wins"].includes(input.conflictMode)) throw new Error("请选择有效的冲突处理方式");
     const prepared = pendingWorkbookImports.get(input.token);
     if (!prepared) throw new Error("Excel 导入数据已失效，请重新选择文件");
     if (input.differenceDigest !== prepared.preview.differenceDigest) throw new Error("请先核对并确认全部 Excel 差异");
     if (prepared.parsed.errors.length) throw new Error("Excel 存在校验错误，请修正后重新导入");
+    if (prepared.parsed.formatVersion === "v8") {
+      if (!prepared.sourceFilePath || !prepared.sourceSha256) throw new Error("Excel 文件校验信息缺失，请重新选择文件");
+      const latestBytes = await readFile(prepared.sourceFilePath).catch(() => { throw new Error("Excel 文件已移动或删除，请重新选择文件"); });
+      if (createHash("sha256").update(latestBytes).digest("hex") !== prepared.sourceSha256) throw new Error("Excel 文件在预览后发生变化，请重新选择文件检查");
+    }
+    const snapshot = await database.importWorkspaceWorkbook(prepared, input.conflictMode, input.fieldSelection);
     pendingWorkbookImports.delete(input.token);
-    return { snapshot: await database.importWorkspaceWorkbook(prepared, input.conflictMode) };
+    return { snapshot };
   });
 
   ipcMain.handle("template:draft-export", async () => {
@@ -286,33 +335,70 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  startupPhase = "electron-ready";
   nativeTheme.themeSource = "light";
+  if (process.platform === "win32") app.setAppUserModelId("com.local.healthroadmap");
   app.setPath("userData", process.env.SOLUTION_REQUIREMENTS_USER_DATA_DIR || join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY));
+  initializeStartupDiagnostics(app.getPath("userData"), app.getVersion());
+  writeStartupDiagnostic("process-ready", `pid=${process.pid}`);
+  startupPhase = "user-data-initialization";
+  const finishUserData = beginDiagnosticStage("user-data-initialization");
+  await mkdir(app.getPath("userData"), { recursive: true });
+  finishUserData();
   database = new LocalDatabase();
+  startupPhase = "database-read-migration-and-built-in-series";
+  const finishDatabase = beginDiagnosticStage("database-read-migration-and-built-in-series");
   const initialization = await database.initialize();
+  finishDatabase();
   if (initialization.skippedTieringRequirements > 0) {
-    await writeStartupDiagnostic(
+    writeStartupDiagnostic(
       "legacy-domain-links-skipped",
       `检测到 ${initialization.skippedTieringRequirements} 项需求或分层规格的关联失效；原数据和支持状态已保留，请在需求池或分层分级修复关联`,
     );
   }
+  startupPhase = "ipc-registration";
+  const finishIpc = beginDiagnosticStage("ipc-registration");
   registerIpc();
+  finishIpc();
+  startupPhase = "window-creation-and-load";
+  const finishWindow = beginDiagnosticStage("window-creation-and-load");
   await createWindow();
+  finishWindow();
+  startupPhase = "running";
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
 }).catch(async (error: unknown) => {
   const message = safeErrorMessage(error);
-  const diagnosticPath = await writeStartupDiagnostic("startup-failed", message);
+  const diagnosticPath = writeStartupDiagnostic("startup-failed", `stage=${startupPhase} ${message}`);
   dialog.showErrorBox(
     `${PRODUCT_NAME}无法启动`,
     [
       "应用启动初始化失败，已停止后台进程。",
+      `失败阶段：${startupPhase}`,
       message,
       diagnosticPath ? `诊断日志：${diagnosticPath}` : "未能写入诊断日志。",
     ].join("\n\n"),
   );
   app.exit(1);
+});
+
+process.on("uncaughtException", (error) => {
+  const message = safeErrorMessage(error);
+  const diagnosticPath = writeStartupDiagnostic("main-uncaught-exception", message);
+  if (app.isReady()) {
+    dialog.showErrorBox(
+      `${PRODUCT_NAME}发生致命错误`,
+      `主进程已停止以避免后台残留。\n\n${message}\n\n${diagnosticPath ? `诊断日志：${diagnosticPath}` : "未能写入诊断日志。"}`,
+    );
+  }
+  app.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  writeStartupDiagnostic("main-unhandled-rejection", reason);
+});
+app.on("child-process-gone", (_event, details) => {
+  writeStartupDiagnostic("child-process-gone", `${details.type} ${details.reason} exitCode=${details.exitCode}`);
 });
 
 app.on("window-all-closed", () => {

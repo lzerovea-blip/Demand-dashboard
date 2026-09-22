@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { tieringFeatureHalfYear, tieringMatchesOwnersAndVersion } from "../src/shared/tieringFilters";
 import {
   buildHistoricalRequirement,
   buildTieringFeatureForRequirement,
@@ -6,13 +7,16 @@ import {
   createTieringSupportRecord,
   EMPTY_TIERING_DATA,
   historicalRequirementId,
+  isTieringEligibleSource,
   migrateArchivedHistoricalRequirement,
   migrateTieringRequirementDescription,
   mergeTieringData,
   missingBuiltInTieringProductSeries,
   normalizeTieringData,
   normalizeTieringSupportStatus,
+  normalizeWorkspaceTieringScope,
   resolveTieringRequirementDomains,
+  TIERING_EXPECTED_COUNTS,
   tieringFeatureIdForRequirement,
   tieringSourceForL0,
   tieringSupportId,
@@ -20,7 +24,15 @@ import {
   validateTieringSupportRecord,
 } from "../src/shared/tiering";
 import { buildHistoricalLaunchLedger, formatHistoricalLaunch, historicalLaunchForFeatureId } from "../src/shared/tieringLaunches";
-import type { DictionaryItem, Requirement, TieringFeature, TieringSupportRecord } from "../src/shared/types";
+import type { DictionaryItem, Requirement, TieringFeature, TieringSupportRecord, WorkspaceData } from "../src/shared/types";
+
+it("未定送检版本在分层全部版本可见，不回退到旧历史日期匹配具体版本", () => {
+  const feature = { id: "F001", historicalLaunch: { suggestedTargetMonth: "2027-03" } } as TieringFeature;
+  const requirement = { targetMonth: "", source: "CE认证" } as Requirement;
+  expect(tieringFeatureHalfYear(feature, requirement)).toBe("");
+  expect(tieringMatchesOwnersAndVersion(feature, requirement, [], { planningMemberId: "", productManagerMemberId: "", halfYear: "" })).toBe(true);
+  expect(tieringMatchesOwnersAndVersion(feature, requirement, [], { planningMemberId: "", productManagerMemberId: "", halfYear: "2027H1" })).toBe(false);
+});
 
 const feature: TieringFeature = { id: "F001", l0: "基础体征测量", l1: "心率", requirementTitle: "单次心率测量", requirementId: "historical-huawei-F001", sortOrder: 0, createdAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z" };
 const support: TieringSupportRecord = { id: "F001::PS01", featureId: "F001", seriesId: "PS01", status: "支持", supportedModels: "", excludedModels: "", phoneOsMarket: "中国大陆", minHealthAppVersion: "", minDeviceVersion: "", prerequisites: "", sourceIds: ["S001"], sourceUrl: "", verifiedAt: "2026-08-05", evidenceLevel: "A", auditStatus: "已公开核验", note: "", updatedAt: "2026-08-05T00:00:00.000Z" };
@@ -33,6 +45,7 @@ describe("需求分层分级", () => {
     expect(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.name)).toEqual([
       "WATCH数字系列", "GT系列", "GT Pro系列", "ULTIMATE系列", "FIT系列", "FIT Pro系列", "D系列", "WATCH Buds系列", "Band系列", "儿童手表", "体脂秤", "戒指系列", "无屏系列",
     ]);
+    expect(TIERING_EXPECTED_COUNTS).toMatchObject({ features: 156, productSeries: 13, supportRecords: 2028 });
   });
 
   it("只补齐缺失系列且不覆盖本机已有系列资料", () => {
@@ -54,6 +67,16 @@ describe("需求分层分级", () => {
     expect(["华为创新研究app", "慢病管理"].map(tieringSourceForL0)).toEqual(["健康高阶", "健康高阶"]);
     expect(tieringSourceForL0("保持活力")).toBe("运动基础");
     expect(tieringSourceForL0("专业运动")).toBe("运动高阶");
+  });
+
+  it("只将运动、健康和 AI 的九个来源纳入分层分级", () => {
+    expect([
+      "运动基础", "运动进阶", "运动高阶",
+      "健康基础", "健康进阶", "健康高阶",
+      "AI运动", "AI健康", "AI综合",
+    ].every((source) => isTieringEligibleSource(source as Requirement["source"]))).toBe(true);
+    expect(["行业", "全场景", "health平台", "NMPA认证", "CE认证"]
+      .every((source) => !isTieringEligibleSource(source as Requirement["source"]))).toBe(true);
   });
 
   it("历史需求使用逐功能建议上线时间并带证据标识", () => {
@@ -145,6 +168,38 @@ describe("需求分层分级", () => {
     const next = buildTieringFeatureForRequirement(requirement, "健康报告", "健康摘要", 156, support.updatedAt);
     expect(next).toMatchObject({ id: "REQ-r-normal", l0: "健康报告", l1: "健康摘要", requirementTitle: "新的健康需求", requirementId: "r-normal", sortOrder: 156 });
     expect(createTieringSupportRecord(next.id, "PS01", support.updatedAt)).toMatchObject({ id: "REQ-r-normal::PS01", status: "未判断" });
+  });
+
+  it("仅需求侧保留 F001 时仍恢复历史功能，移出范围后只解除关联", () => {
+    const domainL0: DictionaryItem = { id: "l0", name: "基础体征测量", sortOrder: 0, active: true, level: "L0" };
+    const domainL1: DictionaryItem = { id: "l1", name: "心率", sortOrder: 0, active: true, level: "L1", parentId: "l0" };
+    const historicalRequirement = {
+      ...buildHistoricalRequirement(feature, [], [], domainL0, domainL1),
+      id: "r-f001",
+      tieringFeatureId: "F001",
+    };
+    const workspace: WorkspaceData = {
+      requirements: [historicalRequirement],
+      domains: [domainL0, domainL1],
+      products: [],
+      members: [],
+      groupOverrides: [],
+      pptAccessPolicy: { entries: [], updatedAt: support.updatedAt },
+      tiering: structuredClone(EMPTY_TIERING_DATA),
+    };
+
+    const linked = normalizeWorkspaceTieringScope(workspace);
+    expect(linked.requirements[0].tieringFeatureId).toBe("F001");
+    expect(linked.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: "r-f001" }));
+    expect(linked.tiering?.supportRecords.filter((item) => item.featureId === "F001")).toHaveLength(13);
+
+    const unlinked = normalizeWorkspaceTieringScope({
+      ...linked,
+      requirements: linked.requirements.map((item) => ({ ...item, source: "行业" as const })),
+    });
+    expect(unlinked.requirements[0].tieringFeatureId).toBeUndefined();
+    expect(unlinked.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: undefined }));
+    expect(unlinked.tiering?.supportRecords.filter((item) => item.featureId === "F001")).toHaveLength(13);
   });
 
   it("旧需求领域关联失效时可识别并跳过启动同步", () => {

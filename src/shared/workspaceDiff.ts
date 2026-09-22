@@ -15,6 +15,7 @@ import type {
 } from "./types.js";
 import { normalizeTieringData } from "./tiering.js";
 import { formatHistoricalLaunch, historicalLaunchStatusLabel } from "./tieringLaunches.js";
+import { formatMedicalSubmissionMonth, medicalSubmissionTimeline } from "./medicalSubmission.js";
 
 export function diffWorkspaceData(before: WorkspaceData, after: WorkspaceData): WorkspaceImportDifference[] {
   const differences: WorkspaceImportDifference[] = [];
@@ -93,7 +94,10 @@ function requirementTitle(item: Requirement): string {
 }
 
 function requirementFields(before: Requirement, after: Requirement, beforeMembers: Member[], afterMembers: Member[]): WorkspaceFieldDifference[] {
-  const memberName = (id: string | undefined, members: Member[]) => members.find((item) => item.id === id)?.name ?? (id || "未配置");
+  const memberName = (id: string | undefined, members: Member[]) => {
+    const member = members.find((item) => item.id === id);
+    return member ? `${member.name}（${member.employeeNumber}）` : (id || "未配置");
+  };
   return changedFields([
     ["需求标题", before.title, after.title],
     ["需求描述", before.description, after.description],
@@ -102,17 +106,22 @@ function requirementFields(before: Requirement, after: Requirement, beforeMember
     ["产品经理", memberName(before.productManagerMemberId, beforeMembers), memberName(after.productManagerMemberId, afterMembers)],
     ["规划", memberName(before.planningMemberId, beforeMembers), memberName(after.planningMemberId, afterMembers)],
     ["SE", memberName(before.seMemberId, beforeMembers), memberName(after.seMemberId, afterMembers)],
+    ["算法", memberName(before.algorithmMemberId, beforeMembers), memberName(after.algorithmMemberId, afterMembers)],
     ["来源", before.source, after.source],
     ["适用范围", before.scope, after.scope],
     ["允许最近版本升级", yesNo(before.allowLatestVersionUpgrade), yesNo(after.allowLatestVersionUpgrade)],
     ["分类", before.category, after.category],
     ["上线月份", before.targetMonth, after.targetMonth],
+    ["医疗认证时间节点", medicalTimelineText(before), medicalTimelineText(after)],
+    ["医疗泳道顺序", before.medicalRoadmapSortOrder === undefined ? "默认顺序" : String(before.medicalRoadmapSortOrder + 1), after.medicalRoadmapSortOrder === undefined ? "默认顺序" : String(after.medicalRoadmapSortOrder + 1)],
     ["历史建议时间", launchText(before), launchText(after)],
     ["历史时间核验", historicalLaunchStatusLabel(before.historicalLaunch) || "—", historicalLaunchStatusLabel(after.historicalLaunch) || "—"],
     ["历史证据", before.historicalLaunch?.evidenceUrls.join("、") || "—", after.historicalLaunch?.evidenceUrls.join("、") || "—"],
     ["匹配产品", before.productIds.join("、") || "—", after.productIds.join("、") || "—"],
     ["设备工作量", String(before.deviceWorkloadPm), String(after.deviceWorkloadPm)],
-    ["App 工作量", String(before.appWorkloadPm), String(after.appWorkloadPm)],
+    ["运动健康 App 工作量", String(before.appWorkloadPm), String(after.appWorkloadPm)],
+    ["创新研究 App 工作量", String(before.researchAppWorkloadPm ?? 0), String(after.researchAppWorkloadPm ?? 0)],
+    ["算法工作量", String(before.algorithmWorkloadPm ?? 0), String(after.algorithmWorkloadPm ?? 0)],
     ["云侧工作量", String(before.cloudWorkloadPm), String(after.cloudWorkloadPm)],
     ["待拆分工作量", String(before.unallocatedWorkloadPm), String(after.unallocatedWorkloadPm)],
     ["图片", imageText(before), imageText(after)],
@@ -179,7 +188,24 @@ function tieringIssueFields(before: TieringVerificationIssue, after: TieringVeri
 }
 
 function tieringLogFields(before: TieringChangeLog, after: TieringChangeLog): WorkspaceFieldDifference[] {
-  return changedFields([["变更时间", before.changedAt, after.changedAt], ["变更前", before.before, after.before], ["变更后", before.after, after.after], ["变更原因", before.reason, after.reason]]);
+  return changedFields([
+    ["变更时间", before.changedAt, after.changedAt],
+    ["触发类型", before.triggerType, after.triggerType],
+    ["变更前", before.before, after.before],
+    ["变更后", before.after, after.after],
+    ["变更原因", before.reason, after.reason],
+    ["审核人", before.reviewer, after.reviewer],
+    ["记录状态", before.recordStatus, after.recordStatus],
+    ["备注", before.note, after.note],
+    ["更新时间", before.updatedAt, after.updatedAt],
+  ]);
+}
+
+function medicalTimelineText(item: Requirement): string {
+  if (!item.medicalSubmissionMilestones) return "—";
+  return medicalSubmissionTimeline(item.targetMonth, item.medicalSubmissionMilestones)
+    .map((node) => `${node.label}:${node.month ? formatMedicalSubmissionMonth(node.month) : "未填写"}`)
+    .join("；");
 }
 
 function changedFields(rows: Array<[string, string, string]>): WorkspaceFieldDifference[] {

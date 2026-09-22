@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import { createHash } from "node:crypto";
 import { createWorkspacePackage, inspectWorkspacePackage } from "../src/main/workspacePackage";
 import type { RequirementImage, WorkspaceData } from "../src/shared/types";
-import { EMPTY_TIERING_DATA } from "../src/shared/tiering";
+import { BUILT_IN_TIERING_PRODUCT_SERIES, createTieringSupportRecord, EMPTY_TIERING_DATA } from "../src/shared/tiering";
 
 const imageBytes = Buffer.from("offline-image-bytes", "utf8");
 const image: RequirementImage = {
@@ -32,6 +32,8 @@ const workspace: WorkspaceData = {
     deviceWorkloadPm: 0.25,
     appWorkloadPm: 0.5,
     cloudWorkloadPm: 0.25,
+    researchAppWorkloadPm: 0,
+    algorithmWorkloadPm: 0,
     unallocatedWorkloadPm: 0,
     workloadPm: 1,
     createdAt: "2026-08-19T00:00:00.000Z",
@@ -48,15 +50,98 @@ const workspace: WorkspaceData = {
 };
 
 describe(".roadmap 数据包", () => {
+  it("v6 往返空送检版本和任意倒序节点；日期清空列入合并差异", async () => {
+    const medical: WorkspaceData = { ...workspace, requirements: workspace.requirements.map((item) => ({ ...item, source: "CE认证", targetMonth: "", medicalSubmissionMilestones: { registrationStartMonth: "2029-01", certificateMonth: "2025-01" }, updatedAt: "2026-09-09T00:00:00.000Z" })) };
+    const archive = await createWorkspacePackage(medical, "0.8.16");
+    const inspected = await inspectWorkspacePackage(archive, "医疗选填.roadmap", workspace);
+    expect(inspected.data.requirements[0].targetMonth).toBe("");
+    expect(inspected.data.requirements[0].medicalSubmissionMilestones).toEqual(medical.requirements[0].medicalSubmissionMilestones);
+    expect(inspected.preview.differences.some((diff) => diff.fields.some((field) => field.field === "上线月份"))).toBe(true);
+    await expect(createWorkspacePackage({ ...medical, requirements: medical.requirements.map((item) => ({ ...item, source: "健康基础" })) }, "0.8.16")).rejects.toThrow(/上线年月/);
+    await expect(createWorkspacePackage({ ...medical, requirements: medical.requirements.map((item) => ({ ...item, targetMonth: "2027-13" })) }, "0.8.16")).rejects.toThrow(/送检版本/);
+  });
+
   it("完整往返需求、描述、图片、字典和卡片编辑", async () => {
     const archive = await createWorkspacePackage(workspace, "0.1.0", "2026-08-20T08:00:00.000Z");
+    const zip = await JSZip.loadAsync(archive);
+    expect(JSON.parse(await zip.file("manifest.json")!.async("string")).formatVersion).toBe(9);
     const inspected = await inspectWorkspacePackage(archive, "交接.roadmap");
-    expect(inspected.data).toEqual({ ...workspace, tiering: EMPTY_TIERING_DATA });
+    expect(inspected.data.requirements[0]).toMatchObject({ id: "r1", title: "社交时差", tieringFeatureId: "REQ-r1" });
+    expect(inspected.data.requirements[0].images).toEqual([image]);
+    expect(inspected.data.domains).toEqual(workspace.domains);
+    expect(inspected.data.products).toEqual(workspace.products);
+    expect(inspected.data.groupOverrides).toEqual(workspace.groupOverrides);
+    expect(inspected.data.tiering).toMatchObject({
+      features: [{ id: "REQ-r1", requirementId: "r1", requirementTitle: "社交时差" }],
+    });
+    expect(inspected.data.tiering?.productSeries).toHaveLength(13);
+    expect(inspected.data.tiering?.supportRecords).toHaveLength(13);
     expect(inspected.preview).toMatchObject({
       sourceFormat: "roadmap",
       exportedAt: "2026-08-20T08:00:00.000Z",
-      counts: { requirements: 1, images: 1, domains: 2, products: 1, groupOverrides: 1 },
+      counts: { requirements: 1, images: 1, domains: 2, products: 1, groupOverrides: 1, tieringFeatures: 1, tieringProductSeries: 13, tieringSupportRecords: 13 },
     });
+  });
+
+  it("检查时为缺少分层行的纳入范围需求补齐功能和十三系列矩阵", async () => {
+    const current: WorkspaceData = { ...workspace, requirements: [], groupOverrides: [], tiering: EMPTY_TIERING_DATA };
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(workspace, "0.8.24"), "缺少分层行.roadmap", current);
+    expect(inspected.data.requirements[0].tieringFeatureId).toBe("REQ-r1");
+    expect(inspected.preview.counts).toMatchObject({ tieringFeatures: 1, tieringProductSeries: 13, tieringSupportRecords: 13 });
+    expect(inspected.preview.differences).toContainEqual(expect.objectContaining({ entity: "分层功能", key: "REQ-r1", change: "新增" }));
+    expect(inspected.preview.differences.filter((item) => item.entity === "系列支持" && item.change === "新增")).toHaveLength(13);
+  });
+
+  it("旧包中的行业普通规格会在检查语义中清理且不进入差异预览", async () => {
+    const updatedAt = workspace.requirements[0].updatedAt;
+    const industryRequirement = { ...workspace.requirements[0], source: "行业" as const, tieringFeatureId: "REQ-r1" };
+    const industryFeature = { id: "REQ-r1", l0: "健康", l1: "睡眠", requirementTitle: industryRequirement.title, requirementId: "r1", sortOrder: 0, createdAt: updatedAt, updatedAt };
+    const oldPackage: WorkspaceData = {
+      ...workspace,
+      requirements: [industryRequirement],
+      tiering: {
+        ...EMPTY_TIERING_DATA,
+        features: [industryFeature],
+        productSeries: [{ ...BUILT_IN_TIERING_PRODUCT_SERIES[0], sourceIds: [] }],
+        supportRecords: [createTieringSupportRecord(industryFeature.id, BUILT_IN_TIERING_PRODUCT_SERIES[0].id, updatedAt)],
+      },
+    };
+    const current: WorkspaceData = { ...oldPackage, requirements: [{ ...industryRequirement, tieringFeatureId: undefined }], tiering: EMPTY_TIERING_DATA };
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(oldPackage, "0.8.23"), "旧行业规格.roadmap", current);
+    expect(inspected.data.requirements[0].tieringFeatureId).toBeUndefined();
+    expect(inspected.data.tiering?.features).toEqual([]);
+    expect(inspected.data.tiering?.supportRecords).toEqual([]);
+    expect(inspected.preview.counts).toMatchObject({ tieringFeatures: 0, tieringProductSeries: 13, tieringSupportRecords: 0 });
+    expect(inspected.preview.differences.some((item) => item.entity === "分层功能" || item.entity === "系列支持")).toBe(false);
+  });
+
+  it("v6 完整往返医疗节点并在差异预览中列出明确清除", async () => {
+    const medical: WorkspaceData = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({
+        ...item,
+        source: "NMPA认证" as const,
+        medicalSubmissionMilestones: { registrationStartMonth: "2027-01", clinicalStartMonth: "2027-04", certificateMonth: "2027-08" },
+      })),
+    };
+    const roundTrip = await inspectWorkspacePackage(await createWorkspacePackage(medical, "0.8.12"), "医疗节点.roadmap");
+    expect(roundTrip.data.requirements[0].medicalSubmissionMilestones).toEqual(medical.requirements[0].medicalSubmissionMilestones);
+    const cleared: WorkspaceData = { ...medical, requirements: medical.requirements.map((item) => ({ ...item, medicalSubmissionMilestones: undefined, updatedAt: "2026-09-04T08:00:00.000Z" })) };
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(cleared, "0.8.12"), "清除医疗节点.roadmap", medical);
+    expect(inspected.preview.differences[0].fields.map((item) => item.field)).toContain("医疗认证时间节点");
+  });
+
+  it("旧 JSON 包缺少医疗节点时保留本机已配置节点", async () => {
+    const current: WorkspaceData = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({ ...item, source: "CE认证" as const, medicalSubmissionMilestones: { registrationStartMonth: "2027-01" } })),
+    };
+    const legacyData = structuredClone(current);
+    delete legacyData.requirements[0].medicalSubmissionMilestones;
+    legacyData.requirements[0].updatedAt = "2026-09-04T08:00:00.000Z";
+    const bytes = Buffer.from(JSON.stringify({ schemaVersion: 1, exportedAt: "2026-09-04T08:00:00.000Z", data: legacyData }));
+    const inspected = await inspectWorkspacePackage(bytes, "旧版.json", current);
+    expect(inspected.data.requirements[0].medicalSubmissionMilestones).toEqual({ registrationStartMonth: "2027-01" });
   });
 
   it("合并检查返回全部逐字段差异和确认摘要", async () => {
@@ -65,9 +150,46 @@ describe(".roadmap 数据包", () => {
       requirements: workspace.requirements.map((item) => ({ ...item, title: "社交时差升级", scope: "仅国内" as const, updatedAt: "2026-08-30T00:00:00.000Z" })),
     };
     const inspected = await inspectWorkspacePackage(await createWorkspacePackage(incoming, "0.7.28"), "差异.roadmap", workspace);
-    expect(inspected.preview.differences).toHaveLength(1);
-    expect(inspected.preview.differences[0]).toMatchObject({ entity: "需求", title: "社交时差升级", change: "修改" });
-    expect(inspected.preview.differences[0].fields.map((item) => item.field)).toEqual(expect.arrayContaining(["需求标题", "适用范围", "更新时间"]));
+    const requirementDifference = inspected.preview.differences.find((item) => item.entity === "需求");
+    expect(requirementDifference).toMatchObject({ entity: "需求", title: "社交时差升级", change: "修改" });
+    expect(requirementDifference?.fields.map((item) => item.field)).toEqual(expect.arrayContaining(["需求标题", "适用范围", "更新时间"]));
+    expect(inspected.preview.differences).toContainEqual(expect.objectContaining({ entity: "分层功能", key: "REQ-r1", change: "修改" }));
+    expect(inspected.preview.differenceDigest).toMatch(/^diff-/);
+  });
+
+  it("删除记录在完整包中往返，并把旧需求标为忽略、较新需求标为恢复", async () => {
+    const deleted: WorkspaceData = {
+      ...workspace,
+      requirements: [],
+      requirementTombstones: [{ id: "r1", title: "社交时差", deletedAt: "2026-09-10T00:00:00.000Z" }],
+      requirementDeletionTrackingStartedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const roundTrip = await inspectWorkspacePackage(await createWorkspacePackage(deleted, "0.8.23"), "删除同步.roadmap");
+    expect(roundTrip.data.requirementTombstones).toEqual(deleted.requirementTombstones);
+    expect(roundTrip.preview.counts.requirementTombstones).toBe(1);
+
+    const older = await inspectWorkspacePackage(await createWorkspacePackage(workspace, "0.8.22"), "旧包.roadmap", deleted);
+    expect(older.preview.ambiguousRequirementIds).toEqual([]);
+    expect(older.preview.differences).toContainEqual(expect.objectContaining({ entity: "需求", key: "r1", change: "忽略" }));
+
+    const newerWorkspace: WorkspaceData = {
+      ...workspace,
+      requirements: workspace.requirements.map((item) => ({ ...item, title: "对方后续修改", updatedAt: "2026-09-11T00:00:00.000Z" })),
+    };
+    const newer = await inspectWorkspacePackage(await createWorkspacePackage(newerWorkspace, "0.8.23"), "新包.roadmap", deleted);
+    expect(newer.preview.differences).toContainEqual(expect.objectContaining({ entity: "需求", key: "r1", change: "恢复" }));
+  });
+
+  it("删除追踪启用前的未知旧需求必须逐条选择，差异摘要包含待确认项", async () => {
+    const local: WorkspaceData = {
+      ...workspace,
+      requirements: [],
+      requirementTombstones: [],
+      requirementDeletionTrackingStartedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const inspected = await inspectWorkspacePackage(await createWorkspacePackage(workspace, "0.8.22"), "旧设备协作包.roadmap", local);
+    expect(inspected.preview.ambiguousRequirementIds).toEqual(["r1"]);
+    expect(inspected.preview.differences).toContainEqual(expect.objectContaining({ entity: "需求", key: "r1", change: "待确认", decisionRequired: true }));
     expect(inspected.preview.differenceDigest).toMatch(/^diff-/);
   });
 
@@ -227,16 +349,16 @@ describe(".roadmap 数据包", () => {
     expect(inspected.data.groupOverrides[0].groupKey).toBe("d1::AI综合::2027-03");
   });
 
-  it("旧数据包中的医疗送检来源和卡片键迁移为 NMPA送检", async () => {
+  it("旧数据包中的医疗认证来源和卡片键迁移为 NMPA认证", async () => {
     const legacyMedicalData = {
       ...workspace,
       requirements: workspace.requirements.map((item) => ({ ...item, source: "医疗送检" })),
       groupOverrides: workspace.groupOverrides.map((item) => ({ ...item, groupKey: "d1::医疗送检::2027-03" })),
     };
     const legacy = Buffer.from(JSON.stringify({ schemaVersion: 1, exportedAt: "2026-08-24", data: legacyMedicalData }));
-    const inspected = await inspectWorkspacePackage(legacy, "旧医疗送检备份.json");
-    expect(inspected.data.requirements[0].source).toBe("NMPA送检");
-    expect(inspected.data.groupOverrides[0].groupKey).toBe("d1::NMPA送检::2027-03");
+    const inspected = await inspectWorkspacePackage(legacy, "旧医疗认证备份.json");
+    expect(inspected.data.requirements[0].source).toBe("NMPA认证");
+    expect(inspected.data.groupOverrides[0].groupKey).toBe("d1::NMPA认证::2027-03");
   });
 
   it("拒绝包含非法适用范围的数据包", async () => {

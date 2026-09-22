@@ -11,16 +11,16 @@ export const SOURCES = [
   "AI运动",
   "AI健康",
   "AI综合",
-  "NMPA送检",
-  "CE送检",
+  "NMPA认证",
+  "CE认证",
 ] as const;
 
 export const CATEGORIES = ["体验优化", "平台演进", "产品专属"] as const;
 export const REQUIREMENT_SCOPES = ["仅国内", "仅海外", "全球"] as const;
 /** 仅用于兼容旧版“海外研究”数据包，当前界面不再提供该字段。 */
 export const OVERSEAS_REGIONS = ["欧州", "亚非拉", "欧亚"] as const;
-export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"] as const;
-export const MEMBER_ROLES = ["规划", "产品经理", "SE", "PM", "开发", "UX"] as const;
+export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗认证"] as const;
+export const MEMBER_ROLES = ["规划", "产品经理", "SE", "PM", "开发", "算法", "UX"] as const;
 export const TIERING_SUPPORT_STATUSES = ["支持", "不支持", "未判断"] as const;
 export const TIERING_AUDIT_STATUSES = ["待内审", "已公开核验", "已审核", "需复核"] as const;
 
@@ -78,7 +78,15 @@ export interface RequirementImage {
   dataUrl: string;
 }
 
+export interface MedicalSubmissionMilestones {
+  registrationStartMonth?: string;
+  clinicalStartMonth?: string;
+  clinicalCompleteMonth?: string;
+  certificateMonth?: string;
+}
+
 export interface Requirement {
+  algorithmMemberId?: string;
   planningMemberId?: string;
   productManagerMemberId?: string;
   seMemberId?: string;
@@ -93,11 +101,18 @@ export interface Requirement {
   allowLatestVersionUpgrade: boolean;
   overseasRegions: OverseasRegion[];
   category: RequirementCategory;
+  /** YYYY-MM; empty only for NMPA/CE requirements with no submission version yet. */
   targetMonth: string;
+  medicalSubmissionMilestones?: MedicalSubmissionMilestones;
+  /** Application-only medical lane order, independent of dates and L1. */
+  medicalRoadmapSortOrder?: number;
   productIds: string[];
   deviceWorkloadPm: number;
   appWorkloadPm: number;
   cloudWorkloadPm: number;
+  /** Absent only in legacy input; normalized workspace records use 0. */
+  researchAppWorkloadPm?: number;
+  algorithmWorkloadPm?: number;
   unallocatedWorkloadPm: number;
   workloadPm: number;
   createdAt: string;
@@ -106,6 +121,12 @@ export interface Requirement {
   tieringFeatureId?: string;
   /** 历史需求的中国大陆首次公开可用时间证据；普通需求不设置。 */
   historicalLaunch?: HistoricalLaunchMetadata;
+}
+
+export interface RequirementTombstone {
+  id: string;
+  title: string;
+  deletedAt: string;
 }
 
 export interface TieringFeature {
@@ -199,6 +220,7 @@ export interface TieringChangeLog {
   reviewer: string;
   recordStatus: string;
   note: string;
+  updatedAt: string;
 }
 
 export interface TieringData {
@@ -298,6 +320,7 @@ export interface AppSnapshot {
 }
 
 export interface SaveRequirementInput {
+  algorithmMemberId?: string;
   planningMemberId: string;
   productManagerMemberId: string;
   seMemberId: string;
@@ -312,11 +335,15 @@ export interface SaveRequirementInput {
   allowLatestVersionUpgrade: boolean;
   overseasRegions: OverseasRegion[];
   category: RequirementCategory;
+  /** YYYY-MM; empty only for NMPA/CE requirements with no submission version yet. */
   targetMonth: string;
+  medicalSubmissionMilestones?: MedicalSubmissionMilestones;
   productIds: string[];
   deviceWorkloadPm: number;
   appWorkloadPm: number;
   cloudWorkloadPm: number;
+  researchAppWorkloadPm: number;
+  algorithmWorkloadPm: number;
   tieringFeatureId?: string;
 }
 
@@ -336,6 +363,24 @@ export interface UpdateTieringIssueInput {
   owner: string;
   targetDate: string;
   resolution: string;
+}
+
+export interface UpdateTieringChangeLogInput {
+  logId: string;
+  reason: string;
+  reviewer: string;
+  recordStatus: string;
+  note: string;
+}
+
+export interface RendererDiagnosticInput {
+  event: "renderer-ready" | "renderer-error" | "renderer-unhandled-rejection" | "react-error";
+  detail?: string;
+}
+
+export interface DiagnosticInfo {
+  directory: string;
+  currentLogPath: string;
 }
 
 export interface SaveDictionaryInput {
@@ -407,12 +452,18 @@ export interface BackupEnvelope {
   data: WorkspaceData;
 }
 
-export type WorkspaceData = Omit<AppSnapshot, "templates" | "tiering"> & { tiering?: TieringData };
+export type WorkspaceData = Omit<AppSnapshot, "templates" | "tiering"> & {
+  tiering?: TieringData;
+  requirementTombstones?: RequirementTombstone[];
+  requirementDeletionTrackingStartedAt?: string;
+};
 export type WorkspaceImportMode = "merge" | "replace";
 export type WorkspacePackageKind = "workspace" | "tiering-seed";
+export type LegacyRequirementDecision = "merge" | "keep-deleted";
 
 export interface WorkspacePackageCounts {
   requirements: number;
+  requirementTombstones: number;
   images: number;
   domains: number;
   products: number;
@@ -427,7 +478,7 @@ export interface WorkspacePackageCounts {
   tieringChangeLogs: number;
 }
 
-export type WorkspaceDifferenceChange = "新增" | "修改" | "删除";
+export type WorkspaceDifferenceChange = "新增" | "修改" | "删除" | "恢复" | "忽略" | "待确认";
 
 export interface WorkspaceFieldDifference {
   field: string;
@@ -441,6 +492,7 @@ export interface WorkspaceImportDifference {
   title: string;
   change: WorkspaceDifferenceChange;
   fields: WorkspaceFieldDifference[];
+  decisionRequired?: boolean;
 }
 
 export interface WorkspaceImportPreview {
@@ -452,6 +504,7 @@ export interface WorkspaceImportPreview {
   templateVersion: string;
   counts: WorkspacePackageCounts;
   differences: WorkspaceImportDifference[];
+  ambiguousRequirementIds: string[];
   differenceDigest: string;
 }
 
@@ -484,6 +537,25 @@ export interface WorkspaceWorkbookImportPreview {
   conflicts: WorkspaceWorkbookIssue[];
   differences: WorkspaceImportDifference[];
   differenceDigest: string;
+  fieldChanges?: WorkspaceWorkbookFieldChange[];
+}
+
+export interface WorkspaceWorkbookFieldChange {
+  id: string;
+  requirementId: string;
+  row: number;
+  title: string;
+  kind: "field" | "series" | "delete";
+  field: string;
+  baselineValue: string;
+  currentValue: string;
+  excelValue: string;
+  conflict: boolean;
+}
+
+export interface WorkspaceWorkbookFieldSelection {
+  selectedChangeIds: string[];
+  conflictDecisions: Record<string, "local" | "excel">;
 }
 
 export interface AppInfo {
@@ -512,16 +584,23 @@ export interface ElectronApi {
   checkIrmEnvironment(): Promise<IrmEnvironmentStatus>;
   saveGroupOverride(input: SaveGroupOverrideInput): Promise<AppSnapshot>;
   saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot>;
+  saveMedicalRoadmapOrder(input: { requirementIds: string[] }): Promise<AppSnapshot>;
   saveTieringSupport(input: SaveTieringSupportInput): Promise<AppSnapshot>;
   saveTieringEvidenceSource(input: SaveTieringEvidenceSourceInput): Promise<AppSnapshot>;
   updateTieringIssue(input: UpdateTieringIssueInput): Promise<AppSnapshot>;
+  updateTieringChangeLog(input: UpdateTieringChangeLogInput): Promise<AppSnapshot>;
+  deleteTieringChangeLog(logId: string): Promise<AppSnapshot>;
   regenerateTieringRequirement(featureId: string): Promise<AppSnapshot>;
+  reportRendererDiagnostic(input: RendererDiagnosticInput): Promise<void>;
+  getDiagnosticInfo(): Promise<DiagnosticInfo>;
+  openDiagnosticDirectory(): Promise<DiagnosticInfo>;
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspacePackage(): Promise<{ canceled: boolean; preview?: WorkspaceImportPreview }>;
-  applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string }): Promise<{ snapshot: AppSnapshot }>;
+  applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string; legacyRequirementDecisions?: Record<string, LegacyRequirementDecision> }): Promise<{ snapshot: AppSnapshot }>;
   exportWorkspaceWorkbook(input: HalfYearRange): Promise<{ canceled: boolean; path?: string }>;
+  exportTieringWorkbook(input: HalfYearRange): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspaceWorkbook(): Promise<{ canceled: boolean; preview?: WorkspaceWorkbookImportPreview }>;
-  applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string }): Promise<{ snapshot: AppSnapshot }>;
+  applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string; fieldSelection?: WorkspaceWorkbookFieldSelection }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
   exportRoadmapPresentation(input: PptExportRequest): Promise<PptExportResult>;
 }

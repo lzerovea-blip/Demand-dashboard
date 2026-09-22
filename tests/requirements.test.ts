@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloneRequirementAsCopy, filterRequirements, filterRequirementsForRegion, listReleaseVersionOptions, nextRequirementCopyTitle, normalizeLegacyGroupOverride, normalizeRequirement, requirementVisibleInRegion } from "../src/shared/requirements";
+import { cloneRequirementAsCopy, compactRequirementScope, filterRequirements, filterRequirementsForRegion, listReleaseVersionOptions, nextRequirementCopyTitle, normalizeLegacyGroupOverride, normalizeRequirement, requirementPoolTitle, requirementVisibleInRegion } from "../src/shared/requirements";
 import type { Requirement } from "../src/shared/types";
 
 describe("需求复制", () => {
@@ -15,6 +15,8 @@ describe("需求复制", () => {
     source.images = [{ id: "old-image", name: "a.png", mimeType: "image/png", sizeBytes: 1, dataUrl: "data:image/png;base64,YQ==" }];
     source.tieringFeatureId = "F012";
     source.historicalLaunch = { suggestedTargetMonth: "2014-04", precision: "year", verificationStatus: "pending", confidence: "C", evidenceUrls: ["https://example.com"], note: "待核验" };
+    source.source = "NMPA认证";
+    source.medicalSubmissionMilestones = { registrationStartMonth: "2027-01", certificateMonth: "2027-06" };
     const ids = ["new-requirement", "new-image"];
     const copy = cloneRequirementAsCopy(source, [source.title], () => ids.shift()!, "2026-08-28T10:00:00.000Z");
     expect(copy).toMatchObject({ id: "new-requirement", title: "睡眠监测 副本（1）", description: "完整描述", productIds: ["p1"], createdAt: "2026-08-28T10:00:00.000Z", updatedAt: "2026-08-28T10:00:00.000Z" });
@@ -24,10 +26,24 @@ describe("需求复制", () => {
     expect(copy.productIds).not.toBe(source.productIds);
     expect(copy.tieringFeatureId).toBeUndefined();
     expect(copy.historicalLaunch).toBeUndefined();
+    expect(copy.medicalSubmissionMilestones).toEqual(source.medicalSubmissionMilestones);
+    expect(copy.medicalSubmissionMilestones).not.toBe(source.medicalSubmissionMilestones);
   });
 });
 
 describe("历史需求兼容", () => {
+  it("空医疗认证月份不被历史元数据补齐，也不进入具体版本筛选", () => {
+    const source = requirement("undated", "医疗需求", "d1", "CE认证", "平台演进", "");
+    const normalized = normalizeRequirement({ ...source, historicalLaunch: { suggestedTargetMonth: "2020-04", precision: "year", verificationStatus: "pending", confidence: "C", evidenceUrls: [], note: "历史" } });
+    expect(normalized.targetMonth).toBe("");
+    expect(normalized.historicalLaunch).toBeUndefined();
+    expect(listReleaseVersionOptions([normalized])).toEqual([]);
+    const filters = { query: "", domainL0Id: "", domainL1Id: "", targetHalfYear: "" };
+    expect(filterRequirements([normalized], new Map(), filters)).toEqual([normalized]);
+    expect(filterRequirements([normalized], new Map(), { ...filters, targetHalfYear: "2027H1" })).toEqual([]);
+    expect(filterRequirementsForRegion([{ ...normalized, scope: "仅国内" }], "overseas")).toEqual([]);
+  });
+
   it("为旧数据补齐描述和图片字段", () => {
     const normalized = normalizeRequirement({
       id: "r1",
@@ -159,10 +175,10 @@ describe("历史需求兼容", () => {
     }).groupKey).toBe("d1::AI综合::2027-05");
   });
 
-  it("把旧版医疗送检来源和卡片键迁移为 NMPA送检", () => {
+  it("把旧版医疗认证来源和卡片键迁移为 NMPA认证", () => {
     const normalized = normalizeRequirement({
       id: "legacy-medical",
-      title: "旧医疗送检需求",
+      title: "旧医疗认证需求",
       description: "",
       images: [],
       domainId: "d1",
@@ -174,13 +190,13 @@ describe("历史需求兼容", () => {
       createdAt: "2026-08-19",
       updatedAt: "2026-08-19",
     });
-    expect(normalized.source).toBe("NMPA送检");
+    expect(normalized.source).toBe("NMPA认证");
     expect(normalizeLegacyGroupOverride({
       groupKey: "d1::医疗送检::2027-06",
       cardTitle: "送检",
       cardSummary: "",
       updatedAt: "2026-08-19",
-    }).groupKey).toBe("d1::NMPA送检::2027-06");
+    }).groupKey).toBe("d1::NMPA认证::2027-06");
   });
 
   it("清除体验优化的旧产品关联，并保留平台演进和产品专属的单选产品", () => {
@@ -219,6 +235,12 @@ describe("适用范围", () => {
     expect(normalizeRequirement(overseas).scope).toBe("仅海外");
     expect(normalizeRequirement({ ...global, scope: undefined }).scope).toBe("全球");
     expect(normalizeRequirement({ ...global, scope: "未知" as never }).scope).toBe("全球");
+  });
+
+  it("需求池标题拼接领域 L1，适用范围使用紧凑标签", () => {
+    expect(requirementPoolTitle("女性健康", "周期趋势洞察")).toBe("女性健康：周期趋势洞察");
+    expect(requirementPoolTitle("", "未归类需求")).toBe("未命名领域：未归类需求");
+    expect([domestic, overseas, global].map((item) => compactRequirementScope(item.scope))).toEqual(["国内", "海外", "全球"]);
   });
 });
 

@@ -4,9 +4,10 @@ import type { DictionaryItem, Member, MemberRole, PptAccessPolicy, PptWhitelistE
 export const UNASSIGNED_MEMBER = "__unassigned__";
 
 export const REQUIREMENT_OWNER_FIELDS = [
-  { key: "productManagerMemberId", role: "产品经理" },
-  { key: "planningMemberId", role: "规划" },
-  { key: "seMemberId", role: "SE" },
+  { key: "productManagerMemberId", role: "产品经理", required: true },
+  { key: "planningMemberId", role: "规划", required: true },
+  { key: "seMemberId", role: "SE", required: true },
+  { key: "algorithmMemberId", role: "算法", required: false },
 ] as const;
 export type RequirementOwnerKey = (typeof REQUIREMENT_OWNER_FIELDS)[number]["key"];
 export type RequirementOwners = Pick<Requirement, RequirementOwnerKey>;
@@ -32,11 +33,11 @@ export function backfillRequirementOwners<T extends RequirementOwners & { domain
 }
 
 export function validateRequirementOwners(requirement: RequirementOwners, members: readonly Member[], required = false): void {
-  for (const { key, role } of REQUIREMENT_OWNER_FIELDS) {
+  for (const { key, role, required: fieldRequired } of REQUIREMENT_OWNER_FIELDS) {
     const id = requirement[key];
     if (id !== undefined && typeof id !== "string") throw new Error(`${role}责任人格式无效`);
     if (!id) {
-      if (required) throw new Error(`请选择${role}责任人`);
+      if (required && fieldRequired) throw new Error(`请选择${role}责任人`);
       continue;
     }
     if (!members.some((member) => member.id === id && member.role === role)) throw new Error(`${role}责任人不存在或岗位角色不匹配`);

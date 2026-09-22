@@ -8,8 +8,10 @@ import type {
   RequirementSource,
   Track,
 } from "./types.js";
-import { sumWorkloadBreakdown, type WorkloadBreakdown, type WorkloadSide } from "./workload.js";
+import { sumWorkloadBreakdown, workloadBreakdownOf, type WorkloadBreakdown, type WorkloadSide } from "./workload.js";
 import { splitTextIntoLines } from "./text.js";
+import { compareMedicalRoadmapRequirements } from "./medicalRoadmapOrder.js";
+import { isMedicalSubmissionSource, isValidRequirementMonth, medicalSubmissionTimeline } from "./medicalSubmission.js";
 
 export interface RoadmapGroup {
   key: string;
@@ -33,6 +35,61 @@ export interface RoadmapGroup {
   categories: RequirementCategory[];
 }
 
+export interface MedicalRoadmapDemandRow {
+  group: RoadmapGroup;
+  requirement: Requirement;
+}
+
+export function medicalRoadmapDemandRows(groups: RoadmapGroup[]): MedicalRoadmapDemandRow[] {
+  return groups
+    .filter((group) => group.track === "医疗认证")
+    .flatMap((group) => group.requirements.map((requirement) => ({ group, requirement })))
+    .sort((a, b) => compareMedicalRoadmapRequirements(a.requirement, b.requirement));
+}
+
+export function medicalRoadmapTimelineMonths(
+  groups: RoadmapGroup[],
+  startHalfYear?: string,
+  endHalfYear?: string,
+): string[] {
+  const populatedMonths = medicalRoadmapDemandRows(groups)
+    .flatMap(({ requirement }) => medicalSubmissionTimeline(requirement.targetMonth, requirement.medicalSubmissionMilestones))
+    .map((node) => node.month)
+    .filter((month): month is string => Boolean(month));
+  const populatedHalves = populatedMonths.map(halfYearOf);
+  if (startHalfYear && endHalfYear) {
+    const selectedMonths = halfYearSequence(startHalfYear, endHalfYear).flatMap(monthsForHalfYear);
+    const startMonth = selectedMonths[0];
+    const selectedEndMonth = selectedMonths.at(-1)!;
+    const latestMonth = populatedMonths.sort().at(-1);
+    const endMonth = latestMonth && latestMonth > selectedEndMonth ? latestMonth : selectedEndMonth;
+    return halfYearSequence(halfYearOf(startMonth), halfYearOf(endMonth)).flatMap(monthsForHalfYear)
+      .filter((month) => month >= startMonth && month <= endMonth);
+  }
+  if (!populatedMonths.length) return [];
+  const sorted = populatedMonths.sort();
+  return halfYearSequence(populatedHalves.sort()[0], populatedHalves.at(-1)!)
+    .flatMap(monthsForHalfYear).filter((month) => month >= sorted[0] && month <= sorted.at(-1)!);
+}
+
+export function roadmapGroupForRequirement(group: RoadmapGroup, requirementId: string): RoadmapGroup | null {
+  const requirement = group.requirements.find((item) => item.id === requirementId);
+  if (!requirement) return null;
+  const productNames = group.requirementProductNames[requirement.id] ?? [];
+  const workloadBreakdown = workloadBreakdownOf(requirement);
+  return {
+    ...group,
+    cardSummary: requirement.title,
+    requirements: [requirement],
+    productIds: [...requirement.productIds],
+    productNames: [...productNames],
+    requirementProductNames: { [requirement.id]: [...productNames] },
+    totalWorkloadPm: workloadBreakdown.total,
+    workloadBreakdown,
+    categories: [requirement.category],
+  };
+}
+
 export interface HalfYearSummary {
   halfYear: string;
   bySource: Record<RequirementSource, number>;
@@ -44,6 +101,8 @@ export interface HalfYearSummary {
   deviceWorkload: number;
   appWorkload: number;
   cloudWorkload: number;
+  researchAppWorkload: number;
+  algorithmWorkload: number;
   unallocatedWorkload: number;
   bySide: Record<WorkloadSide, number>;
   categoryBySide: Record<RequirementCategory, Record<WorkloadSide, number>>;
@@ -54,7 +113,7 @@ export function trackOf(source: RequirementSource): Track {
   if (source.startsWith("运动")) return "运动";
   if (source.startsWith("健康")) return "健康";
   if (source.startsWith("AI")) return "AI";
-  if (source === "NMPA送检" || source === "CE送检") return "医疗送检";
+  if (source === "NMPA认证" || source === "CE认证") return "医疗认证";
   return source as Track;
 }
 
@@ -68,6 +127,7 @@ export function groupKeyFor(requirement: Pick<Requirement, "domainId" | "source"
 }
 
 export function halfYearOf(targetMonth: string): string {
+  if (!isValidRequirementMonth(targetMonth)) throw new Error(`无效上线年月：${targetMonth}`);
   const [yearRaw, monthRaw] = targetMonth.split("-");
   const year = Number(yearRaw);
   const month = Number(monthRaw);
@@ -127,17 +187,35 @@ export function monthsForHalfYear(halfYear: string): string[] {
 
 export function requirementsInRange(requirements: Requirement[], start: string, end: string): Requirement[] {
   const periods = new Set(halfYearSequence(start, end));
-  return requirements.filter((requirement) => periods.has(halfYearOf(requirement.targetMonth)));
+  return requirements.filter((requirement) => isValidRequirementMonth(requirement.targetMonth) && periods.has(halfYearOf(requirement.targetMonth)));
 }
 
-export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: string): RoadmapGroup[] {
+/** Application medical lanes match any dated milestone; completely undated lanes stay visible. */
+export function medicalRequirementInRange(requirement: Requirement, start: string, end: string): boolean {
+  const periods = new Set(halfYearSequence(start, end));
+  if (!isMedicalSubmissionSource(requirement.source)) return false;
+  const months = medicalSubmissionTimeline(requirement.targetMonth, requirement.medicalSubmissionMilestones)
+    .map((node) => node.month)
+    .filter((month): month is string => Boolean(month));
+  return months.length === 0 || months.some((month) => isValidRequirementMonth(month) && periods.has(halfYearOf(month)));
+}
+
+export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: string, options: { medicalDemandRows?: boolean; medicalRange?: "selected" | "all" } = {}): RoadmapGroup[] {
   const domains = new Map(snapshot.domains.map((item) => [item.id, item]));
   const products = new Map(snapshot.products.map((item) => [item.id, item]));
   const overrides = new Map(snapshot.groupOverrides.map((item) => [item.groupKey, item]));
   const groups = new Map<string, Requirement[]>();
 
-  for (const requirement of requirementsInRange(snapshot.requirements, start, end)) {
-    const key = groupKeyFor(requirement);
+  const dated = requirementsInRange(snapshot.requirements, start, end);
+  const visible = options.medicalDemandRows
+    ? [...dated.filter((item) => !isMedicalSubmissionSource(item.source)),
+      ...snapshot.requirements.filter((item) => isMedicalSubmissionSource(item.source) && (options.medicalRange !== "selected" || medicalRequirementInRange(item, start, end)))]
+    : dated;
+  for (const requirement of visible) {
+    // Application-only medical lanes use identity keys, never persisted month/order keys.
+    // Export callers retain the original dated grouping and exclude undated requirements.
+    const key = options.medicalDemandRows && isMedicalSubmissionSource(requirement.source)
+      ? `medical-requirement:${requirement.id}` : groupKeyFor(requirement);
     groups.set(key, [...(groups.get(key) ?? []), requirement]);
   }
 
@@ -145,7 +223,7 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
     .map(([key, requirements]) => {
       const seed = requirements[0];
       const domainName = domains.get(seed.domainId)?.name ?? "未命名领域";
-      const override = overrides.get(key);
+      const override = seed.targetMonth ? overrides.get(groupKeyFor(seed)) : undefined;
       const productIds = [...new Set(requirements.flatMap((item) => item.productIds))];
       const overseasRegions = [...new Set(requirements.flatMap((item) => item.overseasRegions))];
       const categories = [...new Set(requirements.map((item) => item.category))];
@@ -178,9 +256,12 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
         categories,
       } satisfies RoadmapGroup;
     })
-    .sort((a, b) => a.targetMonth.localeCompare(b.targetMonth)
+    .sort((a, b) => Number(!a.targetMonth) - Number(!b.targetMonth)
+      || a.targetMonth.localeCompare(b.targetMonth)
       || a.source.localeCompare(b.source, "zh-CN")
-      || compareRoadmapGroupOrder(a, b));
+      || (options.medicalDemandRows && a.track === "医疗认证" && b.track === "医疗认证"
+        ? compareRoadmapGroupOrder({ ...a, key: "" }, { ...b, key: "" }) || a.cardSummary.localeCompare(b.cardSummary, "zh-CN") || a.key.localeCompare(b.key)
+        : compareRoadmapGroupOrder(a, b)));
 }
 
 export function compareRoadmapGroupOrder(
@@ -218,27 +299,27 @@ export function roadmapTrackOrder(groups: Pick<RoadmapGroup, "track">[]): Track[
 }
 
 export type AiRoadmapLane = "AI运动" | "AI健康" | "AI综合";
-export type MedicalSubmissionRoadmapLane = "NMPA送检" | "CE送检";
+export type MedicalSubmissionRoadmapLane = "NMPA认证" | "CE认证";
 export type RoadmapLane = Level | AiRoadmapLane | MedicalSubmissionRoadmapLane | "需求";
 
 export function roadmapLanesForTrack(track: Track): readonly RoadmapLane[] {
   if (track === "运动" || track === "健康") return ["高阶", "进阶", "基础"];
   if (track === "AI") return ["AI运动", "AI健康", "AI综合"];
-  if (track === "医疗送检") return ["NMPA送检", "CE送检"];
+  if (track === "医疗认证") return ["NMPA认证", "CE认证"];
   return ["需求"];
 }
 
 export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level" | "source">, lane: RoadmapLane): boolean {
   if (group.track === "运动" || group.track === "健康") return group.level === lane;
   if (group.track === "AI") return group.source === lane;
-  if (group.track === "医疗送检") return group.source === lane;
+  if (group.track === "医疗认证") return group.source === lane;
   return lane === "需求";
 }
 
 export function roadmapPrimaryLane(group: Pick<RoadmapGroup, "track" | "level" | "source">): RoadmapLane {
   if (group.track === "运动" || group.track === "健康") return group.level ?? "基础";
   if (group.track === "AI") return group.source as AiRoadmapLane;
-  if (group.track === "医疗送检") return group.source as MedicalSubmissionRoadmapLane;
+  if (group.track === "医疗认证") return group.source as MedicalSubmissionRoadmapLane;
   return "需求";
 }
 
@@ -248,7 +329,7 @@ export function roadmapMonthColumnTemplate(
 ): string {
   const occupiedMonths = new Set(groups.map((item) => item.targetMonth));
   return months
-    .map((month) => occupiedMonths.has(month) ? "minmax(280px, 1fr)" : "56px")
+    .map((month) => occupiedMonths.has(month) ? "minmax(280px, 1fr)" : "40px")
     .join(" ");
 }
 
@@ -262,7 +343,7 @@ export function roadmapMonthColumnTemplateForTrack(
 
 export function buildHalfYearSummaries(requirements: Requirement[], start: string, end: string): HalfYearSummary[] {
   return halfYearSequence(start, end).map((halfYear) => {
-    const items = requirements.filter((item) => halfYearOf(item.targetMonth) === halfYear);
+    const items = requirements.filter((item) => isValidRequirementMonth(item.targetMonth) && halfYearOf(item.targetMonth) === halfYear);
     const threeSideTotal = (item: Requirement) => item.deviceWorkloadPm + item.appWorkloadPm + item.cloudWorkloadPm;
     const bySource = Object.fromEntries(
       SOURCES.map((source) => [
@@ -299,16 +380,23 @@ export function buildHalfYearSummaries(requirements: Requirement[], start: strin
       sportsWorkload,
       healthWorkload,
       byCategory,
-      totalWorkload: round(workloadBreakdown.device + workloadBreakdown.app + workloadBreakdown.cloud),
+      totalWorkload: round(workloadBreakdown.total - workloadBreakdown.unallocated),
       deviceWorkload: workloadBreakdown.device,
       appWorkload: workloadBreakdown.app,
       cloudWorkload: workloadBreakdown.cloud,
+      researchAppWorkload: workloadBreakdown.researchApp,
+      algorithmWorkload: workloadBreakdown.algorithm,
       unallocatedWorkload: workloadBreakdown.unallocated,
       bySide,
       categoryBySide,
       requirementCount: items.length,
     };
   });
+}
+
+/** 应用汇总分析仅计设备、运动健康 App、创新研究 App、云侧；不改变需求或 PPT 总量。 */
+export function analysisWorkloadTotal(summaries: Array<Pick<HalfYearSummary, "deviceWorkload" | "appWorkload" | "researchAppWorkload" | "cloudWorkload">>): number {
+  return round(summaries.reduce((sum, item) => sum + item.deviceWorkload + item.appWorkload + item.researchAppWorkload + item.cloudWorkload, 0));
 }
 
 export function summarizeCategoryWorkloadForSide(
@@ -341,9 +429,8 @@ export function findGroupOverride(overrides: GroupOverride[], groupKey: string):
 }
 
 export function roadmapCardLabel(group: Pick<RoadmapGroup, "cardTitle" | "requirements">): string {
-  const titles = group.requirements.slice(0, 3).map((item) => item.title.trim()).filter(Boolean);
-  const suffix = group.requirements.length > 3 ? "等" : "";
-  return `${group.cardTitle}：${titles.join("、")}${suffix}`;
+  const titles = group.requirements.map((item) => item.title.trim()).filter(Boolean);
+  return `${group.cardTitle}：${titles.join("、")}`;
 }
 
 export function roadmapCardDisplayLines(text: string, charactersPerLine = 20, maximumLines = 2): string[] {

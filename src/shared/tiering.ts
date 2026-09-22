@@ -9,6 +9,7 @@ import type {
   TieringProductSeries,
   TieringSupportRecord,
   TieringVerificationIssue,
+  WorkspaceData,
 } from "./types.js";
 import { TIERING_AUDIT_STATUSES, TIERING_SUPPORT_STATUSES } from "./types.js";
 import {
@@ -18,10 +19,35 @@ import {
 } from "./tieringLaunches.js";
 
 export const TIERING_BASELINE_DATE = "2026-08-05";
+export const TIERING_ELIGIBLE_SOURCES = [
+  "运动基础",
+  "运动进阶",
+  "运动高阶",
+  "健康基础",
+  "健康进阶",
+  "健康高阶",
+  "AI运动",
+  "AI健康",
+  "AI综合",
+] as const satisfies readonly RequirementSource[];
+
+const TIERING_ELIGIBLE_SOURCE_SET = new Set<RequirementSource>(TIERING_ELIGIBLE_SOURCES);
+
+/**
+ * 分层分级只管理运动、健康和 AI 路标。显式列举来源，避免新增业务来源时被意外纳入。
+ */
+export function isTieringEligibleSource(source: RequirementSource): boolean {
+  return TIERING_ELIGIBLE_SOURCE_SET.has(source);
+}
+
+export function isTieringEligibleRequirement(requirement: Pick<Requirement, "source">): boolean {
+  return isTieringEligibleSource(requirement.source);
+}
+
 export const TIERING_EXPECTED_COUNTS = {
   features: 156,
-  productSeries: 9,
-  supportRecords: 1404,
+  productSeries: 13,
+  supportRecords: 2028,
   evidenceSources: 44,
   verificationIssues: 96,
 } as const;
@@ -172,6 +198,9 @@ export function normalizeTieringData(raw?: Partial<TieringData> | null): Tiering
       ...item,
       sourceIds: [...new Set(item.sourceIds ?? [])],
       note: item.note ?? "",
+      reviewer: item.reviewer ?? "",
+      recordStatus: item.recordStatus ?? "有效",
+      updatedAt: item.updatedAt || item.changedAt,
     })),
   };
 }
@@ -248,6 +277,119 @@ export function buildTieringFeatureForRequirement(
     sortOrder: existing?.sortOrder ?? sortOrder,
     createdAt: existing?.createdAt ?? updatedAt,
     updatedAt,
+  };
+}
+
+/**
+ * 将工作区中的分层分级数据收敛为当前业务范围，不修改传入对象。
+ *
+ * 该函数刻意不读取当前时间，确保导入检查、差异摘要与真正写入前使用
+ * 同一份稳定语义：只保留历史基线或运动/健康/AI 需求关联的功能，补齐
+ * 内置系列及完整支持矩阵，并清理被移除功能的从属记录。
+ */
+export function normalizeWorkspaceTieringScope(raw: WorkspaceData): WorkspaceData {
+  const tiering = normalizeTieringData(raw.tiering);
+  const domains = raw.domains.map((item) => ({ ...item }));
+  const requirements = raw.requirements.map((item) => ({ ...item }));
+  const originalFeatures = tiering.features.map((item) => ({ ...item }));
+  const originalById = new Map(originalFeatures.map((item) => [item.id, item]));
+  const originalByRequirementId = new Map(
+    originalFeatures
+      .filter((item) => item.requirementId)
+      .map((item) => [item.requirementId!, item]),
+  );
+  const claimedFeatureIds = new Set<string>();
+  const nextFeatures: TieringFeature[] = [];
+  let nextSortOrder = originalFeatures.reduce((max, item) => Math.max(max, item.sortOrder), -1) + 1;
+
+  for (let index = 0; index < requirements.length; index += 1) {
+    const requirement = requirements[index];
+    if (!isTieringEligibleRequirement(requirement)) {
+      if (requirement.tieringFeatureId) requirements[index] = { ...requirement, tieringFeatureId: undefined };
+      continue;
+    }
+    const resolved = resolveTieringRequirementDomains(requirement, domains);
+    const candidate = (requirement.tieringFeatureId ? originalById.get(requirement.tieringFeatureId) : undefined)
+      ?? originalByRequirementId.get(requirement.id);
+    // 旧 JSON 可能没有完整的 L0/L1 关系；保留既有规格供导入阶段给出原有校验，
+    // 但不依据名称猜测或创建错误关联。
+    if (!resolved) {
+      if (candidate && !claimedFeatureIds.has(candidate.id)) {
+        claimedFeatureIds.add(candidate.id);
+        nextFeatures.push(candidate);
+      }
+      continue;
+    }
+    // 完整包可能只在需求侧保留稳定的历史功能 ID（F001–F156），而没有同时
+    // 携带对应的功能行。此时必须沿用需求上的关联 ID，后续再补建功能与 13 个
+    // 系列支持记录；若直接退化为 REQ-*，会丢失历史基线的恢复语义。
+    const fallbackId = requirement.tieringFeatureId ?? tieringFeatureIdForRequirement(requirement.id);
+    const existing = candidate && !claimedFeatureIds.has(candidate.id) ? candidate : originalById.get(fallbackId);
+    const featureId = existing?.id ?? fallbackId;
+    if (claimedFeatureIds.has(featureId)) throw new Error(`分层功能“${featureId}”关联了多条需求`);
+    claimedFeatureIds.add(featureId);
+    const linkedRequirement = {
+      ...requirement,
+      domainL0Id: resolved.domainL0.id,
+      tieringFeatureId: featureId,
+    };
+    requirements[index] = linkedRequirement;
+    nextFeatures.push(buildTieringFeatureForRequirement(
+      linkedRequirement,
+      resolved.domainL0.name,
+      resolved.domainL1.name,
+      existing?.sortOrder ?? nextSortOrder++,
+      existing?.updatedAt ?? linkedRequirement.updatedAt,
+      existing,
+    ));
+  }
+
+  for (const feature of originalFeatures) {
+    if (!isHistoricalTieringFeature(feature) || claimedFeatureIds.has(feature.id)) continue;
+    const linkedRequirement = feature.requirementId
+      ? requirements.find((item) => item.id === feature.requirementId)
+      : undefined;
+    nextFeatures.push(linkedRequirement && !isTieringEligibleRequirement(linkedRequirement)
+      ? { ...feature, requirementId: undefined }
+      : feature);
+  }
+
+  const builtInById = new Map(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => [item.id, item]));
+  const productSeries = [
+    ...tiering.productSeries.map((item) => {
+      const builtIn = builtInById.get(item.id);
+      return builtIn ? { ...item, sourceIds: [...item.sourceIds], sortOrder: builtIn.sortOrder } : { ...item, sourceIds: [...item.sourceIds] };
+    }),
+    ...missingBuiltInTieringProductSeries(tiering.productSeries),
+  ].sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+  const featureIds = new Set(nextFeatures.map((item) => item.id));
+  const seriesIds = new Set(productSeries.map((item) => item.id));
+  const supportById = new Map(
+    tiering.supportRecords
+      .filter((item) => featureIds.has(item.featureId) && seriesIds.has(item.seriesId))
+      .map((item) => [item.id, { ...item, sourceIds: [...item.sourceIds] }]),
+  );
+  for (const feature of nextFeatures) for (const series of productSeries) {
+    const id = tieringSupportId(feature.id, series.id);
+    if (!supportById.has(id)) supportById.set(id, createTieringSupportRecord(feature.id, series.id, feature.updatedAt));
+  }
+
+  return {
+    ...raw,
+    requirements,
+    domains,
+    tiering: {
+      features: nextFeatures.sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id)),
+      productSeries,
+      supportRecords: [...supportById.values()].sort((left, right) => left.id.localeCompare(right.id)),
+      evidenceSources: tiering.evidenceSources.map((item) => ({ ...item })),
+      verificationIssues: tiering.verificationIssues
+        .filter((item) => featureIds.has(item.featureId))
+        .map((item) => ({ ...item, seriesIds: [...item.seriesIds], sourceIds: [...item.sourceIds] })),
+      changeLogs: tiering.changeLogs
+        .filter((item) => featureIds.has(item.featureId))
+        .map((item) => ({ ...item, sourceIds: [...item.sourceIds] })),
+    },
   };
 }
 
@@ -342,7 +484,7 @@ export function mergeTieringData(localRaw: TieringData, incomingRaw: TieringData
     supportRecords: mergeByTimestamp(local.supportRecords, incoming.supportRecords),
     evidenceSources: mergeByTimestamp(local.evidenceSources, incoming.evidenceSources),
     verificationIssues: mergeByTimestamp(local.verificationIssues, incoming.verificationIssues),
-    changeLogs: mergeByTimestamp(local.changeLogs, incoming.changeLogs, "changedAt"),
+    changeLogs: mergeByTimestamp(local.changeLogs, incoming.changeLogs),
   };
 }
 

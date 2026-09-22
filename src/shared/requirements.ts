@@ -3,6 +3,7 @@ import type { GroupOverride, Requirement, RequirementCategory, RequirementScope,
 import { halfYearOf, hmosVersionForHalfYear } from "./roadmap.js";
 import { historicalLaunchForFeatureId, normalizeHistoricalLaunchMetadata } from "./tieringLaunches.js";
 import { roundWorkload } from "./workload.js";
+import { isMedicalSubmissionSource, isValidRequirementMonth, normalizeMedicalSubmissionMilestones } from "./medicalSubmission.js";
 
 export const LEGACY_OVERSEAS_SOURCE = "海外研究" as const;
 export const LEGACY_AI_SOURCE = "ai" as const;
@@ -10,20 +11,24 @@ export const LEGACY_UPPERCASE_AI_SOURCE = "AI" as const;
 export const LEGACY_MEDICAL_SUBMISSION_SOURCE = "医疗送检" as const;
 
 type LegacyRequirement = Omit<Requirement, "source" | "scope" | "allowLatestVersionUpgrade" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
-  { source: RequirementSource | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE } &
+  { source: RequirementSource | "NMPA送检" | "CE送检" | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE } &
   Partial<Pick<Requirement, "scope" | "allowLatestVersionUpgrade" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
 
 export function normalizeRequirement(input: LegacyRequirement): Requirement {
-  const hasBreakdown = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "unallocatedWorkloadPm"]
+  const hasBreakdown = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "researchAppWorkloadPm", "algorithmWorkloadPm", "unallocatedWorkloadPm"]
     .some((key) => Object.prototype.hasOwnProperty.call(input, key));
   const deviceWorkloadPm = nonNegative(input.deviceWorkloadPm);
   const appWorkloadPm = nonNegative(input.appWorkloadPm);
   const cloudWorkloadPm = nonNegative(input.cloudWorkloadPm);
-  const categorized = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm);
+  const researchAppWorkloadPm = nonNegative(input.researchAppWorkloadPm);
+  const algorithmWorkloadPm = nonNegative(input.algorithmWorkloadPm);
+  const categorized = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm + researchAppWorkloadPm + algorithmWorkloadPm);
   const legacyTotal = nonNegative(input.workloadPm);
   const source = normalizeLegacySource(input.source) as RequirementSource;
   const productIds = normalizeRequirementProductIds(input.category, input.productIds);
   let historicalLaunch = normalizeHistoricalLaunchMetadata(input.historicalLaunch);
+  // An explicitly cleared submission month must never be restored from historical metadata.
+  if (isMedicalSubmissionSource(source) && input.targetMonth === "") historicalLaunch = undefined;
   if (!historicalLaunch && input.tieringFeatureId && input.targetMonth === "2026-09") {
     try {
       historicalLaunch = historicalLaunchForFeatureId(input.tieringFeatureId);
@@ -47,10 +52,14 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
     deviceWorkloadPm,
     appWorkloadPm,
     cloudWorkloadPm,
+    researchAppWorkloadPm,
+    algorithmWorkloadPm,
     unallocatedWorkloadPm,
     workloadPm: roundWorkload(categorized + unallocatedWorkloadPm),
     targetMonth: historicalLaunch?.suggestedTargetMonth ?? input.targetMonth,
     historicalLaunch,
+    medicalSubmissionMilestones: normalizeMedicalSubmissionMilestones(source, input.medicalSubmissionMilestones),
+    medicalRoadmapSortOrder: isMedicalSubmissionSource(source) ? input.medicalRoadmapSortOrder : undefined,
   };
 }
 
@@ -88,7 +97,8 @@ export function normalizeLegacyGroupOverride(item: GroupOverride): GroupOverride
 export function normalizeLegacySource(source: string): string {
   if (source === LEGACY_OVERSEAS_SOURCE) return "行业";
   if (source === LEGACY_AI_SOURCE || source === LEGACY_UPPERCASE_AI_SOURCE) return "AI综合";
-  if (source === LEGACY_MEDICAL_SUBMISSION_SOURCE) return "NMPA送检";
+  if (source === LEGACY_MEDICAL_SUBMISSION_SOURCE || source === "NMPA送检") return "NMPA认证";
+  if (source === "CE送检") return "CE认证";
   return source;
 }
 
@@ -132,8 +142,16 @@ export function filterRequirements(
     return (!normalizedQuery || searchText.includes(normalizedQuery))
       && (!filters.domainL0Id || item.domainL0Id === filters.domainL0Id)
       && (!filters.domainL1Id || item.domainId === filters.domainL1Id)
-      && (!filters.targetHalfYear || halfYearOf(item.targetMonth) === filters.targetHalfYear);
+      && (!filters.targetHalfYear || (isValidRequirementMonth(item.targetMonth) && halfYearOf(item.targetMonth) === filters.targetHalfYear));
   });
+}
+
+export function requirementPoolTitle(domainL1Name: string | undefined, title: string): string {
+  return `${domainL1Name?.trim() || "未命名领域"}：${title}`;
+}
+
+export function compactRequirementScope(scope: Requirement["scope"]): "国内" | "海外" | "全球" {
+  return scope === "仅国内" ? "国内" : scope === "仅海外" ? "海外" : "全球";
 }
 
 const COPY_TITLE_PATTERN = /^(.*?)\s*副本（([1-9]\d*)）$/u;
@@ -170,6 +188,10 @@ export function cloneRequirementAsCopy(
     createdAt: now,
     updatedAt: now,
     tieringFeatureId: undefined,
+    medicalRoadmapSortOrder: undefined,
     historicalLaunch: undefined,
+    medicalSubmissionMilestones: source.medicalSubmissionMilestones
+      ? { ...source.medicalSubmissionMilestones }
+      : undefined,
   };
 }
