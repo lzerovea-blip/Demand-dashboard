@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   applyPreparedWorkspaceWorkbook,
-  createWorkspaceWorkbook as createCurrentWorkspaceWorkbook,
+  createWorkspaceWorkbook as createWorkbookUnderTest,
   inspectWorkspaceWorkbook,
   workspaceDataForWorkbookRange,
 } from "../src/main/workspaceWorkbook";
@@ -13,7 +13,182 @@ import type { DictionaryItem, GroupOverride, Requirement, RequirementImage, Work
 import { BUILT_IN_TIERING_PRODUCT_SERIES, normalizeWorkspaceTieringScope, tieringSupportId } from "../src/shared/tiering";
 
 const createWorkspaceWorkbook = (data: WorkspaceData, version: string, exportedAt?: string, range?: { start: string; end: string }) =>
-  createCurrentWorkspaceWorkbook(data, version, exportedAt, range, "v7");
+  createWorkbookUnderTest(data, version, exportedAt, range, "v7");
+const createCurrentWorkspaceWorkbook = (data: WorkspaceData, version: string, exportedAt?: string, range?: { start: string; end: string }) =>
+  createWorkbookUnderTest(data, version, exportedAt, range, "v8");
+const createV9WorkspaceWorkbook = (data: WorkspaceData, version: string) =>
+  createWorkbookUnderTest(data, version, undefined, undefined, "v9");
+
+describe("协作 Excel v10 十五系列", () => {
+  it("导出 15 个系列及两项新系列下拉，内部基线保持在非工作表结构", async () => {
+    const data = workspace();
+    const bytes = await createWorkbookUnderTest(data, "0.8.31");
+    if (process.env.ROADMAP_QA_V10_WORKBOOK_PATH) await writeFile(process.env.ROADMAP_QA_V10_WORKBOOK_PATH, bytes);
+    const book = new ExcelJS.Workbook(); await book.xlsx.load(bytes as never);
+    const sheet = book.getWorksheet("需求清单")!;
+    expect(book.worksheets.map((item) => item.name)).toEqual(["需求清单"]);
+    expect(sheet.getRow(1).values).toHaveLength(33);
+    expect(sheet.getCell("A1").text).toBe("序号");
+    expect(sheet.getCell("B1").text).toBe("操作");
+    expect(Array.from({ length: 15 }, (_, index) => sheet.getCell(1, 18 + index).text)).toEqual(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.name));
+    expect(sheet.getCell("S1").text).toBe("WATCH Pro系列");
+    expect(sheet.getCell("AB1").text).toBe("Band Pro系列");
+    expect(sheet.getCell("S2").text).toBe("未判断");
+    expect(sheet.getCell("AB2").text).toBe("未判断");
+    expect(sheet.getCell("S2").dataValidation.type).toBe("list");
+    expect(sheet.getCell("AB2").dataValidation.type).toBe("list");
+    expect(sheet.getCell("AF1").text).toBe("无屏系列");
+    const stored = await payload(bytes) as { metadata: { formatVersion: string }; rows: Array<{ baselineVisible: string[]; baselineSeries: Record<string, string> }> };
+    expect(stored.metadata.formatVersion).toBe("v10");
+    expect(stored.rows[0].baselineVisible).toHaveLength(31);
+    expect(Object.keys(stored.rows[0].baselineSeries)).toHaveLength(15);
+    const xml = await (await JSZip.loadAsync(bytes)).file("xl/worksheets/sheet1.xml")!.async("string");
+    expect(xml).not.toContain('<c r="AG');
+    expect(xml).not.toContain("health-roadmap-collaboration");
+  });
+
+  it("两项新系列分别产生差异，未勾选的系列和需求字段不写入", async () => {
+    const data = workspace();
+    const edited = await editWorkbook(await createWorkbookUnderTest(data, "0.8.31"), (book) => {
+      const sheet = book.getWorksheet("需求清单")!;
+      sheet.getCell("C2").value = "Excel 新标题";
+      sheet.getCell("S2").value = "支持";
+      sheet.getCell("AB2").value = "不支持";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "v10.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges?.map((item) => item.id)).toEqual(["r1:field:title", "r1:series:PS14", "r1:series:PS15"]);
+    const changed = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins", "2026-09-24T02:00:00.000Z", {
+      selectedChangeIds: ["r1:series:PS14"], conflictDecisions: {},
+    });
+    const feature = changed.tiering!.features.find((item) => item.requirementId === "r1")!;
+    expect(changed.requirements[0].title).toBe(data.requirements[0].title);
+    expect(changed.tiering!.supportRecords.find((item) => item.id === tieringSupportId(feature.id, "PS14"))?.status).toBe("支持");
+    expect(changed.tiering!.supportRecords.find((item) => item.id === tieringSupportId(feature.id, "PS15"))?.status).toBe("未判断");
+  });
+
+  it("行重排后只改操作列为删除，仍按需求 ID 匹配", async () => {
+    const base = workspace();
+    const data = workspace({ requirements: [base.requirements[0], { ...base.requirements[0], id: "r2", title: "第二条需求" }] });
+    const edited = await editWorkbook(await createWorkbookUnderTest(data, "0.8.31"), (book) => {
+      const sheet = book.getWorksheet("需求清单")!;
+      const first = Array.from({ length: 32 }, (_, index) => ({ value: sheet.getCell(2, index + 1).value, numFmt: sheet.getCell(2, index + 1).numFmt }));
+      const second = Array.from({ length: 32 }, (_, index) => ({ value: sheet.getCell(3, index + 1).value, numFmt: sheet.getCell(3, index + 1).numFmt }));
+      for (let column = 1; column <= 32; column += 1) {
+        sheet.getCell(2, column).value = second[column - 1].value;
+        sheet.getCell(2, column).numFmt = second[column - 1].numFmt;
+        sheet.getCell(3, column).value = first[column - 1].value;
+        sheet.getCell(3, column).numFmt = first[column - 1].numFmt;
+      }
+      sheet.getCell("B2").value = "删除";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "v10-已排序.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges?.map((item) => item.id)).toEqual(["r2:delete"]);
+    const changed = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins", "2026-09-24T02:00:00.000Z", {
+      selectedChangeIds: ["r2:delete"], conflictDecisions: {},
+    });
+    expect(changed.requirements.map((item) => item.id)).toEqual(["r1"]);
+  });
+
+  it.each(["v8", "v9"] as const)("旧 %s 文件保留新系列的本机状态", async (version) => {
+    const data = normalizeWorkspaceTieringScope(workspace());
+    const feature = data.tiering!.features.find((item) => item.requirementId === "r1")!;
+    data.tiering!.supportRecords.find((item) => item.id === tieringSupportId(feature.id, "PS14"))!.status = "支持";
+    data.tiering!.supportRecords.find((item) => item.id === tieringSupportId(feature.id, "PS15"))!.status = "不支持";
+    const edited = await editWorkbook(await createWorkbookUnderTest(data, "0.8.30", undefined, undefined, version), (book) => {
+      book.getWorksheet("需求清单")!.getCell(version === "v8" ? "Q2" : "R2").value = "支持";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, `${version}.xlsx`, data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges?.map((item) => item.id)).toEqual(["r1:series:PS01"]);
+    const changed = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins", "2026-09-24T02:00:00.000Z", {
+      selectedChangeIds: ["r1:series:PS01"], conflictDecisions: {},
+    });
+    expect(changed.tiering!.supportRecords.find((item) => item.id === tieringSupportId(feature.id, "PS14"))?.status).toBe("支持");
+    expect(changed.tiering!.supportRecords.find((item) => item.id === tieringSupportId(feature.id, "PS15"))?.status).toBe("不支持");
+  });
+});
+
+describe("协作 Excel v9 序号与兼容回导", () => {
+  it("导出 A 列连续序号、B 列操作与顺移后的系列下拉，序号不参与回导", async () => {
+    const base = workspace();
+    const data = workspace({ requirements: [base.requirements[0], { ...base.requirements[0], id: "r2", title: "第二条需求" }] });
+    const bytes = await createV9WorkspaceWorkbook(data, "0.8.30");
+    if (process.env.ROADMAP_QA_V9_WORKBOOK_PATH) await writeFile(process.env.ROADMAP_QA_V9_WORKBOOK_PATH, bytes);
+    const book = new ExcelJS.Workbook(); await book.xlsx.load(bytes as never);
+    const sheet = book.getWorksheet("需求清单")!;
+    expect(sheet.getRow(1).values).toHaveLength(31);
+    expect(sheet.getCell("A1").text).toBe("序号");
+    expect(sheet.getCell("B1").text).toBe("操作");
+    expect([sheet.getCell("A2").value, sheet.getCell("A3").value]).toEqual([1, 2]);
+    expect(sheet.getCell("B2").dataValidation.type).toBe("list");
+    expect(sheet.getCell("R2").text).toBe("未判断");
+    expect(sheet.getCell("R2").dataValidation.type).toBe("list");
+    expect(sheet.views[0]).toMatchObject({ state: "frozen", xSplit: 3, ySplit: 1 });
+    const zip = await JSZip.loadAsync(bytes);
+    const xml = await zip.file("xl/worksheets/sheet1.xml")!.async("string");
+    expect(xml).not.toContain('<c r="AE');
+    const edited = await editWorkbook(bytes, (workbook) => {
+      const cell = workbook.getWorksheet("需求清单")!.getCell("A2");
+      cell.value = 999;
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "v9.xlsx", data);
+    expect(prepared.preview.formatVersion).toBe("v9");
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges).toEqual([]);
+  });
+
+  it("排序后序号随需求移动，B 列删除和另一行标题修改仍按原 ID 合入", async () => {
+    const base = workspace();
+    const data = workspace({ requirements: [base.requirements[0], { ...base.requirements[0], id: "r2", title: "第二条需求" }] });
+    const edited = await editWorkbook(await createV9WorkspaceWorkbook(data, "0.8.30"), (book) => {
+      const sheet = book.getWorksheet("需求清单")!;
+      const first = Array.from({ length: 30 }, (_, index) => ({ value: sheet.getCell(2, index + 1).value, numFmt: sheet.getCell(2, index + 1).numFmt }));
+      const second = Array.from({ length: 30 }, (_, index) => ({ value: sheet.getCell(3, index + 1).value, numFmt: sheet.getCell(3, index + 1).numFmt }));
+      for (let column = 1; column <= 30; column += 1) {
+        sheet.getCell(2, column).value = second[column - 1].value;
+        sheet.getCell(2, column).numFmt = second[column - 1].numFmt;
+        sheet.getCell(3, column).value = first[column - 1].value;
+        sheet.getCell(3, column).numFmt = first[column - 1].numFmt;
+      }
+      expect([sheet.getCell("A2").value, sheet.getCell("A3").value]).toEqual([2, 1]);
+      sheet.getCell("B2").value = "删除";
+      sheet.getCell("C3").value = "第一条需求已修改";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "已排序.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges?.map((change) => change.id)).toEqual(["r2:delete", "r1:field:title"]);
+    const result = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins", "2026-09-24T02:00:00.000Z", {
+      selectedChangeIds: ["r2:delete", "r1:field:title"], conflictDecisions: {},
+    });
+    expect(result.requirements.map((item) => [item.id, item.title])).toEqual([["r1", "第一条需求已修改"]]);
+  });
+
+  it("WPS 移除 customXml 后可从自定义属性读取 v9；两份元数据均丢失时仅操作列可安全恢复", async () => {
+    const data = workspace();
+    const original = await createV9WorkspaceWorkbook(data, "0.8.30");
+    const edited = await editWorkbook(original, (book) => { book.getWorksheet("需求清单")!.getCell("B2").value = "删除"; });
+    if (process.env.ROADMAP_QA_V9_EDITED_PATH) await writeFile(process.env.ROADMAP_QA_V9_EDITED_PATH, edited);
+    const originalZip = await JSZip.loadAsync(original);
+    const zip = await JSZip.loadAsync(edited);
+    zip.remove("customXml/item1.xml");
+    const recovered = await inspectWorkspaceWorkbook(await zip.generateAsync({ type: "nodebuffer" }), "无元数据.xlsx", data);
+    expect(recovered.preview.fieldChanges?.map((change) => change.kind)).toEqual(["delete"]);
+    zip.file("docProps/custom.xml", await originalZip.file("docProps/custom.xml")!.async("string"));
+    const fromProperties = await inspectWorkspaceWorkbook(await zip.generateAsync({ type: "nodebuffer" }), "WPS保存.xlsx", data);
+    expect(fromProperties.preview.errors).toEqual([]);
+    expect(fromProperties.preview.fieldChanges?.map((change) => change.kind)).toEqual(["delete"]);
+  });
+
+  it.skipIf(!process.env.ROADMAP_QA_V9_ROUNDTRIP_PATH)("外部表格软件另存的 v9 文件仍可回导", async () => {
+    const data = workspace();
+    const saved = await readFile(process.env.ROADMAP_QA_V9_ROUNDTRIP_PATH!);
+    const preview = await inspectWorkspaceWorkbook(saved, "外部另存.xlsx", data);
+    expect(preview.preview.errors).toEqual([]);
+    expect(preview.preview.fieldChanges?.map((change) => change.kind)).toEqual(["delete"]);
+  });
+});
 
 describe("协作 Excel v8 逐项合入", () => {
   it("仅显示 A–AC，一张表、13 系列有下拉，非分层行空白", async () => {
@@ -26,7 +201,7 @@ describe("协作 Excel v8 逐项合入", () => {
     expect(sheet.getRow(1).values).toHaveLength(30);
     expect(sheet.getRow(1).values).not.toContain("来源");
     expect(sheet.getRow(1).values).not.toContain("匹配产品");
-    expect(Array.from({ length: 13 }, (_, index) => sheet.getCell(1, index + 17).text)).toEqual(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.name));
+    expect(Array.from({ length: 13 }, (_, index) => sheet.getCell(1, index + 17).text)).toEqual(BUILT_IN_TIERING_PRODUCT_SERIES.filter((item) => !["PS14", "PS15"].includes(item.id)).map((item) => item.name));
     expect(sheet.getCell("Q2").text).toBe("未判断");
     expect(sheet.getCell("Q2").dataValidation.formulae![0]).toContain("支持,不支持,未判断");
     expect(sheet.getCell("Q3").text).toBe("");
@@ -34,6 +209,49 @@ describe("协作 Excel v8 逐项合入", () => {
     const xml = await zip.file("xl/worksheets/sheet1.xml")!.async("string");
     expect(xml).not.toContain("<c r=\"AD");
     expect(xml).not.toContain("health-roadmap-collaboration");
+  });
+
+  it("空成员与超长字典不写损坏的 Excel 数据验证，仍可手填并回导", async () => {
+    const base = workspace();
+    const data = workspace({
+      domains: [...base.domains, ...Array.from({ length: 40 }, (_, index) => ({
+        id: `extra-${index}`, name: `扩展领域${index}的较长名称`, level: "L1" as const,
+        parentId: "l0", sortOrder: index + 1, active: true,
+      }))],
+      members: [],
+      pptAccessPolicy: { entries: [], updatedAt: base.pptAccessPolicy!.updatedAt },
+    });
+    const bytes = await createCurrentWorkspaceWorkbook(data, "0.8.27");
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(bytes as never);
+    const sheet = workbook.getWorksheet("需求清单")!;
+    expect(sheet.getCell("A2").dataValidation.type).toBe("list");
+    expect(sheet.getCell("D2").dataValidation.type).toBe("list");
+    expect(sheet.getCell("E2").dataValidation).toBeUndefined();
+    for (const column of ["M", "N", "O", "P"]) expect(sheet.getCell(`${column}2`).dataValidation).toBeUndefined();
+    const zip = await JSZip.loadAsync(bytes);
+    const xml = await zip.file("xl/worksheets/sheet1.xml")!.async("string");
+    const formulas = Array.from(xml.matchAll(/<formula1>([^<]*)<\/formula1>/g), ([, formula]) => formula);
+    expect(formulas).not.toContain('""');
+    expect(formulas.every((formula) => formula.length <= 255)).toBe(true);
+    const edited = await editWorkbook(bytes, (book) => { book.getWorksheet("需求清单")!.getCell("E2").value = "扩展领域1的较长名称"; });
+    const prepared = await inspectWorkspaceWorkbook(edited, "v8.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges?.map((change) => change.field)).toEqual(["领域 L1"]);
+  });
+
+  it("过长或含分隔符的成员选项省略下拉，不妨碍文件生成", async () => {
+    const base = workspace();
+    const members = Array.from({ length: 25 }, (_, index) => ({
+      ...base.members![0], id: `member-${index}`, name: `规划成员${index}测试较长名字`,
+      employeeNumber: `E${index}`, microsoftAccount: `planner${index}@company.com`,
+    }));
+    const policy = { entries: [], updatedAt: base.pptAccessPolicy!.updatedAt };
+    const bytes = await createCurrentWorkspaceWorkbook(workspace({ members, pptAccessPolicy: policy }), "0.8.27");
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(bytes as never);
+    expect(workbook.getWorksheet("需求清单")!.getCell("M2").dataValidation).toBeUndefined();
+    const withComma = await createCurrentWorkspaceWorkbook(workspace({ members: [{ ...base.members![0], name: "甲,乙" }], pptAccessPolicy: policy }), "0.8.27");
+    const commaWorkbook = new ExcelJS.Workbook(); await commaWorkbook.xlsx.load(withComma as never);
+    expect(commaWorkbook.getWorksheet("需求清单")!.getCell("M2").dataValidation).toBeUndefined();
   });
 
   it("标题与系列可分别勾选，默认零项写入且保留来源、产品、图片", async () => {
@@ -81,6 +299,42 @@ describe("协作 Excel v8 逐项合入", () => {
     expect(result.requirements).toEqual([]);
   });
 
+  it("WPS 移除旧 customXml 后，仅改操作列仍可按随行标识安全恢复", async () => {
+    const data = workspace();
+    const original = await createCurrentWorkspaceWorkbook(data, "0.8.28");
+    const edited = await editWorkbook(original, (book) => { book.getWorksheet("需求清单")!.getCell("A2").value = "删除"; });
+    const zip = await JSZip.loadAsync(edited);
+    zip.remove("customXml/item1.xml");
+    const wpsSaved = await zip.generateAsync({ type: "nodebuffer" });
+    const prepared = await inspectWorkspaceWorkbook(wpsSaved, "WPS保存.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges?.map((change) => change.kind)).toEqual(["delete"]);
+    const applied = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins", "2026-09-24T02:00:00.000Z", { selectedChangeIds: ["r1:delete"], conflictDecisions: {} });
+    expect(applied.requirements).toEqual([]);
+    const changedBusiness = await editWorkbook(original, (book) => { book.getWorksheet("需求清单")!.getCell("B2").value = "无法核对基线"; });
+    const changedZip = await JSZip.loadAsync(changedBusiness);
+    changedZip.remove("customXml/item1.xml");
+    await expect(inspectWorkspaceWorkbook(await changedZip.generateAsync({ type: "nodebuffer" }), "WPS改字段.xlsx", data)).rejects.toThrow(/仅操作列修改可安全恢复/);
+  });
+
+  it("新导出文件在 customXml 被移除后仍可从标准自定义属性读取完整基线", async () => {
+    const data = workspace();
+    const original = await createCurrentWorkspaceWorkbook(data, "0.8.29");
+    const sourceZip = await JSZip.loadAsync(original);
+    expect(await sourceZip.file("docProps/custom.xml")?.async("string")).toContain("RoadmapCollaboration_Manifest");
+    expect(await sourceZip.file("[Content_Types].xml")?.async("string")).toContain("custom-properties+xml");
+    const edited = await editWorkbook(original, (book) => { book.getWorksheet("需求清单")!.getCell("A2").value = "删除"; });
+    const zip = await JSZip.loadAsync(edited);
+    zip.remove("customXml/item1.xml");
+    zip.file("docProps/custom.xml", await sourceZip.file("docProps/custom.xml")!.async("string"));
+    const prepared = await inspectWorkspaceWorkbook(await zip.generateAsync({ type: "nodebuffer" }), "保留自定义属性.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges?.map((change) => change.kind)).toEqual(["delete"]);
+    const customXml = await sourceZip.file("docProps/custom.xml")!.async("string");
+    zip.file("docProps/custom.xml", customXml.replace(/name="RoadmapCollaboration_Manifest"><vt:lpwstr>[^<]+/, 'name="RoadmapCollaboration_Manifest"><vt:lpwstr>1:broken'));
+    await expect(inspectWorkspaceWorkbook(await zip.generateAsync({ type: "nodebuffer" }), "损坏自定义属性.xlsx", data)).rejects.toThrow(/内部系统信息缺失或损坏/);
+  });
+
   it("无效系列、伪造行及损坏内部元数据均拒绝", async () => {
     const data = workspace();
     const original = await createCurrentWorkspaceWorkbook(data, "0.8.26");
@@ -115,6 +369,90 @@ describe("协作 Excel v8 逐项合入", () => {
     const noneligible = workspace({ requirements: [{ ...base.requirements[0], source: "行业" }] });
     const invalid = await editWorkbook(await createCurrentWorkspaceWorkbook(noneligible, "0.8.26"), (book) => { book.getWorksheet("需求清单")!.getCell("Q2").value = "支持"; });
     expect((await inspectWorkspaceWorkbook(invalid, "v8.xlsx", noneligible)).preview.errors.some((item) => item.message.includes("不可回写"))).toBe(true);
+  });
+
+  it("内容相同的需求在调整顺序并修改后仍按内部行标识准确匹配", async () => {
+    const base = workspace();
+    const duplicate: Requirement = {
+      ...base.requirements[0],
+      id: "r2",
+      images: [],
+      createdAt: "2026-08-20T00:00:00.000Z",
+      updatedAt: "2026-08-21T00:00:00.000Z",
+    };
+    const data = workspace({ requirements: [base.requirements[0], duplicate] });
+    const edited = await editWorkbook(await createCurrentWorkspaceWorkbook(data, "0.8.28"), (book) => {
+      const sheet = book.getWorksheet("需求清单")!;
+      const first = Array.from({ length: 29 }, (_, index) => sheet.getCell(2, index + 1).value);
+      const second = Array.from({ length: 29 }, (_, index) => sheet.getCell(3, index + 1).value);
+      const firstStyles = Array.from({ length: 29 }, (_, index) => structuredClone(sheet.getCell(2, index + 1).style));
+      const secondStyles = Array.from({ length: 29 }, (_, index) => structuredClone(sheet.getCell(3, index + 1).style));
+      first.forEach((value, index) => { sheet.getCell(3, index + 1).value = value; });
+      second.forEach((value, index) => { sheet.getCell(2, index + 1).value = value; });
+      firstStyles.forEach((value, index) => { sheet.getCell(3, index + 1).style = value; });
+      secondStyles.forEach((value, index) => { sheet.getCell(2, index + 1).style = value; });
+      sheet.getCell("B2").value = "排序后的第二条需求";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "v8.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges).toHaveLength(1);
+    expect(prepared.preview.fieldChanges?.[0]).toMatchObject({ requirementId: "r2", field: "需求标题" });
+    const applied = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins", "2026-09-23T00:00:00.000Z", {
+      selectedChangeIds: ["r2:field:title"], conflictDecisions: {},
+    });
+    expect(applied.requirements.find((item) => item.id === "r2")?.title).toBe("排序后的第二条需求");
+    expect(applied.requirements.find((item) => item.id === "r1")?.title).toBe("社交时差");
+  });
+
+  it("内容相同的需求调整顺序后仅修改 A 列删除也能准确匹配", async () => {
+    const base = workspace();
+    const duplicate: Requirement = {
+      ...base.requirements[0],
+      id: "r2",
+      images: [],
+      createdAt: "2026-08-20T00:00:00.000Z",
+      updatedAt: "2026-08-21T00:00:00.000Z",
+    };
+    const data = workspace({ requirements: [base.requirements[0], duplicate] });
+    const edited = await editWorkbook(await createCurrentWorkspaceWorkbook(data, "0.8.28"), (book) => {
+      const sheet = book.getWorksheet("需求清单")!;
+      const first = Array.from({ length: 29 }, (_, index) => sheet.getCell(2, index + 1).value);
+      const second = Array.from({ length: 29 }, (_, index) => sheet.getCell(3, index + 1).value);
+      const firstStyles = Array.from({ length: 29 }, (_, index) => structuredClone(sheet.getCell(2, index + 1).style));
+      const secondStyles = Array.from({ length: 29 }, (_, index) => structuredClone(sheet.getCell(3, index + 1).style));
+      first.forEach((value, index) => { sheet.getCell(3, index + 1).value = value; });
+      second.forEach((value, index) => { sheet.getCell(2, index + 1).value = value; });
+      firstStyles.forEach((value, index) => { sheet.getCell(3, index + 1).style = value; });
+      secondStyles.forEach((value, index) => { sheet.getCell(2, index + 1).style = value; });
+      sheet.getCell("A2").value = "删除";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "v8.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges).toHaveLength(1);
+    expect(prepared.preview.fieldChanges?.[0]).toMatchObject({ requirementId: "r2", kind: "delete" });
+    const applied = applyPreparedWorkspaceWorkbook(data, prepared, "local-wins", "2026-09-23T00:00:00.000Z", {
+      selectedChangeIds: ["r2:delete"], conflictDecisions: {},
+    });
+    expect(applied.requirements.map((item) => item.id)).toEqual(["r1"]);
+  });
+
+  it("不调整顺序且仅修改 A 列删除时也不依赖可见内容匹配", async () => {
+    const base = workspace();
+    const duplicate: Requirement = {
+      ...base.requirements[0],
+      id: "r2",
+      images: [],
+      createdAt: "2026-08-20T00:00:00.000Z",
+      updatedAt: "2026-08-21T00:00:00.000Z",
+    };
+    const data = workspace({ requirements: [base.requirements[0], duplicate] });
+    const edited = await editWorkbook(await createCurrentWorkspaceWorkbook(data, "0.8.28"), (book) => {
+      book.getWorksheet("需求清单")!.getCell("A2").value = "删除";
+    });
+    const prepared = await inspectWorkspaceWorkbook(edited, "v8.xlsx", data);
+    expect(prepared.preview.errors).toEqual([]);
+    expect(prepared.preview.fieldChanges).toHaveLength(1);
+    expect(prepared.preview.fieldChanges?.[0]).toMatchObject({ requirementId: "r1", kind: "delete" });
   });
 
   it("选中无效 L0/L1 组合整次失败；未选字段不受影响", async () => {

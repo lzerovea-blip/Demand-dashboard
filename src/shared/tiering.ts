@@ -2,6 +2,7 @@ import type {
   DictionaryItem,
   Member,
   Requirement,
+  RequirementTombstone,
   RequirementSource,
   TieringData,
   TieringEvidenceSource,
@@ -46,8 +47,8 @@ export function isTieringEligibleRequirement(requirement: Pick<Requirement, "sou
 
 export const TIERING_EXPECTED_COUNTS = {
   features: 156,
-  productSeries: 13,
-  supportRecords: 2028,
+  productSeries: 15,
+  supportRecords: 2340,
   evidenceSources: 44,
   verificationIssues: 96,
 } as const;
@@ -56,7 +57,7 @@ export const TIERING_EXPECTED_COUNTS = {
  * 产品系列属于应用基础字典。它们必须随程序存在，不能依赖某台电脑
  * 曾经导入过分层分级数据包。
  */
-const SERIES_ORDER = ["PS01", "PS02", "PS11", "PS03", "PS04", "PS10", "PS05", "PS06", "PS07", "PS08", "PS09", "PS12", "PS13"];
+const SERIES_ORDER = ["PS01", "PS14", "PS02", "PS11", "PS03", "PS04", "PS10", "PS05", "PS06", "PS07", "PS15", "PS08", "PS09", "PS12", "PS13"];
 export const BUILT_IN_TIERING_PRODUCT_SERIES: readonly TieringProductSeries[] = [
   { id: "PS01", name: "WATCH数字系列", boundary: "WATCH数字命名系列", representativeProducts: "WATCH 3/4/5、WATCH十周年等", managementEntry: "华为运动健康", sourceIds: ["S043"], lifecycle: "现网/历史并存", note: "系列内部代际差异较大；以适用产品清单为准", sortOrder: 0, updatedAt: "2026-08-05T00:00:00.000Z" },
   { id: "PS02", name: "GT系列", boundary: "长续航时尚与专业运动系列", representativeProducts: "GT、GT 2-6、GT Runner、GT Cyber等", managementEntry: "华为运动健康", sourceIds: ["S029"], lifecycle: "现网/历史并存", note: "Pro、Runner与标准款能力有差异", sortOrder: 1, updatedAt: "2026-08-05T00:00:00.000Z" },
@@ -69,6 +70,7 @@ export const BUILT_IN_TIERING_PRODUCT_SERIES: readonly TieringProductSeries[] = 
   { id: "PS09", name: "体脂秤", boundary: "华为体重与身体成分设备", representativeProducts: "智能体脂秤、2 Pro、3、3 Pro", managementEntry: "华为运动健康", sourceIds: ["S015"], lifecycle: "现网/历史并存", note: "普通版、蓝牙/WLAN版和Pro版指标不同", sortOrder: 8, updatedAt: "2026-08-05T00:00:00.000Z" },
   ...([
     ["PS10", "FIT Pro系列"], ["PS11", "GT Pro系列"], ["PS12", "戒指系列"], ["PS13", "无屏系列"],
+    ["PS14", "WATCH Pro系列"], ["PS15", "Band Pro系列"],
   ] as const).map(([id, name]): TieringProductSeries => ({ id, name, boundary: "", representativeProducts: "", managementEntry: "", sourceIds: [], lifecycle: "", note: "新增系列，支持规格独立判断，不继承其他系列结论", sortOrder: 0, updatedAt: "2026-09-04T00:00:00.000Z" })),
 ].map((item) => ({ ...item, sortOrder: SERIES_ORDER.indexOf(item.id) })).sort((a, b) => a.sortOrder - b.sortOrder);
 
@@ -134,6 +136,23 @@ export function resolveTieringFeature(feature: TieringFeature, requirements: rea
     requirement,
     invalidLink,
     feature: !invalidLink && requirement && domain ? { ...feature, l0: domain.domainL0.name, l1: domain.domainL1.name, requirementTitle: requirement.title } : feature,
+  };
+}
+
+/** A confirmed deletion unlinks its historical specification without discarding support evidence. */
+export function unlinkDeletedHistoricalRequirement(
+  feature: TieringFeature,
+  requirements: readonly Pick<Requirement, "id">[],
+  tombstones: readonly RequirementTombstone[],
+): TieringFeature {
+  if (!isHistoricalTieringFeature(feature) || !feature.requirementId
+    || requirements.some((item) => item.id === feature.requirementId)) return feature;
+  const deletion = tombstones.find((item) => item.id === feature.requirementId);
+  if (!deletion) return feature;
+  return {
+    ...feature,
+    requirementId: undefined,
+    updatedAt: feature.updatedAt >= deletion.deletedAt ? feature.updatedAt : deletion.deletedAt,
   };
 }
 
@@ -321,7 +340,7 @@ export function normalizeWorkspaceTieringScope(raw: WorkspaceData): WorkspaceDat
       continue;
     }
     // 完整包可能只在需求侧保留稳定的历史功能 ID（F001–F156），而没有同时
-    // 携带对应的功能行。此时必须沿用需求上的关联 ID，后续再补建功能与 13 个
+    // 携带对应的功能行。此时必须沿用需求上的关联 ID，后续再补建功能与内置系列的
     // 系列支持记录；若直接退化为 REQ-*，会丢失历史基线的恢复语义。
     const fallbackId = requirement.tieringFeatureId ?? tieringFeatureIdForRequirement(requirement.id);
     const existing = candidate && !claimedFeatureIds.has(candidate.id) ? candidate : originalById.get(fallbackId);
@@ -349,9 +368,10 @@ export function normalizeWorkspaceTieringScope(raw: WorkspaceData): WorkspaceDat
     const linkedRequirement = feature.requirementId
       ? requirements.find((item) => item.id === feature.requirementId)
       : undefined;
-    nextFeatures.push(linkedRequirement && !isTieringEligibleRequirement(linkedRequirement)
+    const unlinked = linkedRequirement && !isTieringEligibleRequirement(linkedRequirement)
       ? { ...feature, requirementId: undefined }
-      : feature);
+      : unlinkDeletedHistoricalRequirement(feature, requirements, raw.requirementTombstones ?? []);
+    nextFeatures.push(unlinked);
   }
 
   const builtInById = new Map(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => [item.id, item]));

@@ -23,6 +23,7 @@ const FIRST_DATA_ROW = HEADER_ROW + 1;
 const FONT_NAME = "Microsoft YaHei";
 
 const MATRIX_BASE_HEADERS = [
+  "序号",
   "功能ID",
   "L0",
   "L1",
@@ -37,6 +38,7 @@ const MATRIX_BASE_HEADERS = [
 ] as const;
 
 const DETAIL_HEADERS = [
+  "序号",
   "功能ID",
   "L0",
   "L1",
@@ -141,9 +143,10 @@ function createMatrixSheet(
 ): void {
   const sheet = workbook.addWorksheet(MATRIX_SHEET, { properties: { tabColor: { argb: "FF245B4D" } } });
   const headers = [...MATRIX_BASE_HEADERS, ...BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.name)];
-  prepareSheet(sheet, "分层分级支持矩阵", headers, range, generatedAt, appVersion, demands.length, 4);
+  prepareSheet(sheet, "分层分级支持矩阵", headers, range, generatedAt, appVersion, demands.length, 5);
 
-  const rows = demands.map(({ requirement, featureId, l0, l1 }) => [
+  const rows = demands.map(({ requirement, featureId, l0, l1 }, index) => [
+    index + 1,
     featureId,
     l0,
     l1,
@@ -159,10 +162,10 @@ function createMatrixSheet(
   ] satisfies ExcelJS.CellValue[]);
   addRowsOrEmptyState(sheet, rows, headers.length, "当前区间暂无运动、健康或 AI 路标需求");
 
-  const widths = [14, 18, 18, 32, 16, 14, 14, 14, 14, 12, 12, ...BUILT_IN_TIERING_PRODUCT_SERIES.map(() => 18)];
+  const widths = [8, 14, 18, 18, 32, 16, 14, 14, 14, 14, 12, 12, ...BUILT_IN_TIERING_PRODUCT_SERIES.map(() => 18)];
   sheet.columns = widths.map((width) => ({ width }));
   styleDataArea(sheet, headers.length, rows.length, 36, widths);
-  sheet.getColumn(6).numFmt = 'yyyy"-"mm';
+  sheet.getColumn(7).numFmt = 'yyyy"-"mm';
 
   if (rows.length) {
     const statusStartColumn = MATRIX_BASE_HEADERS.length + 1;
@@ -186,7 +189,7 @@ function createDetailSheet(
   appVersion: string,
 ): void {
   const sheet = workbook.addWorksheet(DETAIL_SHEET, { properties: { tabColor: { argb: "FF6B8F83" } } });
-  prepareSheet(sheet, "分层分级规格明细", [...DETAIL_HEADERS], range, generatedAt, appVersion, demands.length, 4);
+  prepareSheet(sheet, "分层分级规格明细", [...DETAIL_HEADERS], range, generatedAt, appVersion, demands.length, 5);
 
   const rows: ExcelJS.CellValue[][] = [];
   for (const { requirement, featureId, l0, l1 } of demands) {
@@ -194,6 +197,7 @@ function createDetailSheet(
     for (const series of BUILT_IN_TIERING_PRODUCT_SERIES) {
       const record = supportMap.get(`${featureId}::${series.id}`);
       rows.push([
+        rows.length + 1,
         feature?.id ?? featureId,
         l0,
         l1,
@@ -221,14 +225,14 @@ function createDetailSheet(
   }
   addRowsOrEmptyState(sheet, rows, DETAIL_HEADERS.length, "当前区间暂无运动、健康或 AI 路标需求");
 
-  const widths = [14, 18, 18, 32, 16, 14, 14, 18, 14, 24, 24, 22, 20, 18, 28, 18, 38, 14, 14, 14, 32, 22];
+  const widths = [8, 14, 18, 18, 32, 16, 14, 14, 18, 14, 24, 24, 22, 20, 18, 28, 18, 38, 14, 14, 14, 32, 22];
   sheet.columns = widths.map((width) => ({ width }));
   styleDataArea(sheet, DETAIL_HEADERS.length, rows.length, 54, widths);
-  sheet.getColumn(6).numFmt = 'yyyy"-"mm';
-  sheet.getColumn(18).numFmt = "yyyy-mm-dd";
-  sheet.getColumn(22).numFmt = "yyyy-mm-dd hh:mm";
+  sheet.getColumn(7).numFmt = 'yyyy"-"mm';
+  sheet.getColumn(19).numFmt = "yyyy-mm-dd";
+  sheet.getColumn(23).numFmt = "yyyy-mm-dd hh:mm";
   for (let rowNumber = FIRST_DATA_ROW; rowNumber < FIRST_DATA_ROW + rows.length; rowNumber += 1) {
-    styleStatusCell(sheet.getCell(rowNumber, 9));
+    styleStatusCell(sheet.getCell(rowNumber, 10));
   }
   finishFilter(sheet, DETAIL_HEADERS.length, rows.length);
 }
@@ -257,7 +261,7 @@ function prepareSheet(
 
   sheet.getCell("A2").value = `导出范围：${shortHalfYear(range.start)}–${shortHalfYear(range.end)}　生成时间：${formatTimestamp(generatedAt)}`;
   sheet.getCell("A2").font = { name: FONT_NAME, size: 10, italic: true, color: { argb: "FF5F6D75" } };
-  sheet.getCell("A3").value = `应用版本：v${appVersion}　需求：${demandCount} 条　口径：仅运动、健康、AI 路标；固定 13 个产品系列。本文件仅用于查看与核对，不支持回导。`;
+  sheet.getCell("A3").value = `应用版本：v${appVersion}　需求：${demandCount} 条　口径：仅运动、健康、AI 路标；固定 ${BUILT_IN_TIERING_PRODUCT_SERIES.length} 个产品系列。本文件仅用于查看与核对，不支持回导。`;
   sheet.getCell("A3").font = { name: FONT_NAME, size: 9, color: { argb: "FF6E7C84" } };
 
   const headerRow = sheet.getRow(HEADER_ROW);

@@ -57,7 +57,7 @@ afterEach(async () => {
 
 describe("领域与分层同步（真实 SQLite 事务）", () => {
   it("v8 逐项勾选在同一事务写入需求标题与系列状态，未选字段保持本机", async () => {
-    const bytes = await createCurrentWorkspaceWorkbook(database.getWorkspaceData(), "0.8.26", timestamp);
+    const bytes = await createCurrentWorkspaceWorkbook(database.getWorkspaceData(), "0.8.26", timestamp, undefined, "v8");
     const zip = await JSZip.loadAsync(bytes);
     const sheet = await zip.file("xl/worksheets/sheet1.xml")!.async("string");
     zip.file("xl/worksheets/sheet1.xml", sheet
@@ -190,7 +190,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     await database.importWorkspace(data(requirements), "replace");
     const snapshot = database.getSnapshot();
     expect(snapshot.tiering?.features).toHaveLength(included.length);
-    expect(snapshot.tiering?.supportRecords).toHaveLength(included.length * 13);
+    expect(snapshot.tiering?.supportRecords).toHaveLength(included.length * 15);
     expect(snapshot.requirements.filter((item) => included.includes(item.source as typeof included[number])).every((item) => Boolean(item.tieringFeatureId))).toBe(true);
     expect(snapshot.requirements.filter((item) => excluded.includes(item.source as typeof excluded[number])).every((item) => item.tieringFeatureId === undefined)).toBe(true);
     const excludedRequirement = snapshot.requirements.find((item) => item.source === "行业")!;
@@ -214,7 +214,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     const restored = await database.saveRequirement({ ...excluded.requirements[0], source: "AI综合" } as SaveRequirementInput);
     expect(restored.requirements[0].tieringFeatureId).toBe("REQ-r1");
     expect(restored.tiering?.features).toHaveLength(1);
-    expect(restored.tiering?.supportRecords).toHaveLength(13);
+    expect(restored.tiering?.supportRecords).toHaveLength(15);
     expect(restored.tiering?.supportRecords.every((item) => item.status === "未判断")).toBe(true);
     expect(restored.tiering?.verificationIssues).toEqual([]);
     expect(restored.tiering?.changeLogs).toEqual([]);
@@ -226,7 +226,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     const moved = await database.saveRequirement({ ...database.getSnapshot().requirements[0], source: "health平台" } as SaveRequirementInput);
     expect(moved.requirements[0].tieringFeatureId).toBeUndefined();
     expect(moved.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: undefined }));
-    expect(moved.tiering?.supportRecords).toHaveLength(13);
+    expect(moved.tiering?.supportRecords).toHaveLength(15);
     expect(moved.tiering?.supportRecords.find((item) => item.id === "F001::PS01")?.status).toBe("支持");
     expect(moved.tiering?.changeLogs).toHaveLength(1);
   });
@@ -256,7 +256,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     const imported = await database.importWorkspace(workspace, "replace");
     expect(imported.tiering?.features.map((item) => item.id).sort()).toEqual(["F002", "REQ-r1"]);
     expect(imported.tiering?.supportRecords.filter((item) => item.featureId === "REQ-orphan")).toEqual([]);
-    expect(imported.tiering?.supportRecords.filter((item) => item.featureId === "F002")).toHaveLength(13);
+    expect(imported.tiering?.supportRecords.filter((item) => item.featureId === "F002")).toHaveLength(15);
   });
 
   it("Excel 回导将来源移出范围时，需求更新与分层清理同一事务生效", async () => {
@@ -288,10 +288,52 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     const upgraded = await open();
     const snapshot = upgraded.getSnapshot();
     expect(snapshot.requirements[0]).toMatchObject({ planningMemberId: "plan", productManagerMemberId: "pm", seMemberId: "se" });
-    expect(snapshot.tiering?.productSeries.map((item) => item.name)).toEqual(["WATCH数字系列", "GT系列", "GT Pro系列", "ULTIMATE系列", "FIT系列", "FIT Pro系列", "D系列", "WATCH Buds系列", "Band系列", "儿童手表", "体脂秤", "戒指系列", "无屏系列"]);
-    expect(snapshot.tiering?.supportRecords).toHaveLength(13);
+    expect(snapshot.tiering?.productSeries.map((item) => item.name)).toEqual(["WATCH数字系列", "WATCH Pro系列", "GT系列", "GT Pro系列", "ULTIMATE系列", "FIT系列", "FIT Pro系列", "D系列", "WATCH Buds系列", "Band系列", "Band Pro系列", "儿童手表", "体脂秤", "戒指系列", "无屏系列"]);
+    expect(snapshot.tiering?.supportRecords).toHaveLength(15);
     expect(snapshot.tiering?.supportRecords.filter((item) => ["PS10", "PS11", "PS12", "PS13"].includes(item.seriesId)).every((item) => item.status === "未判断")).toBe(true);
     expect((await readdir(join(environment.directory, "backups"))).some((name) => name.startsWith("roadmap-before-v0.8.24-"))).toBe(true);
+  });
+
+  it("旧库启动补齐 WATCH Pro 与 Band Pro，不继承原系列结论且重复启动不产生副本", async () => {
+    await database.saveTieringSupport({ recordId: "REQ-r1::PS01", status: "支持", reason: "已有 WATCH 结论" });
+    await database.saveTieringSupport({ recordId: "REQ-r1::PS07", status: "不支持", reason: "已有 Band 结论" });
+    const originalLogs = database.getSnapshot().tiering!.changeLogs.length;
+    internals().db.run("DELETE FROM tiering_support_records WHERE id LIKE '%::PS14' OR id LIKE '%::PS15'");
+    internals().db.run("DELETE FROM tiering_product_series WHERE id IN ('PS14','PS15')");
+    await internals().persist();
+
+    const upgraded = await open();
+    const tiering = upgraded.getSnapshot().tiering!;
+    expect(tiering.productSeries).toHaveLength(15);
+    expect(tiering.supportRecords).toHaveLength(15);
+    expect(tiering.supportRecords.find((item) => item.id === "REQ-r1::PS01")?.status).toBe("支持");
+    expect(tiering.supportRecords.find((item) => item.id === "REQ-r1::PS07")?.status).toBe("不支持");
+    expect(tiering.supportRecords.filter((item) => ["PS14", "PS15"].includes(item.seriesId)).map((item) => item.status)).toEqual(["未判断", "未判断"]);
+    expect(tiering.changeLogs).toHaveLength(originalLogs);
+
+    const reopened = await open();
+    expect(reopened.getSnapshot().tiering?.productSeries).toHaveLength(15);
+    expect(reopened.getSnapshot().tiering?.supportRecords).toHaveLength(15);
+  });
+
+  it("历史需求删除及旧库残留关联修复后，不再误报关联无效", async () => {
+    await database.importWorkspace(data([{ ...requirement, tieringFeatureId: "F001" }]), "replace");
+    await database.saveTieringSupport({ recordId: "F001::PS01", status: "支持", reason: "保留历史结论" });
+    const before = database.getSnapshot().tiering!;
+    const oldFeature = before.features.find((item) => item.id === "F001")!;
+    await database.deleteRequirement(requirement.id);
+    expect(database.getSnapshot().tiering?.features.find((item) => item.id === "F001")?.requirementId).toBeUndefined();
+    internals().db.run("UPDATE tiering_features SET payload = ? WHERE id = ?", [JSON.stringify(oldFeature), oldFeature.id]);
+    await internals().persist();
+
+    const repaired = await open();
+    const tiering = repaired.getSnapshot().tiering!;
+    expect(tiering.features.find((item) => item.id === oldFeature.id)?.requirementId).toBeUndefined();
+    expect(tiering.supportRecords.find((item) => item.id === "F001::PS01")?.status).toBe("支持");
+    expect(tiering.changeLogs).toEqual(before.changeLogs);
+    expect(resolveTieringFeature(tiering.features[0], repaired.getSnapshot().requirements, repaired.getSnapshot().domains).invalidLink).toBe(false);
+    const restarted = await open();
+    expect(restarted.getSnapshot().tiering?.features.find((item) => item.id === "F001")?.requirementId).toBeUndefined();
   });
 
   it("变更记录只编辑管理信息，并可永久删除且不改变系列状态", async () => {
@@ -497,7 +539,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     const after = database.getSnapshot();
     expect(after.requirements).toHaveLength(0);
     expect(after.tiering?.features).toHaveLength(featureId === "F001" ? 1 : 0);
-    expect(after.tiering?.supportRecords).toHaveLength(featureId === "F001" ? 13 : 0);
+    expect(after.tiering?.supportRecords).toHaveLength(featureId === "F001" ? 15 : 0);
     expect(after.tiering?.features[0]?.requirementId).toBeUndefined();
   });
 

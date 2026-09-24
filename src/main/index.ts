@@ -39,7 +39,7 @@ import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 import { beginDiagnosticStage, diagnosticInfo, initializeStartupDiagnostics, sanitizeDiagnosticDetail, writeStartupDiagnostic } from "./diagnostics.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-09-22";
+const APP_RELEASED_AT = "2026-09-24";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
@@ -243,32 +243,47 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     const filePath = result.filePaths[0];
-    const bytes = await readFile(filePath);
-    const prepared = await inspectWorkspaceWorkbook(bytes, basename(filePath), database.getWorkspaceData());
-    if (prepared.parsed.formatVersion === "v8") {
-      prepared.sourceFilePath = filePath;
-      prepared.sourceSha256 = createHash("sha256").update(bytes).digest("hex");
+    writeStartupDiagnostic("workbook-inspect-start", "file-selected");
+    try {
+      const bytes = await readFile(filePath);
+      const prepared = await inspectWorkspaceWorkbook(bytes, basename(filePath), database.getWorkspaceData());
+      if (["v8", "v9", "v10"].includes(prepared.parsed.formatVersion)) {
+        prepared.sourceFilePath = filePath;
+        prepared.sourceSha256 = createHash("sha256").update(bytes).digest("hex");
+      }
+      const token = crypto.randomUUID();
+      pendingWorkbookImports.clear();
+      pendingWorkbookImports.set(token, prepared);
+      writeStartupDiagnostic("workbook-inspect-complete", `format=${prepared.parsed.formatVersion} sizeBytes=${bytes.length} errors=${prepared.preview.errors.length} changes=${prepared.preview.fieldChanges?.length ?? prepared.preview.differences.length}`);
+      return { canceled: false, preview: { token, fileName: basename(filePath), ...prepared.preview } };
+    } catch (error) {
+      writeStartupDiagnostic("workbook-inspect-failed", error);
+      throw error;
     }
-    const token = crypto.randomUUID();
-    pendingWorkbookImports.clear();
-    pendingWorkbookImports.set(token, prepared);
-    return { canceled: false, preview: { token, fileName: basename(filePath), ...prepared.preview } };
   });
 
   ipcMain.handle("workbook:apply", async (_event, input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string; fieldSelection?: WorkspaceWorkbookFieldSelection }) => {
-    if (!input || !["local-wins", "excel-wins"].includes(input.conflictMode)) throw new Error("请选择有效的冲突处理方式");
-    const prepared = pendingWorkbookImports.get(input.token);
-    if (!prepared) throw new Error("Excel 导入数据已失效，请重新选择文件");
-    if (input.differenceDigest !== prepared.preview.differenceDigest) throw new Error("请先核对并确认全部 Excel 差异");
-    if (prepared.parsed.errors.length) throw new Error("Excel 存在校验错误，请修正后重新导入");
-    if (prepared.parsed.formatVersion === "v8") {
-      if (!prepared.sourceFilePath || !prepared.sourceSha256) throw new Error("Excel 文件校验信息缺失，请重新选择文件");
-      const latestBytes = await readFile(prepared.sourceFilePath).catch(() => { throw new Error("Excel 文件已移动或删除，请重新选择文件"); });
-      if (createHash("sha256").update(latestBytes).digest("hex") !== prepared.sourceSha256) throw new Error("Excel 文件在预览后发生变化，请重新选择文件检查");
+    writeStartupDiagnostic("workbook-apply-start", `hasInput=${Boolean(input)}`);
+    try {
+      if (!input || !["local-wins", "excel-wins"].includes(input.conflictMode)) throw new Error("请选择有效的冲突处理方式");
+      const prepared = pendingWorkbookImports.get(input.token);
+      if (!prepared) throw new Error("Excel 导入数据已失效，请重新选择文件");
+      writeStartupDiagnostic("workbook-apply-selection", `format=${prepared.parsed.formatVersion} selected=${input.fieldSelection?.selectedChangeIds.length ?? 0} previewErrors=${prepared.parsed.errors.length}`);
+      if (input.differenceDigest !== prepared.preview.differenceDigest) throw new Error("请先核对并确认全部 Excel 差异");
+      if (prepared.parsed.errors.length) throw new Error("Excel 存在校验错误，请修正后重新导入");
+      if (["v8", "v9", "v10"].includes(prepared.parsed.formatVersion)) {
+        if (!prepared.sourceFilePath || !prepared.sourceSha256) throw new Error("Excel 文件校验信息缺失，请重新选择文件");
+        const latestBytes = await readFile(prepared.sourceFilePath).catch(() => { throw new Error("Excel 文件已移动或删除，请重新选择文件"); });
+        if (createHash("sha256").update(latestBytes).digest("hex") !== prepared.sourceSha256) throw new Error("Excel 文件在预览后发生变化，请重新选择文件检查");
+      }
+      const snapshot = await database.importWorkspaceWorkbook(prepared, input.conflictMode, input.fieldSelection);
+      pendingWorkbookImports.delete(input.token);
+      writeStartupDiagnostic("workbook-apply-complete", `format=${prepared.parsed.formatVersion} requirements=${snapshot.requirements.length}`);
+      return { snapshot };
+    } catch (error) {
+      writeStartupDiagnostic("workbook-apply-failed", error);
+      throw error;
     }
-    const snapshot = await database.importWorkspaceWorkbook(prepared, input.conflictMode, input.fieldSelection);
-    pendingWorkbookImports.delete(input.token);
-    return { snapshot };
   });
 
   ipcMain.handle("template:draft-export", async () => {

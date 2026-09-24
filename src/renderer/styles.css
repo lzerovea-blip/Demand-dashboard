@@ -489,6 +489,8 @@ td strong { color: #1b2832; font-weight: 700; }
   .workload-input-grid { grid-template-columns: 1fr; }
 }
 .workbook-field-differences .import-difference-scroll { max-height: min(46vh, 470px); overflow-y: auto; }
+.workbook-select-all { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.workbook-select-all .button { min-height: 30px; padding: 4px 10px; font-size: 11px; }
 .workbook-field-change { padding: 12px 15px; border-top: 1px solid #e5ebef; }
 .workbook-field-change > label { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; color: #26323d; }
 .workbook-field-change > label input { margin-top: 4px; }

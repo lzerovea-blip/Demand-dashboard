@@ -84,6 +84,7 @@ import {
   type WorkloadSide,
 } from "../shared/workload";
 import { moveMedicalRoadmapRow } from "../shared/medicalRoadmapOrder";
+import { adoptedWorkbookDeleteCount, allWorkbookChangeIds } from "../shared/workbookSelection";
 
 type Page = "requirements" | "summary" | "roadmap" | "tiering" | "dictionaries" | "template";
 
@@ -104,8 +105,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.8.26",
-  releasedAt: "2026-09-22",
+  version: "0.8.30",
+  releasedAt: "2026-09-24",
   author: "林忠维",
 };
 
@@ -2247,6 +2248,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
   const [workbookDifferencesConfirmed, setWorkbookDifferencesConfirmed] = useState(false);
   const [workbookSelectedChanges, setWorkbookSelectedChanges] = useState<string[]>([]);
   const [workbookConflictDecisions, setWorkbookConflictDecisions] = useState<Record<string, "local" | "excel">>({});
+  const [workbookDeleteConfirmation, setWorkbookDeleteConfirmation] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [pptMaterialName, setPptMaterialName] = useState("解决方案需求路标");
   const [pptSections, setPptSections] = useState<PptExportSectionId[]>([...DEFAULT_PPT_EXPORT_SECTIONS]);
@@ -2259,6 +2261,8 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
   const workbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).length;
   const tieringWorkbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).filter(isTieringEligibleRequirement).length;
+  const selectableWorkbookChangeIds = allWorkbookChangeIds(workbookPreview?.fieldChanges ?? []);
+  const selectedWorkbookDeletes = adoptedWorkbookDeleteCount(workbookPreview?.fieldChanges ?? [], workbookSelectedChanges, workbookConflictDecisions);
   const memberById = new Map(snapshot.members.map((item) => [item.id, item]));
   const availableMembers = snapshot.members.filter((item) => !whitelistEntries.some((entry) => entry.memberId === item.id));
   const policyDirty = JSON.stringify(whitelistEntries) !== JSON.stringify(snapshot.pptAccessPolicy.entries);
@@ -2304,20 +2308,26 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
         setWorkbookDifferencesConfirmed(false);
         setWorkbookSelectedChanges([]);
         setWorkbookConflictDecisions({});
+        setWorkbookDeleteConfirmation(false);
       }
     } finally {
       setWorkbookInspecting(false);
     }
   }
 
-  async function applyWorkbook(conflictMode: WorkspaceWorkbookConflictMode) {
+  async function applyWorkbook(conflictMode: WorkspaceWorkbookConflictMode, confirmedDeletes = false) {
     if (!workbookPreview || workbookPreview.errors.length) return;
-    const isV8 = workbookPreview.formatVersion === "v8";
-    if (!isV8 && workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed) return;
-    if (isV8 && workbookSelectedChanges.some((id) => workbookPreview.fieldChanges?.find((change) => change.id === id)?.conflict && !workbookConflictDecisions[id])) return;
+    const isSelective = ["v8", "v9", "v10"].includes(workbookPreview.formatVersion);
+    if (!isSelective && workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed) return;
+    if (isSelective && workbookSelectedChanges.some((id) => workbookPreview.fieldChanges?.find((change) => change.id === id)?.conflict && !workbookConflictDecisions[id])) return;
+    if (isSelective && selectedWorkbookDeletes > 0 && !confirmedDeletes) {
+      setWorkbookDeleteConfirmation(true);
+      return;
+    }
+    setWorkbookDeleteConfirmation(false);
     setWorkbookApplying(conflictMode);
     try {
-      if (await onApplyWorkbook(workbookPreview.token, conflictMode, workbookPreview.differenceDigest, isV8 ? { selectedChangeIds: workbookSelectedChanges, conflictDecisions: workbookConflictDecisions } : undefined)) setWorkbookPreview(null);
+      if (await onApplyWorkbook(workbookPreview.token, conflictMode, workbookPreview.differenceDigest, isSelective ? { selectedChangeIds: workbookSelectedChanges, conflictDecisions: workbookConflictDecisions } : undefined)) setWorkbookPreview(null);
     } finally {
       setWorkbookApplying(null);
     }
@@ -2391,7 +2401,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
         </section>
 
         <p className="callout">封面数量、工作量、汇总分析及其他路标按所选区间统计；医疗认证 PPT 独立展示全部医疗需求及完整节点时间范围。未填写送检版本不计入半年统计或时间范围 Excel，完整需求包仍完整保存。</p>
-        <p className="callout">需求池协作 Excel v8 可编辑需求字段与 13 个系列支持状态，回导时逐项勾选差异。来源、匹配产品及创新研究 App、算法工作量不在表格中编辑，回导保留本机值。医疗认证 PPT 使用全部医疗需求的独立自动时间范围，不受导出区间限制。</p>
+        <p className="callout">需求池协作 Excel v10 可编辑需求字段与 15 个系列支持状态，回导时逐项勾选差异。来源、匹配产品及创新研究 App、算法工作量不在表格中编辑，回导保留本机值。医疗认证 PPT 使用全部医疗需求的独立自动时间范围，不受导出区间限制。</p>
         <div className="export-type-grid">
           <section className="panel export-type-card roadmap-export-card">
             <div className="export-type-head"><span className="export-type-icon">P</span><span className="eyebrow">POWERPOINT</span></div>
@@ -2418,7 +2428,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
           <section className="panel export-type-card excel-export-card">
             <div className="export-type-head"><span className="export-type-icon">X</span><span className="eyebrow">EXCEL COLLABORATION</span></div>
             <h3>Excel 表格</h3>
-            <p>需求池 Excel 可逐项编辑需求和 13 个系列支持状态，导入时逐字段勾选合入；分层分级 Excel 包含支持矩阵和规格明细，仅供查看。</p>
+            <p>需求池 Excel 可逐项编辑需求和 15 个系列支持状态，导入时逐字段勾选合入；字典或成员选项过多时可直接填写名称，回导仍会校验。分层分级 Excel 仅供查看。</p>
             <dl className="export-type-meta">
               <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
               <div><dt>需求池</dt><dd>{workbookRequirementCount} 条</dd></div>
@@ -2482,8 +2492,8 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
           <div className="import-file"><b>{workbookPreview.fileName}</b><span>{workbookPreview.formatVersion} · 导出于 {formatDateTime(workbookPreview.exportedAt)}</span></div>
           <dl className="import-counts workbook-counts"><div><dt>新增需求</dt><dd>{workbookPreview.counts.added} 条</dd></div><div><dt>修改需求</dt><dd>{workbookPreview.counts.updated} 条</dd></div><div><dt>删除需求</dt><dd>{workbookPreview.counts.deleted} 条</dd></div><div><dt>未变化</dt><dd>{workbookPreview.counts.unchanged} 条</dd></div><div><dt>领域 / 产品调整</dt><dd>{workbookPreview.counts.domainsChanged} / {workbookPreview.counts.productsChanged}</dd></div><div><dt>卡片调整</dt><dd>{workbookPreview.counts.groupOverridesChanged} 项</dd></div><div><dt>冲突</dt><dd>{workbookPreview.counts.conflicts} 项</dd></div><div><dt>校验错误</dt><dd>{workbookPreview.errors.length} 项</dd></div></dl>
           {workbookPreview.errors.length > 0 && <ImportIssueList title="需要先修正的错误" tone="error" items={workbookPreview.errors} />}
-          {workbookPreview.formatVersion === "v8" ? <>
-            {workbookPreview.errors.length === 0 && <div className="import-differences workbook-field-differences"><div className="import-differences-head"><b>逐项选择合入</b><span>{workbookPreview.fieldChanges?.length ?? 0} 项差异，默认均不勾选</span></div><div className="import-difference-scroll">
+          {["v8", "v9", "v10"].includes(workbookPreview.formatVersion) ? <>
+            {workbookPreview.errors.length === 0 && <div className="import-differences workbook-field-differences"><div className="import-differences-head"><b>逐项选择合入</b><div className="workbook-select-all"><span>已选 {workbookSelectedChanges.length} / {selectableWorkbookChangeIds.length} 项，默认不勾选</span><button type="button" className="button ghost" disabled={!selectableWorkbookChangeIds.length || Boolean(workbookApplying)} onClick={() => setWorkbookSelectedChanges((current) => selectableWorkbookChangeIds.every((id) => current.includes(id)) ? [] : selectableWorkbookChangeIds)}>{selectableWorkbookChangeIds.length && selectableWorkbookChangeIds.every((id) => workbookSelectedChanges.includes(id)) ? "取消全选" : "全选"}</button></div></div><div className="import-difference-scroll">
               {(workbookPreview.fieldChanges ?? []).map((change) => {
                 const checked = workbookSelectedChanges.includes(change.id);
                 const deleteSelected = workbookSelectedChanges.includes(`${change.requirementId}:delete`);
@@ -2506,6 +2516,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
           </>}
         </div>
       </div>}
+      {workbookDeleteConfirmation && <ConfirmationDialog title="确认合入删除需求" message={`已选择删除 ${selectedWorkbookDeletes} 条需求。合入后这些需求及关联分层数据将从本机移除，确定继续吗？`} confirmLabel={`确认删除 ${selectedWorkbookDeletes} 条并合入`} busy={Boolean(workbookApplying)} onConfirm={() => void applyWorkbook("local-wins", true)} onCancel={() => setWorkbookDeleteConfirmation(false)} />}
       {preview && <div className="overlay import-overlay" onMouseDown={(event) => event.currentTarget === event.target && !applying && setPreview(null)}>
         <div className="import-dialog panel" role="dialog" aria-modal="true" aria-labelledby="import-title">
           <div className="import-dialog-head"><div><span className="eyebrow">WORKSPACE IMPORT</span><h2 id="import-title">确认导入数据包</h2></div><button className="icon-button" onClick={() => setPreview(null)} disabled={Boolean(applying)}>×</button></div>
@@ -2571,7 +2582,7 @@ function pageTitle(page: Page): string {
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗认证七类路标", tiering: "离线管理十三个华为产品系列对运动健康原子功能的支持规格", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
+  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗认证七类路标", tiering: "离线管理十五个华为产品系列对运动健康原子功能的支持规格", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {

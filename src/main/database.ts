@@ -67,6 +67,7 @@ import {
   resolveTieringFeature,
   resolveTieringRequirementDomains,
   tieringFeatureIdForRequirement,
+  unlinkDeletedHistoricalRequirement,
   validateTieringSupportRecord,
 } from "../shared/tiering.js";
 import { historicalLaunchForFeatureId, normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
@@ -917,8 +918,13 @@ export class LocalDatabase {
       const reconciledRequirements = this.all<{ payload: string }>("SELECT payload FROM requirements")
         .map((row) => normalizeRequirement(JSON.parse(row.payload)));
       const reconciledFeatures = normalizeTieringData({ features: this.payloads<TieringFeature>("tiering_features", "sort_order, id") }).features;
+      const tombstones = this.payloads<RequirementTombstone>("requirement_tombstones", "deleted_at DESC, id");
       for (const feature of reconciledFeatures) {
-        if (isHistoricalTieringFeature(feature)) continue;
+        if (isHistoricalTieringFeature(feature)) {
+          const unlinked = unlinkDeletedHistoricalRequirement(feature, reconciledRequirements, tombstones);
+          if (unlinked !== feature) this.run("UPDATE tiering_features SET updated_at = ?, payload = ? WHERE id = ?", [unlinked.updatedAt, JSON.stringify(unlinked), unlinked.id]);
+          continue;
+        }
         const linkedRequirements = reconciledRequirements.filter((item) => item.id === feature.requirementId || item.tieringFeatureId === feature.id);
         if (linkedRequirements.length === 0) {
           this.deleteOrdinaryTieringFeature(feature.id);

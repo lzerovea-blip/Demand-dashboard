@@ -74,22 +74,22 @@ describe(".roadmap 数据包", () => {
     expect(inspected.data.tiering).toMatchObject({
       features: [{ id: "REQ-r1", requirementId: "r1", requirementTitle: "社交时差" }],
     });
-    expect(inspected.data.tiering?.productSeries).toHaveLength(13);
-    expect(inspected.data.tiering?.supportRecords).toHaveLength(13);
+    expect(inspected.data.tiering?.productSeries).toHaveLength(15);
+    expect(inspected.data.tiering?.supportRecords).toHaveLength(15);
     expect(inspected.preview).toMatchObject({
       sourceFormat: "roadmap",
       exportedAt: "2026-08-20T08:00:00.000Z",
-      counts: { requirements: 1, images: 1, domains: 2, products: 1, groupOverrides: 1, tieringFeatures: 1, tieringProductSeries: 13, tieringSupportRecords: 13 },
+      counts: { requirements: 1, images: 1, domains: 2, products: 1, groupOverrides: 1, tieringFeatures: 1, tieringProductSeries: 15, tieringSupportRecords: 15 },
     });
   });
 
-  it("检查时为缺少分层行的纳入范围需求补齐功能和十三系列矩阵", async () => {
+  it("检查时为缺少分层行的纳入范围需求补齐功能和十五系列矩阵", async () => {
     const current: WorkspaceData = { ...workspace, requirements: [], groupOverrides: [], tiering: EMPTY_TIERING_DATA };
     const inspected = await inspectWorkspacePackage(await createWorkspacePackage(workspace, "0.8.24"), "缺少分层行.roadmap", current);
     expect(inspected.data.requirements[0].tieringFeatureId).toBe("REQ-r1");
-    expect(inspected.preview.counts).toMatchObject({ tieringFeatures: 1, tieringProductSeries: 13, tieringSupportRecords: 13 });
+    expect(inspected.preview.counts).toMatchObject({ tieringFeatures: 1, tieringProductSeries: 15, tieringSupportRecords: 15 });
     expect(inspected.preview.differences).toContainEqual(expect.objectContaining({ entity: "分层功能", key: "REQ-r1", change: "新增" }));
-    expect(inspected.preview.differences.filter((item) => item.entity === "系列支持" && item.change === "新增")).toHaveLength(13);
+    expect(inspected.preview.differences.filter((item) => item.entity === "系列支持" && item.change === "新增")).toHaveLength(15);
   });
 
   it("旧包中的行业普通规格会在检查语义中清理且不进入差异预览", async () => {
@@ -111,7 +111,7 @@ describe(".roadmap 数据包", () => {
     expect(inspected.data.requirements[0].tieringFeatureId).toBeUndefined();
     expect(inspected.data.tiering?.features).toEqual([]);
     expect(inspected.data.tiering?.supportRecords).toEqual([]);
-    expect(inspected.preview.counts).toMatchObject({ tieringFeatures: 0, tieringProductSeries: 13, tieringSupportRecords: 0 });
+    expect(inspected.preview.counts).toMatchObject({ tieringFeatures: 0, tieringProductSeries: 15, tieringSupportRecords: 0 });
     expect(inspected.preview.differences.some((item) => item.entity === "分层功能" || item.entity === "系列支持")).toBe(false);
   });
 

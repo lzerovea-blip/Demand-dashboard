@@ -20,6 +20,7 @@ import {
   tieringFeatureIdForRequirement,
   tieringSourceForL0,
   tieringSupportId,
+  unlinkDeletedHistoricalRequirement,
   validateTieringData,
   validateTieringSupportRecord,
 } from "../src/shared/tiering";
@@ -38,20 +39,20 @@ const feature: TieringFeature = { id: "F001", l0: "基础体征测量", l1: "心
 const support: TieringSupportRecord = { id: "F001::PS01", featureId: "F001", seriesId: "PS01", status: "支持", supportedModels: "", excludedModels: "", phoneOsMarket: "中国大陆", minHealthAppVersion: "", minDeviceVersion: "", prerequisites: "", sourceIds: ["S001"], sourceUrl: "", verifiedAt: "2026-08-05", evidenceLevel: "A", auditStatus: "已公开核验", note: "", updatedAt: "2026-08-05T00:00:00.000Z" };
 
 describe("需求分层分级", () => {
-  it("内置十三个稳定产品系列供全新电脑初始化", () => {
+  it("内置十五个稳定产品系列供全新电脑初始化", () => {
     expect(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.id)).toEqual([
-      "PS01", "PS02", "PS11", "PS03", "PS04", "PS10", "PS05", "PS06", "PS07", "PS08", "PS09", "PS12", "PS13",
+      "PS01", "PS14", "PS02", "PS11", "PS03", "PS04", "PS10", "PS05", "PS06", "PS07", "PS15", "PS08", "PS09", "PS12", "PS13",
     ]);
     expect(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.name)).toEqual([
-      "WATCH数字系列", "GT系列", "GT Pro系列", "ULTIMATE系列", "FIT系列", "FIT Pro系列", "D系列", "WATCH Buds系列", "Band系列", "儿童手表", "体脂秤", "戒指系列", "无屏系列",
+      "WATCH数字系列", "WATCH Pro系列", "GT系列", "GT Pro系列", "ULTIMATE系列", "FIT系列", "FIT Pro系列", "D系列", "WATCH Buds系列", "Band系列", "Band Pro系列", "儿童手表", "体脂秤", "戒指系列", "无屏系列",
     ]);
-    expect(TIERING_EXPECTED_COUNTS).toMatchObject({ features: 156, productSeries: 13, supportRecords: 2028 });
+    expect(TIERING_EXPECTED_COUNTS).toMatchObject({ features: 156, productSeries: 15, supportRecords: 2340 });
   });
 
   it("只补齐缺失系列且不覆盖本机已有系列资料", () => {
     const existing = [{ ...BUILT_IN_TIERING_PRODUCT_SERIES[0], name: "本机自定义名称" }];
     const missing = missingBuiltInTieringProductSeries(existing);
-    expect(missing).toHaveLength(12);
+    expect(missing).toHaveLength(14);
     expect(missing.some((item) => item.id === "PS01")).toBe(false);
     expect(existing[0].name).toBe("本机自定义名称");
   });
@@ -191,7 +192,7 @@ describe("需求分层分级", () => {
     const linked = normalizeWorkspaceTieringScope(workspace);
     expect(linked.requirements[0].tieringFeatureId).toBe("F001");
     expect(linked.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: "r-f001" }));
-    expect(linked.tiering?.supportRecords.filter((item) => item.featureId === "F001")).toHaveLength(13);
+    expect(linked.tiering?.supportRecords.filter((item) => item.featureId === "F001")).toHaveLength(15);
 
     const unlinked = normalizeWorkspaceTieringScope({
       ...linked,
@@ -199,7 +200,22 @@ describe("需求分层分级", () => {
     });
     expect(unlinked.requirements[0].tieringFeatureId).toBeUndefined();
     expect(unlinked.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: undefined }));
-    expect(unlinked.tiering?.supportRecords.filter((item) => item.featureId === "F001")).toHaveLength(13);
+    expect(unlinked.tiering?.supportRecords.filter((item) => item.featureId === "F001")).toHaveLength(15);
+  });
+
+  it("历史需求已确认删除时解除旧关联并保留规格，缺少删除记录时仍提示真正异常", () => {
+    const deletedFeature = { ...feature, requirementId: "r-f001" };
+    const tombstone = { id: "r-f001", title: feature.requirementTitle, deletedAt: "2026-09-24T00:00:00.000Z" };
+    expect(unlinkDeletedHistoricalRequirement(deletedFeature, [], [])).toBe(deletedFeature);
+    expect(unlinkDeletedHistoricalRequirement(deletedFeature, [], [tombstone])).toMatchObject({ id: "F001", requirementId: undefined, updatedAt: tombstone.deletedAt });
+    const normalized = normalizeWorkspaceTieringScope({
+      requirements: [], requirementTombstones: [tombstone], domains: [], products: [], members: [], groupOverrides: [],
+      pptAccessPolicy: { entries: [], updatedAt: tombstone.deletedAt },
+      tiering: { ...structuredClone(EMPTY_TIERING_DATA), features: [deletedFeature], productSeries: [BUILT_IN_TIERING_PRODUCT_SERIES[0]], supportRecords: [support] },
+    });
+    expect(normalized.tiering?.features[0].requirementId).toBeUndefined();
+    expect(normalized.tiering?.supportRecords.find((item) => item.id === support.id)?.status).toBe("支持");
+    expect(normalizeWorkspaceTieringScope({ ...normalized, requirementTombstones: [] }).tiering?.features[0].requirementId).toBeUndefined();
   });
 
   it("旧需求领域关联失效时可识别并跳过启动同步", () => {

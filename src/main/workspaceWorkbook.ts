@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { REQUIREMENT_OWNER_FIELDS } from "../shared/members.js";
 import type { Member } from "../shared/types.js";
 import { isMedicalSubmissionSource } from "../shared/medicalSubmission.js";
@@ -28,8 +29,8 @@ import { validateWorkspaceData } from "./workspacePackage.js";
 import { BUILT_IN_TIERING_PRODUCT_SERIES, isHistoricalTieringFeature, isTieringEligibleRequirement, normalizeTieringData, normalizeWorkspaceTieringScope, renameIndependentTieringDomain, resolveTieringFeature, tieringSupportId } from "../shared/tiering.js";
 
 const FORMAT_KEY = "health-roadmap-collaboration";
-const FORMAT_VERSION = "v8";
-const LEGACY_FORMAT_VERSIONS = ["v2", "v3", "v4", "v5", "v6", "v7"] as const;
+const FORMAT_VERSION = "v10";
+const LEGACY_FORMAT_VERSIONS = ["v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"] as const;
 const SUPPORTED_FORMAT_VERSIONS: readonly string[] = [FORMAT_VERSION, ...LEGACY_FORMAT_VERSIONS];
 const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 const LEGACY_HEADER_ROW = 3;
@@ -41,6 +42,11 @@ const V6_FIRST_DATA_ROW = V6_HEADER_ROW + 1;
 const V6_CUSTOM_XML_PATH = "customXml/item1.xml";
 const V6_CUSTOM_XML_NAMESPACE = "urn:solution-roadmap:collaboration:v6";
 const V6_CUSTOM_XML_REL_ID = "rIdRoadmapCollaborationV6";
+const WORKBOOK_CUSTOM_PROPERTIES_PATH = "docProps/custom.xml";
+const WORKBOOK_CUSTOM_PROPERTIES_PREFIX = "RoadmapCollaboration_";
+const WORKBOOK_CUSTOM_PROPERTIES_CHUNK_SIZE = 240;
+const WORKBOOK_CUSTOM_PROPERTIES_TYPE = "application/vnd.openxmlformats-officedocument.custom-properties+xml";
+const WORKBOOK_CUSTOM_PROPERTIES_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties";
 const SHEETS = {
   guide: "填写说明",
   requirements: "需求清单",
@@ -99,7 +105,23 @@ const V6_REQUIREMENT_HEADERS = [
 const WORKBOOK_OWNER_FIELDS = [REQUIREMENT_OWNER_FIELDS[1], REQUIREMENT_OWNER_FIELDS[0], REQUIREMENT_OWNER_FIELDS[2], REQUIREMENT_OWNER_FIELDS[3]];
 const V7_REQUIREMENT_HEADERS = [...V6_REQUIREMENT_HEADERS, "规划", "产品经理", "SE", "算法"] as const;
 const V8_BUSINESS_HEADERS = V7_REQUIREMENT_HEADERS.filter((header) => header !== "来源" && header !== "匹配产品");
-const V8_REQUIREMENT_HEADERS = [...V8_BUSINESS_HEADERS, ...BUILT_IN_TIERING_PRODUCT_SERIES.map((series) => series.name)];
+// Keep the original 13-series layouts immutable: older workbooks must still
+// validate and import after the application gains new built-in series.
+const LEGACY_TIERING_PRODUCT_SERIES = BUILT_IN_TIERING_PRODUCT_SERIES.filter((series) => series.id !== "PS14" && series.id !== "PS15");
+const V8_REQUIREMENT_HEADERS = [...V8_BUSINESS_HEADERS, ...LEGACY_TIERING_PRODUCT_SERIES.map((series) => series.name)];
+const V9_REQUIREMENT_HEADERS = ["序号", ...V8_REQUIREMENT_HEADERS];
+const V10_REQUIREMENT_HEADERS = ["序号", ...V8_BUSINESS_HEADERS, ...BUILT_IN_TIERING_PRODUCT_SERIES.map((series) => series.name)];
+type SelectiveWorkbookVersion = "v8" | "v9" | "v10";
+const SELECTIVE_WORKBOOK_VERSIONS: readonly string[] = ["v8", "v9", "v10"];
+function isSelectiveWorkbookVersion(version: string): version is SelectiveWorkbookVersion {
+  return SELECTIVE_WORKBOOK_VERSIONS.includes(version);
+}
+function workbookSeriesForVersion(version: SelectiveWorkbookVersion) {
+  return version === "v10" ? BUILT_IN_TIERING_PRODUCT_SERIES : LEGACY_TIERING_PRODUCT_SERIES;
+}
+function workbookHeadersForVersion(version: SelectiveWorkbookVersion): readonly string[] {
+  return version === "v10" ? V10_REQUIREMENT_HEADERS : version === "v9" ? V9_REQUIREMENT_HEADERS : V8_REQUIREMENT_HEADERS;
+}
 const V8_FIELD_KEYS = ["title", "description", "domainL0Id", "domainId", "scope", "allowLatestVersionUpgrade", "category", "targetMonth", "deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "planningMemberId", "productManagerMemberId", "seMemberId", "algorithmMemberId"] as const;
 type V8FieldKey = (typeof V8_FIELD_KEYS)[number];
 const V8_FIELD_HEADERS: Record<V8FieldKey, string> = {
@@ -112,7 +134,7 @@ function workbookMemberLabel(member: Member, members: readonly Member[]): string
 
 interface V6WorkbookMetadata {
   formatKey: typeof FORMAT_KEY;
-  formatVersion: "v6" | "v7" | "v8";
+  formatVersion: "v6" | "v7" | SelectiveWorkbookVersion;
   exportedAt: string;
   appVersion: string;
   range: HalfYearRange | null;
@@ -127,6 +149,7 @@ interface V6WorkbookDictionarySnapshot {
 
 interface V6WorkbookRowMetadata {
   requirementId: string;
+  rowToken?: string;
   baselineUpdatedAt: string;
   baselineHash: string;
   baselineVisible: string[];
@@ -260,7 +283,7 @@ export async function createWorkspaceWorkbook(
   appVersion: string,
   exportedAt = new Date().toISOString(),
   range?: HalfYearRange,
-  formatVersion: "v8" | "v7" = "v8",
+  formatVersion: "v10" | "v9" | "v8" | "v7" = "v10",
 ): Promise<Buffer> {
   const exportedData = range ? workspaceDataForWorkbookRange(data, range.start, range.end) : data;
   validateWorkspaceData(exportedData);
@@ -272,7 +295,7 @@ export async function createWorkspaceWorkbook(
 
   const payload = formatVersion === "v7"
     ? createRequirementSheetV6(workbook, exportedData, appVersion, exportedAt, range)
-    : createRequirementSheetV8(workbook, exportedData, appVersion, exportedAt, range);
+    : createRequirementSheetV8(workbook, exportedData, appVersion, exportedAt, range, formatVersion);
 
   const bytes = await workbook.xlsx.writeBuffer();
   return injectV6Payload(Buffer.from(bytes), payload);
@@ -299,7 +322,7 @@ export async function inspectWorkspaceWorkbook(
 ): Promise<PreparedWorkspaceWorkbookImport> {
   if (!fileName.toLowerCase().endsWith(".xlsx")) throw new Error("请选择 .xlsx 协作工作簿");
   if (!bytes.length || bytes.length > MAX_WORKBOOK_BYTES) throw new Error("Excel 文件为空或超过 25MB 限制");
-  const v6Payload = await readV6Payload(bytes);
+  const storedPayload = await readV6Payload(bytes);
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(bytes as never);
@@ -309,14 +332,18 @@ export async function inspectWorkspaceWorkbook(
 
   const errors: WorkspaceWorkbookIssue[] = [];
   const requirementSheet = workbook.getWorksheet(SHEETS.requirements);
+  const recoverableVersion = requirementSheet && (["v10", "v9", "v8"] as const).find((version) =>
+    workbookHeadersForVersion(version).every((header, index) => cellText(requirementSheet.getCell(1, index + 1)) === header));
+  const v6Payload = storedPayload ?? (requirementSheet && recoverableVersion
+    ? recoverOperationOnlyV8Payload(requirementSheet, current, recoverableVersion) : undefined);
   let parsed: ParsedWorkspaceWorkbook;
   if (v6Payload) {
     if (workbook.worksheets.length !== 1) addIssue(errors, SHEETS.requirements, "A1", "协作 Excel 只能包含“需求清单”一个工作表");
     if (!requirementSheet) throw new Error("协作 Excel 缺少“需求清单”工作表");
-    if (v6Payload.metadata.formatVersion === "v8") {
+    if (isSelectiveWorkbookVersion(v6Payload.metadata.formatVersion)) {
       const v8Rows = parseRequirementSheetV8(requirementSheet, current, v6Payload, errors);
-      parsed = { formatVersion: "v8", exportedAt: v6Payload.metadata.exportedAt, domains: [], products: [], requirements: [], overrides: [], errors, v8Rows };
-      const fieldChanges = createV8FieldChanges(current, v8Rows);
+      parsed = { formatVersion: v6Payload.metadata.formatVersion, exportedAt: v6Payload.metadata.exportedAt, domains: [], products: [], requirements: [], overrides: [], errors, v8Rows };
+      const fieldChanges = createV8FieldChanges(current, v8Rows, v6Payload.metadata.formatVersion);
       const counts = emptyImportCounts();
       counts.updated = new Set(fieldChanges.filter((change) => change.kind !== "delete").map((change) => change.requirementId)).size;
       counts.deleted = fieldChanges.filter((change) => change.kind === "delete").length;
@@ -326,7 +353,7 @@ export async function inspectWorkspaceWorkbook(
         parsed,
         localFingerprint: v8WorkspaceFingerprint(current),
         preview: {
-          formatVersion: "v8", exportedAt: parsed.exportedAt, counts, errors,
+          formatVersion: parsed.formatVersion, exportedAt: parsed.exportedAt, counts, errors,
           conflicts: fieldChanges.filter((change) => change.conflict).map((change) => conflictIssue(SHEETS.requirements, change.row, `${change.title} · ${change.field} 本机和 Excel 均已修改`)),
           differences: [], fieldChanges, differenceDigest: stableHash(fieldChanges),
         },
@@ -344,7 +371,9 @@ export async function inspectWorkspaceWorkbook(
     };
   } else {
     if (requirementSheet && (V6_REQUIREMENT_HEADERS.every((header, index) => cellText(requirementSheet.getCell(1, index + 1)) === header)
-      || V8_REQUIREMENT_HEADERS.every((header, index) => cellText(requirementSheet.getCell(1, index + 1)) === header))) {
+      || V8_REQUIREMENT_HEADERS.every((header, index) => cellText(requirementSheet.getCell(1, index + 1)) === header)
+      || V9_REQUIREMENT_HEADERS.every((header, index) => cellText(requirementSheet.getCell(1, index + 1)) === header)
+      || V10_REQUIREMENT_HEADERS.every((header, index) => cellText(requirementSheet.getCell(1, index + 1)) === header))) {
       throw new Error("协作 Excel 的内部系统信息缺失或损坏，请重新导出后再导入");
     }
     const guide = workbook.getWorksheet(SHEETS.guide);
@@ -402,7 +431,7 @@ export function applyPreparedWorkspaceWorkbook(
   fieldSelection?: WorkspaceWorkbookFieldSelection,
 ): WorkspaceData {
   if (prepared.parsed.errors.length) throw new Error("协作 Excel 存在校验错误，请修正后重新导入");
-  if (prepared.parsed.formatVersion === "v8") return applyV8FieldSelection(current, prepared, fieldSelection, now);
+  if (isSelectiveWorkbookVersion(prepared.parsed.formatVersion)) return applyV8FieldSelection(current, prepared, fieldSelection, now);
   const plan = planWorkspaceWorkbookImport(current, prepared.parsed, conflictMode, now);
   validateWorkspaceData(plan.data);
   return plan.data;
@@ -412,7 +441,7 @@ function applyV8FieldSelection(current: WorkspaceData, prepared: PreparedWorkspa
   if (!selection || !Array.isArray(selection.selectedChangeIds) || !selection.conflictDecisions || typeof selection.conflictDecisions !== "object") throw new Error("请选择要合入的逐项差异");
   if (v8WorkspaceFingerprint(current) !== prepared.localFingerprint) throw new Error("本机需求或分层状态在检查后已变化，请重新选择 Excel 检查");
   const rows = prepared.parsed.v8Rows ?? [];
-  const changes = createV8FieldChanges(current, rows);
+  const changes = createV8FieldChanges(current, rows, prepared.parsed.formatVersion as SelectiveWorkbookVersion);
   if (stableHash(changes) !== prepared.preview.differenceDigest) throw new Error("Excel 差异已变化，请重新检查文件");
   const byChangeId = new Map(changes.map((item) => [item.id, item]));
   const submitted = new Set(selection.selectedChangeIds);
@@ -457,7 +486,7 @@ function applyV8FieldSelection(current: WorkspaceData, prepared: PreparedWorkspa
     if (deleted.has(row.requirementId)) continue;
     const feature = featureByRequirement.get(row.requirementId);
     if (!feature) continue;
-    for (const series of BUILT_IN_TIERING_PRODUCT_SERIES) {
+    for (const series of workbookSeriesForVersion(prepared.parsed.formatVersion as SelectiveWorkbookVersion)) {
       if (!adopted.has(`${row.requirementId}:series:${series.id}`)) continue;
       const id = tieringSupportId(feature.id, series.id);
       const previous = records.get(id);
@@ -466,7 +495,7 @@ function applyV8FieldSelection(current: WorkspaceData, prepared: PreparedWorkspa
       records.set(id, record);
       tiering.changeLogs.push({
         id: randomUUID(), changedAt: now, triggerType: "协作 Excel", featureId: feature.id, seriesId: series.id,
-        before: JSON.stringify(previous), after: JSON.stringify(record), reason: "协作 Excel v8 勾选合入系列支持状态",
+        before: JSON.stringify(previous), after: JSON.stringify(record), reason: `协作 Excel ${prepared.parsed.formatVersion} 勾选合入系列支持状态`,
         sourceIds: [...record.sourceIds], reviewer: "", recordStatus: "有效", note: "", updatedAt: now,
       });
     }
@@ -515,15 +544,17 @@ function v8DisplayValue(data: WorkspaceData, key: V8FieldKey, value: string): st
   return value;
 }
 
-function createV8FieldChanges(current: WorkspaceData, rows: readonly V8ParsedRow[]): WorkspaceWorkbookFieldChange[] {
+function createV8FieldChanges(current: WorkspaceData, rows: readonly V8ParsedRow[], formatVersion: SelectiveWorkbookVersion): WorkspaceWorkbookFieldChange[] {
   const byId = new Map(current.requirements.map((item) => [item.id, item]));
   const changes: WorkspaceWorkbookFieldChange[] = [];
   for (const row of rows) {
     const existing = byId.get(row.requirementId);
     if (!existing) continue;
     if (row.action === "删除") {
-      const conflict = requirementHashV7(existing) !== row.baselineHash || BUILT_IN_TIERING_PRODUCT_SERIES.some((series) =>
-        isTieringEligibleRequirement(existing) && currentSeriesStatus(current, existing.id, series.id) !== row.baselineSeries[series.id]);
+      const conflict = requirementHashV7(existing) !== row.baselineHash || (isTieringEligibleRequirement(existing) && (
+        workbookSeriesForVersion(formatVersion).some((series) => currentSeriesStatus(current, existing.id, series.id) !== row.baselineSeries[series.id])
+        || BUILT_IN_TIERING_PRODUCT_SERIES.some((series) => !(series.id in row.baselineSeries) && currentSeriesStatus(current, existing.id, series.id) !== "未判断")
+      ));
       changes.push({ id: `${existing.id}:delete`, requirementId: existing.id, row: row.row, title: existing.title, kind: "delete", field: "删除整条需求", baselineValue: row.baselineFields.title, currentValue: existing.title, excelValue: "删除", conflict });
       continue;
     }
@@ -534,7 +565,7 @@ function createV8FieldChanges(current: WorkspaceData, rows: readonly V8ParsedRow
       changes.push({ id: `${existing.id}:field:${key}`, requirementId: existing.id, row: row.row, title: existing.title, kind: "field", field: V8_FIELD_HEADERS[key], baselineValue: v8DisplayValue(current, key, row.baselineFields[key]), currentValue: v8DisplayValue(current, key, localFields[key]), excelValue: v8DisplayValue(current, key, incoming), conflict: localFields[key] !== row.baselineFields[key] });
     }
     if (!isTieringEligibleRequirement(existing)) continue;
-    for (const series of BUILT_IN_TIERING_PRODUCT_SERIES) {
+    for (const series of workbookSeriesForVersion(formatVersion)) {
       const incoming = row.incomingSeries[series.id];
       const local = currentSeriesStatus(current, existing.id, series.id);
       if (incoming === row.baselineSeries[series.id] || incoming === local) continue;
@@ -546,14 +577,18 @@ function createV8FieldChanges(current: WorkspaceData, rows: readonly V8ParsedRow
 
 function createRequirementSheetV8(
   workbook: ExcelJS.Workbook, data: WorkspaceData, appVersion: string, exportedAt: string, range?: HalfYearRange,
+  formatVersion: SelectiveWorkbookVersion = "v8",
 ): V6WorkbookPayload {
   const sheet = workbook.addWorksheet(SHEETS.requirements, { properties: { tabColor: { argb: "FF228A70" } } });
-  sheet.views = [{ state: "frozen", xSplit: 2, ySplit: 1, showGridLines: false }];
+  const offset = formatVersion === "v8" ? 0 : 1;
+  const headers = workbookHeadersForVersion(formatVersion);
+  const seriesForWorkbook = workbookSeriesForVersion(formatVersion);
+  sheet.views = [{ state: "frozen", xSplit: 2 + offset, ySplit: 1, showGridLines: false }];
   const domains = new Map(data.domains.map((item) => [item.id, item.name]));
   const tiering = normalizeWorkspaceTieringScope(data).tiering!;
   const featureByRequirement = new Map(tiering.features.filter((feature) => feature.requirementId).map((feature) => [feature.requirementId!, feature]));
   const supportById = new Map(tiering.supportRecords.map((record) => [record.id, record]));
-  const rows = data.requirements.map((item) => {
+  const rows = data.requirements.map((item, index) => {
     const fields = v8RequirementFields(item);
     const values: ExcelJS.CellValue[] = [
       "保留", fields.title, fields.description || null, domains.get(fields.domainL0Id) ?? fields.domainL0Id,
@@ -566,18 +601,18 @@ function createRequirementSheetV8(
       }),
     ];
     const feature = featureByRequirement.get(item.id);
-    for (const series of BUILT_IN_TIERING_PRODUCT_SERIES) {
+    for (const series of seriesForWorkbook) {
       values.push(isTieringEligibleRequirement(item) && feature
         ? supportById.get(tieringSupportId(feature.id, series.id))?.status ?? "未判断" : null);
     }
-    return values;
+    return offset ? [index + 1, ...values] : values;
   });
   const rowMetadata: V6WorkbookRowMetadata[] = data.requirements.map((item, index) => {
     const feature = featureByRequirement.get(item.id);
     return {
-      requirementId: item.id, baselineUpdatedAt: item.updatedAt, baselineHash: requirementHashV7(item),
-      baselineVisible: canonicalVisibleRowV8(rows[index]), baselineFields: v8RequirementFields(item),
-      baselineSeries: Object.fromEntries(BUILT_IN_TIERING_PRODUCT_SERIES.map((series) => [series.id,
+      requirementId: item.id, rowToken: workbookRowToken(item), baselineUpdatedAt: item.updatedAt, baselineHash: requirementHashV7(item),
+      baselineVisible: canonicalVisibleRowV8(offset ? rows[index].slice(1) : rows[index]), baselineFields: v8RequirementFields(item),
+      baselineSeries: Object.fromEntries(seriesForWorkbook.map((series) => [series.id,
         isTieringEligibleRequirement(item) && feature
           ? supportById.get(tieringSupportId(feature.id, series.id))?.status ?? "未判断" : ""])),
     };
@@ -585,13 +620,13 @@ function createRequirementSheetV8(
   sheet.addTable({
     name: "RequirementsTable", ref: "A1", headerRow: true, totalsRow: false,
     style: { theme: "TableStyleMedium2", showRowStripes: false },
-    columns: V8_REQUIREMENT_HEADERS.map((name) => ({ name, filterButton: true })), rows,
+    columns: headers.map((name) => ({ name, filterButton: true })), rows,
   });
-  sheet.columns = [...[10, 28, 48, 18, 18, 16, 21, 16, 16, 16, 16, 16, 20, 20, 20, 20], ...BUILT_IN_TIERING_PRODUCT_SERIES.map(() => 19)].map((width) => ({ width }));
-  sheet.getColumn(9).numFmt = "yyyy-mm";
-  for (const column of [10, 11, 12]) sheet.getColumn(column).numFmt = "0.00";
+  sheet.columns = [...(offset ? [8] : []), ...[10, 28, 48, 18, 18, 16, 21, 16, 16, 16, 16, 16, 20, 20, 20, 20], ...seriesForWorkbook.map(() => 19)].map((width) => ({ width }));
+  sheet.getColumn(9 + offset).numFmt = "yyyy-mm";
+  for (const column of [10, 11, 12]) sheet.getColumn(column + offset).numFmt = "0.00";
   sheet.getRow(1).height = 31;
-  forEachCell(sheet, "A1:AC1", (cell) => {
+  forEachCell(sheet, `A1:${columnLetter(headers.length)}1`, (cell) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9F2E6" } };
     cell.font = { name: "Microsoft YaHei", size: 10, bold: true, color: { argb: "FF000000" } };
     cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
@@ -599,32 +634,33 @@ function createRequirementSheetV8(
   });
   const lastRow = rows.length + 1;
   if (rows.length) {
-    forEachCell(sheet, `A2:AC${lastRow}`, (cell) => {
+    forEachCell(sheet, `A2:${columnLetter(headers.length)}${lastRow}`, (cell) => {
       cell.fill = { type: "pattern", pattern: "none" };
       cell.font = { name: "Microsoft YaHei", size: 10, color: { argb: "FF000000" } };
       cell.alignment = { vertical: "top", wrapText: cell.col === "C" };
       cell.border = lightBorders();
     });
     for (let row = 2; row <= lastRow; row += 1) sheet.getRow(row).height = 28;
-    applyListValidation(sheet, `A2:A${lastRow}`, ["保留", "删除"]);
-    applyListValidation(sheet, `F2:F${lastRow}`, [...REQUIREMENT_SCOPES]);
-    applyListValidation(sheet, `G2:G${lastRow}`, ["是", "否"]);
-    applyListValidation(sheet, `H2:H${lastRow}`, [...CATEGORIES]);
-    applyListValidation(sheet, `D2:D${lastRow}`, data.domains.filter((item) => item.level === "L0").map((item) => item.name));
-    applyListValidation(sheet, `E2:E${lastRow}`, data.domains.filter((item) => (item.level ?? "L1") === "L1").map((item) => item.name));
-    for (const column of [10, 11, 12]) applyDecimalValidation(sheet, `${columnLetter(column)}2:${columnLetter(column)}${lastRow}`, 0, true);
+    rowMetadata.forEach((metadata, index) => applyWorkbookRowIdentityFormat(sheet, index + 2, metadata.rowToken!, offset));
+    const rangeFor = (column: number) => `${columnLetter(column + offset)}2:${columnLetter(column + offset)}${lastRow}`;
+    applyListValidation(sheet, rangeFor(1), ["保留", "删除"]);
+    applyListValidation(sheet, rangeFor(6), [...REQUIREMENT_SCOPES]);
+    applyListValidation(sheet, rangeFor(7), ["是", "否"]);
+    applyListValidation(sheet, rangeFor(8), [...CATEGORIES]);
+    applyListValidation(sheet, rangeFor(4), data.domains.filter((item) => item.level === "L0").map((item) => item.name));
+    applyListValidation(sheet, rangeFor(5), data.domains.filter((item) => (item.level ?? "L1") === "L1").map((item) => item.name));
+    for (const column of [10, 11, 12]) applyDecimalValidation(sheet, rangeFor(column), 0, true);
     WORKBOOK_OWNER_FIELDS.forEach(({ role }, index) => {
       const labels = (data.members ?? []).filter((member) => member.role === role).map((member) => workbookMemberLabel(member, data.members ?? []));
-      if (labels.join(",").length > 253 || labels.some((label) => /[,"\r\n]/.test(label))) throw new Error(`${role}成员下拉超出容量，请缩短成员显示名称`);
-      applyListValidation(sheet, `${columnLetter(13 + index)}2:${columnLetter(13 + index)}${lastRow}`, labels, true);
+      applyListValidation(sheet, rangeFor(13 + index), labels, true);
     });
     data.requirements.forEach((item, index) => {
       if (!isTieringEligibleRequirement(item)) return;
-      for (let column = 17; column <= 29; column += 1) applyListValidation(sheet, `${columnLetter(column)}${index + 2}:${columnLetter(column)}${index + 2}`, ["支持", "不支持", "未判断"]);
+      for (let column = 17; column < 17 + seriesForWorkbook.length; column += 1) applyListValidation(sheet, `${columnLetter(column + offset)}${index + 2}:${columnLetter(column + offset)}${index + 2}`, ["支持", "不支持", "未判断"]);
     });
   }
   const payload: V6WorkbookPayload = {
-    metadata: { formatKey: FORMAT_KEY, formatVersion: FORMAT_VERSION, exportedAt, appVersion, range: range ?? null },
+    metadata: { formatKey: FORMAT_KEY, formatVersion, exportedAt, appVersion, range: range ?? null },
     dictionaries: {
       members: (data.members ?? []).map((member) => ({ id: member.id, role: member.role ?? "", label: workbookMemberLabel(member, data.members ?? []) })),
       domainL0: data.domains.filter((item) => item.level === "L0").map(({ id, name }) => ({ id, name })),
@@ -643,6 +679,28 @@ function canonicalVisibleRowV8(values: readonly ExcelJS.CellValue[]): string[] {
     if (index >= 9 && index <= 11) return String(roundWorkload(Number(value ?? 0)));
     return String(value ?? "").trim();
   });
+}
+
+const WORKBOOK_ROW_TOKEN_PREFIX = "__HRB_";
+const WORKBOOK_ROW_TOKEN_COLUMNS = [1, 2, 3, 4, 5, 6, 7, 8, ...Array.from({ length: 17 }, (_, index) => index + 13)] as const;
+
+function workbookRowToken(item: Requirement): string {
+  return stableHash({ kind: "requirement-row", id: item.id, createdAt: item.createdAt }).slice(0, 24);
+}
+
+function applyWorkbookRowIdentityFormat(sheet: ExcelJS.Worksheet, row: number, token: string, offset = 0): void {
+  // Spread the 96-bit token across text cells using only 16 reusable number
+  // formats. This avoids Excel's custom-number-format count limit while keeping
+  // the identifier outside user-visible values and columns.
+  [...token].forEach((nibble, index) => {
+    sheet.getCell(row, WORKBOOK_ROW_TOKEN_COLUMNS[index] + offset).numFmt = `0"${WORKBOOK_ROW_TOKEN_PREFIX}${nibble}";0;0;@`;
+  });
+}
+
+function rowTokenFromWorksheetRow(sheet: ExcelJS.Worksheet, row: number, offset = 0): string | undefined {
+  const nibblePattern = new RegExp(`^0"${WORKBOOK_ROW_TOKEN_PREFIX}([a-f0-9])";0;0;@$`, "i");
+  const token = WORKBOOK_ROW_TOKEN_COLUMNS.slice(0, 24).map((column) => nibblePattern.exec(sheet.getCell(row, column + offset).numFmt ?? "")?.[1] ?? "").join("");
+  return token.length === 24 ? token.toLowerCase() : undefined;
 }
 
 function createRequirementSheetV6(
@@ -759,6 +817,18 @@ async function injectV6Payload(bytes: Buffer, payload: V6WorkbookPayload): Promi
   const zip = await JSZip.loadAsync(bytes);
   const json = JSON.stringify(payload).replaceAll("]]>", "]]]]><![CDATA[>");
   zip.file(V6_CUSTOM_XML_PATH, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><roadmapCollaboration xmlns="${V6_CUSTOM_XML_NAMESPACE}"><payload><![CDATA[${json}]]></payload></roadmapCollaboration>`);
+  // WPS and some Excel save paths discard unknown customXml parts. Custom file
+  // properties are an Office-supported, non-worksheet location that survives
+  // those saves; retain customXml as a reader-compatible copy for older files.
+  if (isSelectiveWorkbookVersion(payload.metadata.formatVersion)) {
+    const encoded = deflateRawSync(Buffer.from(JSON.stringify(payload), "utf8")).toString("base64");
+    const chunks = encoded.match(new RegExp(`.{1,${WORKBOOK_CUSTOM_PROPERTIES_CHUNK_SIZE}}`, "g")) ?? [];
+    const properties = [
+      `${chunks.length}:${createHash("sha256").update(encoded).digest("hex")}`,
+      ...chunks,
+    ].map((value, index) => `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${index + 2}" name="${WORKBOOK_CUSTOM_PROPERTIES_PREFIX}${index === 0 ? "Manifest" : String(index - 1).padStart(3, "0")}"><vt:lpwstr>${value}</vt:lpwstr></property>`);
+    zip.file(WORKBOOK_CUSTOM_PROPERTIES_PATH, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${properties.join("")}</Properties>`);
+  }
   const relsPath = "_rels/.rels";
   const relsFile = zip.file(relsPath);
   if (!relsFile) throw new Error("Excel 文件缺少关系清单");
@@ -766,7 +836,21 @@ async function injectV6Payload(bytes: Buffer, payload: V6WorkbookPayload): Promi
   if (!rels.includes(`Target="${V6_CUSTOM_XML_PATH}"`)) {
     const relationship = `<Relationship Id="${V6_CUSTOM_XML_REL_ID}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="${V6_CUSTOM_XML_PATH}"/>`;
     rels = rels.replace("</Relationships>", `${relationship}</Relationships>`);
-    zip.file(relsPath, rels);
+  }
+  if (isSelectiveWorkbookVersion(payload.metadata.formatVersion) && !rels.includes(`Target="${WORKBOOK_CUSTOM_PROPERTIES_PATH}"`)) {
+    const relationship = `<Relationship Id="rIdRoadmapCollaborationProperties" Type="${WORKBOOK_CUSTOM_PROPERTIES_REL}" Target="${WORKBOOK_CUSTOM_PROPERTIES_PATH}"/>`;
+    rels = rels.replace("</Relationships>", `${relationship}</Relationships>`);
+  }
+  zip.file(relsPath, rels);
+  if (isSelectiveWorkbookVersion(payload.metadata.formatVersion)) {
+    const contentTypesFile = zip.file("[Content_Types].xml");
+    if (!contentTypesFile) throw new Error("Excel 文件缺少内容类型清单");
+    let contentTypes = await contentTypesFile.async("string");
+    if (!contentTypes.includes(`PartName="/${WORKBOOK_CUSTOM_PROPERTIES_PATH}"`)) {
+      const override = `<Override PartName="/${WORKBOOK_CUSTOM_PROPERTIES_PATH}" ContentType="${WORKBOOK_CUSTOM_PROPERTIES_TYPE}"/>`;
+      contentTypes = contentTypes.replace("</Types>", `${override}</Types>`);
+      zip.file("[Content_Types].xml", contentTypes);
+    }
   }
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
 }
@@ -778,30 +862,63 @@ async function readV6Payload(bytes: Buffer): Promise<V6WorkbookPayload | undefin
   } catch {
     return undefined;
   }
-  const file = zip.file(V6_CUSTOM_XML_PATH);
-  if (!file) return undefined;
   try {
-    const xml = await file.async("string");
-    if (!xml.includes(V6_CUSTOM_XML_NAMESPACE)) throw new Error("namespace");
-    const match = /<payload><!\[CDATA\[([\s\S]*?)\]\]><\/payload>/.exec(xml);
-    if (!match) throw new Error("payload");
-    const payload = JSON.parse(match[1].replaceAll("]]]]><![CDATA[>", "]]>") ) as V6WorkbookPayload;
-    if (payload?.metadata?.formatKey !== FORMAT_KEY || !["v8", "v7", "v6"].includes(payload.metadata.formatVersion) || !validTimestamp(payload.metadata.exportedAt)
+    const customPropertiesFile = zip.file(WORKBOOK_CUSTOM_PROPERTIES_PATH);
+    let propertiesPayload: V6WorkbookPayload | undefined;
+    if (customPropertiesFile) {
+      const xml = await customPropertiesFile.async("string");
+      const properties = new Map<string, string>();
+      for (const match of xml.matchAll(/<property\b([^>]*)>([\s\S]*?)<\/property>/g)) {
+        const name = /\bname="([^"]+)"/.exec(match[1])?.[1];
+        const value = /<vt:lpwstr>([\s\S]*?)<\/vt:lpwstr>/.exec(match[2])?.[1];
+        if (name?.startsWith(WORKBOOK_CUSTOM_PROPERTIES_PREFIX)) {
+          if (value === undefined || properties.has(name)) throw new Error("custom-property");
+          properties.set(name, value);
+        }
+      }
+      if (properties.size) {
+        const manifest = properties.get(`${WORKBOOK_CUSTOM_PROPERTIES_PREFIX}Manifest`);
+        const [countText, digest] = manifest?.split(":") ?? [];
+        const count = Number(countText);
+        if (!Number.isInteger(count) || count < 1 || count > 1000 || !/^[a-f0-9]{64}$/i.test(digest ?? "") || properties.size !== count + 1) throw new Error("custom-property-manifest");
+        const chunks = Array.from({ length: count }, (_, index) => properties.get(`${WORKBOOK_CUSTOM_PROPERTIES_PREFIX}${String(index).padStart(3, "0")}`));
+        if (chunks.some((chunk) => !chunk || !/^[A-Za-z0-9+/=]+$/.test(chunk))) throw new Error("custom-property-chunk");
+        const encoded = chunks.join("");
+        if (createHash("sha256").update(encoded).digest("hex") !== digest.toLowerCase()) throw new Error("custom-property-digest");
+        propertiesPayload = JSON.parse(inflateRawSync(Buffer.from(encoded, "base64"), { maxOutputLength: MAX_WORKBOOK_BYTES }).toString("utf8")) as V6WorkbookPayload;
+      }
+    }
+    const file = zip.file(V6_CUSTOM_XML_PATH);
+    let xmlPayload: V6WorkbookPayload | undefined;
+    if (file) {
+      const xml = await file.async("string");
+      if (!xml.includes(V6_CUSTOM_XML_NAMESPACE)) throw new Error("namespace");
+      const match = /<payload><!\[CDATA\[([\s\S]*?)\]\]><\/payload>/.exec(xml);
+      if (!match) throw new Error("payload");
+      xmlPayload = JSON.parse(match[1].replaceAll("]]]]><![CDATA[>", "]]>") ) as V6WorkbookPayload;
+    }
+    if (propertiesPayload && xmlPayload && stableHash(propertiesPayload) !== stableHash(xmlPayload)) throw new Error("metadata-copies-disagree");
+    const payload = propertiesPayload ?? xmlPayload;
+    if (!payload) return undefined;
+    if (payload?.metadata?.formatKey !== FORMAT_KEY || !["v10", "v9", "v8", "v7", "v6"].includes(payload.metadata.formatVersion) || !validTimestamp(payload.metadata.exportedAt)
       || !Array.isArray(payload.rows) || !payload.dictionaries || !Array.isArray(payload.dictionaries.domainL0)
       || !Array.isArray(payload.dictionaries.domainL1) || !Array.isArray(payload.dictionaries.products)) {
       throw new Error("schema");
     }
     const ids = new Set<string>();
-    if (["v7", "v8"].includes(payload.metadata.formatVersion) && (!Array.isArray(payload.dictionaries.members) || payload.dictionaries.members.some((member) => !member.id || typeof member.label !== "string" || typeof member.role !== "string"))) throw new Error("members");
-    if (payload.metadata.formatVersion === "v8" && payload.integrity !== stableHash({ metadata: payload.metadata, dictionaries: payload.dictionaries, rows: payload.rows })) throw new Error("integrity");
+    const rowTokens = new Set<string>();
+    if (["v7", "v8", "v9", "v10"].includes(payload.metadata.formatVersion) && (!Array.isArray(payload.dictionaries.members) || payload.dictionaries.members.some((member) => !member.id || typeof member.label !== "string" || typeof member.role !== "string"))) throw new Error("members");
+    if (isSelectiveWorkbookVersion(payload.metadata.formatVersion) && payload.integrity !== stableHash({ metadata: payload.metadata, dictionaries: payload.dictionaries, rows: payload.rows })) throw new Error("integrity");
     for (const row of payload.rows) {
       if (!row.requirementId || ids.has(row.requirementId) || !validTimestamp(row.baselineUpdatedAt)
         || !/^[a-f0-9]{64}$/i.test(row.baselineHash) || !Array.isArray(row.baselineVisible)
-        || row.baselineVisible.length !== (payload.metadata.formatVersion === "v8" ? 29 : payload.metadata.formatVersion === "v7" ? 18 : 14)
-        || (payload.metadata.formatVersion === "v8" && (!row.baselineFields || !row.baselineSeries || V8_FIELD_KEYS.some((key) => typeof row.baselineFields?.[key] !== "string") || BUILT_IN_TIERING_PRODUCT_SERIES.some((series) => typeof row.baselineSeries?.[series.id] !== "string")))) {
+        || (row.rowToken !== undefined && (!/^[a-f0-9]{24}$/i.test(row.rowToken) || rowTokens.has(row.rowToken.toLowerCase())))
+        || row.baselineVisible.length !== (isSelectiveWorkbookVersion(payload.metadata.formatVersion) ? 16 + workbookSeriesForVersion(payload.metadata.formatVersion).length : payload.metadata.formatVersion === "v7" ? 18 : 14)
+        || (isSelectiveWorkbookVersion(payload.metadata.formatVersion) && (!row.baselineFields || !row.baselineSeries || V8_FIELD_KEYS.some((key) => typeof row.baselineFields?.[key] !== "string") || workbookSeriesForVersion(payload.metadata.formatVersion).some((series) => typeof row.baselineSeries?.[series.id] !== "string")))) {
         throw new Error("row");
       }
       ids.add(row.requirementId);
+      if (row.rowToken) rowTokens.add(row.rowToken.toLowerCase());
     }
     return payload;
   } catch {
@@ -1412,15 +1529,64 @@ function parseRequirementSheetV6(
   return rows;
 }
 
-function parseRequirementSheetV8(sheet: ExcelJS.Worksheet, current: WorkspaceData, payload: V6WorkbookPayload, errors: WorkspaceWorkbookIssue[]): V8ParsedRow[] {
-  const columns = headerColumnsAt(sheet, V8_REQUIREMENT_HEADERS, 1, errors);
-  if (!columns) return [];
-  V8_REQUIREMENT_HEADERS.forEach((header, index) => {
-    if (cellText(sheet.getCell(1, index + 1)) !== header) addIssue(errors, sheet.name, `${columnLetter(index + 1)}1`, `v8 列顺序不可修改：此列应为“${header}”`);
+function visibleV8WorksheetRow(sheet: ExcelJS.Worksheet, row: number, columns: ReadonlyMap<string, number>, formatVersion: SelectiveWorkbookVersion): string[] {
+  const headers = formatVersion === "v10" ? V10_REQUIREMENT_HEADERS.slice(1) : V8_REQUIREMENT_HEADERS;
+  return headers.map((header, index) => {
+    const cell = sheet.getCell(row, columns.get(header)!);
+    if (index === 8) return parseMonth(cell.value) ?? cellText(cell);
+    if (index >= 9 && index <= 11) {
+      const number = parseNonNegativeNumber(cellText(cell));
+      return number === null ? cellText(cell) : String(roundWorkload(number));
+    }
+    return cellText(cell);
   });
-  if (sheet.columnCount > V8_REQUIREMENT_HEADERS.length) {
-    for (let column = V8_REQUIREMENT_HEADERS.length + 1; column <= sheet.columnCount; column += 1) {
-      if (sheet.getColumn(column).values.some((value) => value !== null && value !== undefined && value !== "")) addIssue(errors, sheet.name, `${columnLetter(column)}1`, "v8 仅允许 A–AC 业务列，不支持新增列");
+}
+
+function recoverOperationOnlyV8Payload(sheet: ExcelJS.Worksheet, current: WorkspaceData, formatVersion: SelectiveWorkbookVersion): V6WorkbookPayload {
+  // v0.8.28 wrote row identities into cell formatting, but WPS discarded its
+  // customXml payload on save. Reconstruct only when every business value still
+  // exactly matches this machine's current record; otherwise the lost baseline
+  // cannot be inferred safely and no update or deletion may be applied.
+  const errorMessage = "此表格的内部系统信息被编辑器移除；仅操作列修改可安全恢复，其他修改请重新导出后再导入";
+  const offset = formatVersion === "v8" ? 0 : 1;
+  const columns = new Map(workbookHeadersForVersion(formatVersion).slice(offset).map((header, index) => [header, index + 1 + offset]));
+  const currentByToken = new Map(current.requirements.map((item) => [workbookRowToken(item), item]));
+  if (currentByToken.size !== current.requirements.length) throw new Error(errorMessage);
+  const selected: Requirement[] = [];
+  const seen = new Set<string>();
+  const visibleRows: string[][] = [];
+  for (let row = 2; row <= sheet.actualRowCount; row += 1) {
+    const visible = visibleV8WorksheetRow(sheet, row, columns, formatVersion);
+    if (!visible.some(Boolean)) continue;
+    if (!["保留", "删除"].includes(visible[0])) throw new Error(errorMessage);
+    const token = rowTokenFromWorksheetRow(sheet, row, offset);
+    const requirement = token && currentByToken.get(token);
+    if (!requirement || seen.has(token!)) throw new Error(errorMessage);
+    selected.push(requirement);
+    seen.add(token!);
+    visibleRows.push(visible);
+  }
+  if (!selected.length) throw new Error(errorMessage);
+  const reconstructed = createRequirementSheetV8(new ExcelJS.Workbook(), { ...current, requirements: selected }, "recovery", new Date().toISOString(), undefined, formatVersion);
+  for (let index = 0; index < selected.length; index += 1) {
+    if (visibleRows[index].slice(1).some((value, column) => value !== reconstructed.rows[index].baselineVisible[column + 1])) throw new Error(errorMessage);
+  }
+  return reconstructed;
+}
+
+function parseRequirementSheetV8(sheet: ExcelJS.Worksheet, current: WorkspaceData, payload: V6WorkbookPayload, errors: WorkspaceWorkbookIssue[]): V8ParsedRow[] {
+  const formatVersion = payload.metadata.formatVersion as SelectiveWorkbookVersion;
+  const offset = formatVersion === "v8" ? 0 : 1;
+  const headers = workbookHeadersForVersion(formatVersion);
+  const seriesForWorkbook = workbookSeriesForVersion(formatVersion);
+  const columns = headerColumnsAt(sheet, headers, 1, errors);
+  if (!columns) return [];
+  headers.forEach((header, index) => {
+    if (cellText(sheet.getCell(1, index + 1)) !== header) addIssue(errors, sheet.name, `${columnLetter(index + 1)}1`, `${payload.metadata.formatVersion} 列顺序不可修改：此列应为“${header}”`);
+  });
+  if (sheet.columnCount > headers.length) {
+    for (let column = headers.length + 1; column <= sheet.columnCount; column += 1) {
+      if (sheet.getColumn(column).values.some((value) => value !== null && value !== undefined && value !== "")) addIssue(errors, sheet.name, `${columnLetter(column)}1`, `${payload.metadata.formatVersion} 仅允许 A–${columnLetter(headers.length)} 业务列，不支持新增列`);
     }
   }
   const currentById = new Map(current.requirements.map((item) => [item.id, item]));
@@ -1433,40 +1599,60 @@ function parseRequirementSheetV8(sheet: ExcelJS.Worksheet, current: WorkspaceDat
     if (current.domains.some((candidate) => candidate.id === item.id && (candidate.level ?? "L1") === "L1")) domainL1ByName.set(normalizeName(item.name), item.id);
   }
   const unclaimed = new Map(payload.rows.map((item) => [item.requirementId, item]));
-  const rawRows: Array<{ row: number; visible: string[]; action: RequirementAction }> = [];
+  const rawRows: Array<{ row: number; visible: string[]; action: RequirementAction; rowToken?: string }> = [];
   for (let row = 2; row <= sheet.actualRowCount; row += 1) {
-    const visible = V8_REQUIREMENT_HEADERS.map((header, index) => {
-      const cell = sheet.getCell(row, columns.get(header)!);
-      if (index === 8) return parseMonth(cell.value) ?? cellText(cell);
-      if (index >= 9 && index <= 11) {
-        const number = parseNonNegativeNumber(cellText(cell));
-        return number === null ? cellText(cell) : String(roundWorkload(number));
-      }
-      return cellText(cell);
-    });
+    const visible = visibleV8WorksheetRow(sheet, row, columns, formatVersion);
     if (!visible.some(Boolean)) continue;
-    rawRows.push({ row, visible, action: normalizeAction(visible[0], sheet.name, row, columns.get("操作")!, errors) });
+    rawRows.push({
+      row,
+      visible,
+      action: normalizeAction(visible[0], sheet.name, row, columns.get("操作")!, errors),
+      rowToken: rowTokenFromWorksheetRow(sheet, row, offset),
+    });
   }
   const matched = new Map<number, V6WorkbookRowMetadata>();
-  // Exact rows first: a moved, unedited row must not be consumed by a nearby edited row.
+  const metadataByToken = new Map(payload.rows.filter((item) => item.rowToken).map((item) => [item.rowToken!.toLowerCase(), item]));
+  const claim = (raw: (typeof rawRows)[number], item: V6WorkbookRowMetadata) => {
+    matched.set(raw.row, item);
+    unclaimed.delete(item.requirementId);
+  };
+  // Exact rows first. If duplicate business rows are identical, the style token
+  // distinguishes them while remaining outside user-visible worksheet columns.
   for (const raw of rawRows) {
     const candidates = [...unclaimed.values()].filter((item) => item.baselineVisible.every((value, index) => value === raw.visible[index]));
-    if (candidates.length !== 1) continue;
-    matched.set(raw.row, candidates[0]);
-    unclaimed.delete(candidates[0].requirementId);
+    if (candidates.length === 1) {
+      claim(raw, candidates[0]);
+      continue;
+    }
+    const tokenCandidate = raw.rowToken ? metadataByToken.get(raw.rowToken) : undefined;
+    if (tokenCandidate && candidates.some((item) => item.requirementId === tokenCandidate.requirementId)) claim(raw, tokenCandidate);
   }
+  const weights = [0, 12, 8, 4, 6, 3, 2, 4, 6, 1, 1, 1, 3, 3, 3, 3, ...seriesForWorkbook.map(() => 1)];
   for (const raw of rawRows) {
     if (matched.has(raw.row)) continue;
     const candidates = [...unclaimed.values()].map((item) => {
-      const weights = [0, 12, 8, 4, 6, 3, 2, 4, 6, 1, 1, 1, 3, 3, 3, 3, ...BUILT_IN_TIERING_PRODUCT_SERIES.map(() => 1)];
       return { item, score: item.baselineVisible.reduce((sum, value, index) => sum + (index > 0 && value === raw.visible[index] ? weights[index] : 0), 0) };
     }).sort((a, b) => b.score - a.score);
+    const tokenCandidate = raw.rowToken ? metadataByToken.get(raw.rowToken) : undefined;
+    const availableTokenCandidate = tokenCandidate && unclaimed.has(tokenCandidate.requirementId) ? tokenCandidate : undefined;
+    const tokenScore = availableTokenCandidate
+      ? candidates.find((candidate) => candidate.item.requirementId === availableTokenCandidate.requirementId)?.score ?? -1
+      : -1;
+    // A uniquely better content match wins when a user reordered by copying cell
+    // values without formats. Otherwise the row token resolves edited duplicates.
+    if (candidates[0] && candidates[0].score >= 15 && candidates[0].score !== candidates[1]?.score && candidates[0].score > tokenScore) {
+      claim(raw, candidates[0].item);
+      continue;
+    }
+    if (availableTokenCandidate) {
+      claim(raw, availableTokenCandidate);
+      continue;
+    }
     if (!candidates[0] || candidates[0].score < 15 || candidates[0].score === candidates[1]?.score) {
       addIssue(errors, sheet.name, `A${raw.row}`, "无法唯一匹配原始需求；不支持新增、复制行或同时大幅改动所有识别字段");
       continue;
     }
-    matched.set(raw.row, candidates[0].item);
-    unclaimed.delete(candidates[0].item.requirementId);
+    claim(raw, candidates[0].item);
   }
   const result: V8ParsedRow[] = [];
   for (const raw of rawRows) {
@@ -1483,7 +1669,7 @@ function parseRequirementSheetV8(sheet: ExcelJS.Worksheet, current: WorkspaceDat
       for (const key of V8_FIELD_KEYS) {
         const header = V8_FIELD_HEADERS[key];
         const column = columns.get(header)!;
-        const value = raw.visible[V8_REQUIREMENT_HEADERS.indexOf(header)];
+        const value = raw.visible[V8_BUSINESS_HEADERS.findIndex((item) => item === header)];
         if (key === "domainL0Id" || key === "domainId") {
           const id = (key === "domainL0Id" ? domainL0ByName : domainL1ByName).get(normalizeName(value));
           if (!id) addIssue(errors, sheet.name, cellAddress(raw.row, column), `${header}“${value || "空"}”不存在于当前字典`);
@@ -1510,12 +1696,12 @@ function parseRequirementSheetV8(sheet: ExcelJS.Worksheet, current: WorkspaceDat
       if (!REQUIREMENT_SCOPES.includes(incomingFields.scope as Requirement["scope"])) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get("适用范围")!), "适用范围无效");
       if (!["是", "否"].includes(incomingFields.allowLatestVersionUpgrade)) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get("允许最近版本升级")!), "请选择是或否");
       if (!CATEGORIES.includes(incomingFields.category as Requirement["category"])) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get("分类")!), "分类无效");
-      BUILT_IN_TIERING_PRODUCT_SERIES.forEach((series, index) => {
+      seriesForWorkbook.forEach((series, index) => {
         const value = raw.visible[16 + index];
         if (isTieringEligibleRequirement(existing)) {
-          if (!["支持", "不支持", "未判断"].includes(value)) addIssue(errors, sheet.name, cellAddress(raw.row, 17 + index), `${series.name}必须选择支持、不支持或未判断，不可清空`);
+          if (!["支持", "不支持", "未判断"].includes(value)) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get(series.name)!), `${series.name}必须选择支持、不支持或未判断，不可清空`);
           incomingSeries[series.id] = value;
-        } else if (value) addIssue(errors, sheet.name, cellAddress(raw.row, 17 + index), "该来源不纳入分层分级，系列单元格不可回写");
+        } else if (value) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get(series.name)!), "该来源不纳入分层分级，系列单元格不可回写");
       });
     }
     result.push({ row: raw.row, requirementId: metadata.requirementId, action: raw.action, incomingFields, baselineFields: metadata.baselineFields, incomingSeries, baselineSeries: metadata.baselineSeries, baselineHash: metadata.baselineHash });
@@ -2121,6 +2307,13 @@ function forEachCell(sheet: ExcelJS.Worksheet, range: string, action: (cell: Exc
 }
 
 function applyListValidation(sheet: ExcelJS.Worksheet, range: string, values: string[], allowBlank = false): void {
+  // Excel only accepts a nonempty, comma-separated literal list up to 255 characters.
+  // Without a hidden dictionary sheet, an oversized list cannot be represented as a
+  // dropdown: leave those cells editable and validate their contents on import.
+  if (!values.length || values.some((value) => !value || /[,"\r\n]/.test(value))) return;
+  const formula = `"${values.join(",")}"`;
+  if (formula.length > 255) return;
+  const allowedValues = `允许值：${values.join("、")}`;
   const [start, end] = range.split(":");
   const startCell = sheet.getCell(start);
   const endCell = sheet.getCell(end);
@@ -2129,10 +2322,10 @@ function applyListValidation(sheet: ExcelJS.Worksheet, range: string, values: st
       sheet.getCell(row, column).dataValidation = {
         type: "list",
         allowBlank,
-        formulae: [`"${values.join(",")}"`],
+        formulae: [formula],
         showErrorMessage: true,
         errorTitle: "请选择有效值",
-        error: `允许值：${values.join("、")}`,
+        error: allowedValues.length <= 225 ? allowedValues : "请填写现有选项，导入时将再次校验。",
       };
     }
   }

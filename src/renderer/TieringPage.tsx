@@ -74,9 +74,9 @@ export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRege
     if (valid.length !== selectedSeriesIds.length) setSelectedSeriesIds(valid);
   }, [allSeriesIds.join("|"), selectedSeriesIds.join("|")]);
   useEffect(() => {
-    sessionStorage.setItem(SERIES_SESSION_KEY, JSON.stringify(selectedSeriesIds));
+    sessionStorage.setItem(SERIES_SESSION_KEY, JSON.stringify({ ids: selectedSeriesIds, knownIds: allSeriesIds }));
     if (!selectedSeriesIds.length && status) setStatus("");
-  }, [selectedSeriesIds.join("|"), status]);
+  }, [selectedSeriesIds.join("|"), allSeriesIds.join("|"), status]);
 
   const visibleFeatures = tiering.features.filter((feature) => {
     const scopedRecords = selectedSeries.map((series) => supportByKey.get(tieringSupportId(feature.id, series.id))).filter(Boolean) as TieringSupportRecord[];
@@ -141,7 +141,7 @@ export function TieringPage({ snapshot, onSaveSupport, onOpenRequirement, onRege
           })}</tbody>
         </table>
         {!selectedSeries.length && <div className="tiering-no-series">尚未选择展示系列，可从上方“显示系列”中勾选。</div>}
-        {selectedSeries.length > 0 && !visibleFeatures.length && <div className="tiering-no-series">暂无符合条件的需求；13 个内置系列已就绪，保存需求后会自动生成支持规格。</div>}
+        {selectedSeries.length > 0 && !visibleFeatures.length && <div className="tiering-no-series">暂无符合条件的需求；{allSeriesIds.length} 个内置系列已就绪，保存需求后会自动生成支持规格。</div>}
       </div>
     </>}
     {view === "logs" && <div className="panel tiering-ledger"><div className="tiering-section-title"><div><h2>变更记录</h2><p>支持编辑管理信息或永久删除记录；操作不会改变当前系列支持状态。</p></div></div><table><thead><tr><th>时间</th><th>触发类型</th><th>功能 / 系列</th><th>原因</th><th>审核人</th><th>记录状态</th><th>操作</th></tr></thead><tbody>{tiering.changeLogs.map((log) => <tr key={log.id}><td>{formatDate(log.changedAt)}</td><td>{log.triggerType}</td><td>{log.featureId} / {log.seriesId || "—"}</td><td>{log.reason}</td><td>{log.reviewer || "—"}</td><td>{log.recordStatus}</td><td><div className="row-actions"><button type="button" onClick={() => setEditingLog(log)}>编辑</button><button type="button" className="danger" onClick={(event) => onDeleteChangeLog(log, event.currentTarget)}>删除</button></div></td></tr>)}</tbody></table></div>}
@@ -195,9 +195,22 @@ function SupportStateControl({ record, busy, onChange }: { record: TieringSuppor
 function readSeriesSelection(allSeriesIds: string[]): string[] {
   try {
     const saved = JSON.parse(sessionStorage.getItem(SERIES_SESSION_KEY) ?? "null") as unknown;
-    if (Array.isArray(saved) && saved.every((item) => typeof item === "string")) return saved.filter((item) => allSeriesIds.includes(item));
+    return restoreTieringSeriesSelection(allSeriesIds, saved);
   } catch {
     // Ignore stale session state and fall back to all series.
+  }
+  return allSeriesIds;
+}
+
+export function restoreTieringSeriesSelection(allSeriesIds: string[], saved: unknown): string[] {
+  if (Array.isArray(saved) && saved.every((item) => typeof item === "string")) {
+    const legacyIds = allSeriesIds.filter((id) => id !== "PS14" && id !== "PS15");
+    if (saved.length === legacyIds.length && legacyIds.every((id) => saved.includes(id))) return allSeriesIds;
+    return saved.filter((item) => allSeriesIds.includes(item));
+  }
+  if (saved && typeof saved === "object" && "ids" in saved && Array.isArray(saved.ids)
+    && saved.ids.every((item: unknown) => typeof item === "string")) {
+    return saved.ids.filter((item: string) => allSeriesIds.includes(item));
   }
   return allSeriesIds;
 }
