@@ -2,6 +2,7 @@ import type { DictionaryItem, GroupOverride, LegacyRequirementDecision, Member, 
 import { normalizeLegacyGroupOverride, normalizeRequirement } from "./requirements.js";
 import { EMPTY_PPT_ACCESS_POLICY, normalizeMember, normalizePptAccessPolicy, REQUIREMENT_OWNER_FIELDS, backfillRequirementOwners, validateRequirementOwners } from "./members.js";
 import { EMPTY_TIERING_DATA, mergeTieringData, normalizeTieringData } from "./tiering.js";
+import { mergeRoadmapManagement } from "./roadmapManagement.js";
 
 export interface RequirementMergeResolution {
   id: string;
@@ -76,7 +77,7 @@ export function mergeWorkspaceDataWithReport(local: WorkspaceData, incoming: Wor
     pptAccessPolicy,
     tiering: mergeTieringData(normalizeTieringData(local.tiering), normalizeTieringData(incoming.tiering)),
   };
-  return { data, requirementResolutions: requirementMerge.resolutions };
+  return { data: mergeRoadmapManagement(local, incoming, data, domainMerge.idMap), requirementResolutions: requirementMerge.resolutions };
 }
 
 function mergeRequirementsWithTombstones(
@@ -285,6 +286,9 @@ function timestamp(value: string): number {
 export function workspaceCounts(data: WorkspaceData) {
   const tiering = normalizeTieringData(data.tiering ?? EMPTY_TIERING_DATA);
   return {
+    roadmaps: data.roadmaps?.length ?? 0, roadmapLanes: data.roadmapLanes?.length ?? 0,
+    roadmapAssignments: data.roadmapAssignments?.length ?? 0, medicalRoadmapPlans: data.medicalRoadmapPlans?.length ?? 0,
+    roadmapAssignmentTombstones: data.roadmapAssignmentTombstones?.length ?? 0,
     requirements: data.requirements.length,
     requirementTombstones: (data.requirementTombstones ?? []).length,
     images: data.requirements.reduce((sum, item) => sum + item.images.length, 0),

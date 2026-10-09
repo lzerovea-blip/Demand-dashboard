@@ -28,7 +28,7 @@ const MATRIX_BASE_HEADERS = [
   "L0",
   "L1",
   "需求",
-  "来源",
+  "路标匹配",
   "上线月份",
   "HMOS版本",
   "规划",
@@ -43,7 +43,7 @@ const DETAIL_HEADERS = [
   "L0",
   "L1",
   "需求",
-  "来源",
+  "路标匹配",
   "上线月份",
   "HMOS版本",
   "系列",
@@ -64,6 +64,7 @@ const DETAIL_HEADERS = [
 ] as const;
 
 interface TieringExportDemand {
+  roadmapLabel: string;
   requirement: Requirement;
   featureId: string;
   l0: string;
@@ -116,6 +117,7 @@ export function tieringDemandsForRange(data: WorkspaceData, range: HalfYearRange
       const domainL1 = domainsById.get(requirement.domainId);
       const domainL0 = domainsById.get(domainL1?.parentId ?? requirement.domainL0Id);
       return {
+        roadmapLabel: (() => { const assignment = data.roadmapAssignments?.find((item) => item.requirementId === requirement.id); return assignment ? `${data.roadmaps?.find((r)=>r.id===assignment.roadmapId)?.name ?? assignment.roadmapId} · ${data.roadmapLanes?.find((r)=>r.id===assignment.laneId)?.name ?? assignment.laneId}` : "未匹配"; })(),
         requirement,
         featureId: linkedFeature?.id ?? requirement.tieringFeatureId ?? tieringFeatureIdForRequirement(requirement.id),
         l0: domainL0?.name ?? linkedFeature?.l0 ?? requirement.domainL0Id,
@@ -145,13 +147,13 @@ function createMatrixSheet(
   const headers = [...MATRIX_BASE_HEADERS, ...BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.name)];
   prepareSheet(sheet, "分层分级支持矩阵", headers, range, generatedAt, appVersion, demands.length, 5);
 
-  const rows = demands.map(({ requirement, featureId, l0, l1 }, index) => [
+  const rows = demands.map(({ requirement, featureId, l0, l1, roadmapLabel }, index) => [
     index + 1,
     featureId,
     l0,
     l1,
     requirement.title,
-    requirement.source,
+    roadmapLabel,
     monthDate(requirement.targetMonth),
     hmosVersionForMonth(requirement.targetMonth),
     memberName(requirement.planningMemberId, memberMap),
@@ -160,7 +162,7 @@ function createMatrixSheet(
     memberName(requirement.algorithmMemberId, memberMap),
     ...BUILT_IN_TIERING_PRODUCT_SERIES.map((series) => supportMap.get(`${featureId}::${series.id}`)?.status ?? "未判断"),
   ] satisfies ExcelJS.CellValue[]);
-  addRowsOrEmptyState(sheet, rows, headers.length, "当前区间暂无运动、健康或 AI 路标需求");
+  addRowsOrEmptyState(sheet, rows, headers.length, "当前区间暂无需求");
 
   const widths = [8, 14, 18, 18, 32, 16, 14, 14, 14, 14, 12, 12, ...BUILT_IN_TIERING_PRODUCT_SERIES.map(() => 18)];
   sheet.columns = widths.map((width) => ({ width }));
@@ -192,7 +194,7 @@ function createDetailSheet(
   prepareSheet(sheet, "分层分级规格明细", [...DETAIL_HEADERS], range, generatedAt, appVersion, demands.length, 5);
 
   const rows: ExcelJS.CellValue[][] = [];
-  for (const { requirement, featureId, l0, l1 } of demands) {
+  for (const { requirement, featureId, l0, l1, roadmapLabel } of demands) {
     const feature = featureMap.get(featureId);
     for (const series of BUILT_IN_TIERING_PRODUCT_SERIES) {
       const record = supportMap.get(`${featureId}::${series.id}`);
@@ -202,7 +204,7 @@ function createDetailSheet(
         l0,
         l1,
         requirement.title,
-        requirement.source,
+        roadmapLabel,
         monthDate(requirement.targetMonth),
         hmosVersionForMonth(requirement.targetMonth),
         series.name,
@@ -223,7 +225,7 @@ function createDetailSheet(
       ]);
     }
   }
-  addRowsOrEmptyState(sheet, rows, DETAIL_HEADERS.length, "当前区间暂无运动、健康或 AI 路标需求");
+  addRowsOrEmptyState(sheet, rows, DETAIL_HEADERS.length, "当前区间暂无需求");
 
   const widths = [8, 14, 18, 18, 32, 16, 14, 14, 18, 14, 24, 24, 22, 20, 18, 28, 18, 38, 14, 14, 14, 32, 22];
   sheet.columns = widths.map((width) => ({ width }));
@@ -261,7 +263,7 @@ function prepareSheet(
 
   sheet.getCell("A2").value = `导出范围：${shortHalfYear(range.start)}–${shortHalfYear(range.end)}　生成时间：${formatTimestamp(generatedAt)}`;
   sheet.getCell("A2").font = { name: FONT_NAME, size: 10, italic: true, color: { argb: "FF5F6D75" } };
-  sheet.getCell("A3").value = `应用版本：v${appVersion}　需求：${demandCount} 条　口径：仅运动、健康、AI 路标；固定 ${BUILT_IN_TIERING_PRODUCT_SERIES.length} 个产品系列。本文件仅用于查看与核对，不支持回导。`;
+  sheet.getCell("A3").value = `应用版本：v${appVersion}　需求：${demandCount} 条　口径：全部需求；固定 ${BUILT_IN_TIERING_PRODUCT_SERIES.length} 个产品系列。本文件仅用于查看与核对，不支持回导。`;
   sheet.getCell("A3").font = { name: FONT_NAME, size: 9, color: { argb: "FF6E7C84" } };
 
   const headerRow = sheet.getRow(HEADER_ROW);

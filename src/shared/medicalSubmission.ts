@@ -18,7 +18,7 @@ export interface MedicalSubmissionTimelineNode {
   derived: boolean;
 }
 
-export function isMedicalSubmissionSource(source: string): source is (typeof MEDICAL_SUBMISSION_SOURCES)[number] {
+export function isMedicalSubmissionSource(source: string | undefined): source is (typeof MEDICAL_SUBMISSION_SOURCES)[number] {
   return MEDICAL_SUBMISSION_SOURCES.includes(source as (typeof MEDICAL_SUBMISSION_SOURCES)[number]);
 }
 
@@ -26,7 +26,7 @@ export function isValidRequirementMonth(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
 }
 
-export function validateRequirementTargetMonth(source: string, targetMonth: string): void {
+export function validateRequirementTargetMonth(source: string | undefined, targetMonth: string): void {
   if (isMedicalSubmissionSource(source) && targetMonth === "") return;
   if (!isValidRequirementMonth(targetMonth)) {
     throw new Error(isMedicalSubmissionSource(source) ? "送检版本应为有效年月或留空" : "上线年月格式应为 YYYY-MM");
@@ -38,7 +38,7 @@ export function initialRequirementTargetMonth(source: string, previousMonth: str
 }
 
 export function normalizeMedicalSubmissionMilestones(
-  source: RequirementSource,
+  source: RequirementSource | undefined,
   input: MedicalSubmissionMilestones | null | undefined,
 ): MedicalSubmissionMilestones | undefined {
   if (!isMedicalSubmissionSource(source) || !input || typeof input !== "object") return undefined;
@@ -64,7 +64,7 @@ export function medicalSubmissionTimeline(
 }
 
 export function validateMedicalSubmissionMilestones(
-  source: RequirementSource,
+  source: RequirementSource | undefined,
   targetMonth: string,
   input?: MedicalSubmissionMilestones,
 ): MedicalSubmissionMilestones | undefined {

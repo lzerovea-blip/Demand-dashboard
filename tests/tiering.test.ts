@@ -84,7 +84,7 @@ describe("需求分层分级", () => {
     const l0: DictionaryItem = { id: "l0", name: "基础体征测量", sortOrder: 0, active: true, level: "L0" };
     const l1: DictionaryItem = { id: "l1", name: "心率", sortOrder: 0, active: true, level: "L1", parentId: "l0" };
     const requirement = buildHistoricalRequirement(feature, [support], [{ id: "PS01", name: "WATCH数字系列", boundary: "", representativeProducts: "", managementEntry: "", sourceIds: [], lifecycle: "", note: "", sortOrder: 0, updatedAt: support.updatedAt }], l0, l1);
-    expect(requirement).toMatchObject({ id: "historical-huawei-F001", title: "单次心率测量", targetMonth: "2015-09", category: "平台演进", scope: "仅国内", allowLatestVersionUpgrade: true, workloadPm: 0, source: "健康基础", tieringFeatureId: "F001" });
+    expect(requirement).toMatchObject({ id: "historical-huawei-F001", title: "单次心率测量", targetMonth: "2015-09", category: "平台演进", scope: "仅国内", allowLatestVersionUpgrade: true, workloadPm: 0, source: undefined, tieringFeatureId: "F001" });
     expect(requirement.historicalLaunch).toMatchObject({ precision: "year", verificationStatus: "pending", confidence: "C" });
     expect(requirement.description).toContain("仅用于半年时间轴归档，不代表真实首发月份");
   });
@@ -198,8 +198,8 @@ describe("需求分层分级", () => {
       ...linked,
       requirements: linked.requirements.map((item) => ({ ...item, source: "行业" as const })),
     });
-    expect(unlinked.requirements[0].tieringFeatureId).toBeUndefined();
-    expect(unlinked.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: undefined }));
+    expect(unlinked.requirements[0].tieringFeatureId).toBe("F001");
+    expect(unlinked.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: "r-f001" }));
     expect(unlinked.tiering?.supportRecords.filter((item) => item.featureId === "F001")).toHaveLength(15);
   });
 

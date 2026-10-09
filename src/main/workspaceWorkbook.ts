@@ -4,6 +4,8 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { REQUIREMENT_OWNER_FIELDS } from "../shared/members.js";
 import type { Member } from "../shared/types.js";
 import { isMedicalSubmissionSource } from "../shared/medicalSubmission.js";
+import { normalizeRoadmapManagement } from "../shared/roadmapManagement.js";
+import { isTieringEligibleSource } from "../shared/tiering.js";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import type {
@@ -29,8 +31,8 @@ import { validateWorkspaceData } from "./workspacePackage.js";
 import { BUILT_IN_TIERING_PRODUCT_SERIES, isHistoricalTieringFeature, isTieringEligibleRequirement, normalizeTieringData, normalizeWorkspaceTieringScope, renameIndependentTieringDomain, resolveTieringFeature, tieringSupportId } from "../shared/tiering.js";
 
 const FORMAT_KEY = "health-roadmap-collaboration";
-const FORMAT_VERSION = "v10";
-const LEGACY_FORMAT_VERSIONS = ["v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"] as const;
+const FORMAT_VERSION = "v11";
+const LEGACY_FORMAT_VERSIONS = ["v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10"] as const;
 const SUPPORTED_FORMAT_VERSIONS: readonly string[] = [FORMAT_VERSION, ...LEGACY_FORMAT_VERSIONS];
 const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 const LEGACY_HEADER_ROW = 3;
@@ -111,17 +113,19 @@ const LEGACY_TIERING_PRODUCT_SERIES = BUILT_IN_TIERING_PRODUCT_SERIES.filter((se
 const V8_REQUIREMENT_HEADERS = [...V8_BUSINESS_HEADERS, ...LEGACY_TIERING_PRODUCT_SERIES.map((series) => series.name)];
 const V9_REQUIREMENT_HEADERS = ["序号", ...V8_REQUIREMENT_HEADERS];
 const V10_REQUIREMENT_HEADERS = ["序号", ...V8_BUSINESS_HEADERS, ...BUILT_IN_TIERING_PRODUCT_SERIES.map((series) => series.name)];
-type SelectiveWorkbookVersion = "v8" | "v9" | "v10";
-const SELECTIVE_WORKBOOK_VERSIONS: readonly string[] = ["v8", "v9", "v10"];
+type SelectiveWorkbookVersion = "v8" | "v9" | "v10" | "v11";
+const SELECTIVE_WORKBOOK_VERSIONS: readonly string[] = ["v8", "v9", "v10", "v11"];
 function isSelectiveWorkbookVersion(version: string): version is SelectiveWorkbookVersion {
   return SELECTIVE_WORKBOOK_VERSIONS.includes(version);
 }
 function workbookSeriesForVersion(version: SelectiveWorkbookVersion) {
-  return version === "v10" ? BUILT_IN_TIERING_PRODUCT_SERIES : LEGACY_TIERING_PRODUCT_SERIES;
+  return version === "v10" || version === "v11" ? BUILT_IN_TIERING_PRODUCT_SERIES : LEGACY_TIERING_PRODUCT_SERIES;
 }
 function workbookHeadersForVersion(version: SelectiveWorkbookVersion): readonly string[] {
-  return version === "v10" ? V10_REQUIREMENT_HEADERS : version === "v9" ? V9_REQUIREMENT_HEADERS : V8_REQUIREMENT_HEADERS;
+  return version === "v10" || version === "v11" ? V10_REQUIREMENT_HEADERS : version === "v9" ? V9_REQUIREMENT_HEADERS : V8_REQUIREMENT_HEADERS;
 }
+function workbookRequirementEligible(item: Requirement, version: SelectiveWorkbookVersion): boolean { return version === "v11" || isTieringEligibleSource(item.source); }
+function normalizeWorkbookRoadmaps(data: WorkspaceData, current: WorkspaceData): WorkspaceData { return current.roadmapAssignments !== undefined ? normalizeRoadmapManagement(data) : data; }
 const V8_FIELD_KEYS = ["title", "description", "domainL0Id", "domainId", "scope", "allowLatestVersionUpgrade", "category", "targetMonth", "deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "planningMemberId", "productManagerMemberId", "seMemberId", "algorithmMemberId"] as const;
 type V8FieldKey = (typeof V8_FIELD_KEYS)[number];
 const V8_FIELD_HEADERS: Record<V8FieldKey, string> = {
@@ -283,9 +287,10 @@ export async function createWorkspaceWorkbook(
   appVersion: string,
   exportedAt = new Date().toISOString(),
   range?: HalfYearRange,
-  formatVersion: "v10" | "v9" | "v8" | "v7" = "v10",
+  formatVersion: "v11" | "v10" | "v9" | "v8" | "v7" = "v11",
 ): Promise<Buffer> {
-  const exportedData = range ? workspaceDataForWorkbookRange(data, range.start, range.end) : data;
+  let exportedData = range ? workspaceDataForWorkbookRange(data, range.start, range.end) : data;
+  if (formatVersion !== "v11") exportedData = { ...exportedData, requirements: exportedData.requirements.map((item) => ({ ...item, source: item.source ?? (data.roadmapAssignments?.find((a) => a.requirementId === item.id)?.laneId as Requirement["source"]) ?? "行业" })) };
   validateWorkspaceData(exportedData);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "解决方案需求管理";
@@ -304,10 +309,13 @@ export async function createWorkspaceWorkbook(
 export function workspaceDataForWorkbookRange(data: WorkspaceData, start: string, end: string): WorkspaceData {
   const months = new Set(halfYearSequence(start, end).flatMap(monthsForHalfYear));
   return {
+    ...data,
     requirements: requirementsInRange(data.requirements, start, end),
     domains: data.domains,
     products: data.products,
-    groupOverrides: data.groupOverrides.filter((item) => months.has(item.groupKey.split("::")[2] ?? "")),
+    groupOverrides: data.groupOverrides.filter((item) => months.has(item.groupKey.split("::").at(-1) ?? "")),
+    roadmapAssignments: data.roadmapAssignments?.filter((item) => requirementsInRange(data.requirements, start, end).some((req) => req.id === item.requirementId)),
+    medicalRoadmapPlans: data.medicalRoadmapPlans?.filter((item) => requirementsInRange(data.requirements, start, end).some((req) => req.id === item.requirementId)),
     members: data.members,
     pptAccessPolicy: data.pptAccessPolicy,
     // Retain link targets for validation; the v6 writer still emits business columns only.
@@ -332,7 +340,7 @@ export async function inspectWorkspaceWorkbook(
 
   const errors: WorkspaceWorkbookIssue[] = [];
   const requirementSheet = workbook.getWorksheet(SHEETS.requirements);
-  const recoverableVersion = requirementSheet && (["v10", "v9", "v8"] as const).find((version) =>
+  const recoverableVersion = requirementSheet && (["v11", "v10", "v9", "v8"] as const).find((version) =>
     workbookHeadersForVersion(version).every((header, index) => cellText(requirementSheet.getCell(1, index + 1)) === header));
   const v6Payload = storedPayload ?? (requirementSheet && recoverableVersion
     ? recoverOperationOnlyV8Payload(requirementSheet, current, recoverableVersion) : undefined);
@@ -400,6 +408,10 @@ export async function inspectWorkspaceWorkbook(
     const overrides = overrideSheet ? parseOverrideSheet(overrideSheet, domainL1s, exportedAt, parsedFormatVersion, errors) : [];
     parsed = { formatVersion: parsedFormatVersion, exportedAt, domains, products, requirements, overrides, errors };
   }
+  if (current.roadmapAssignments !== undefined) for (const row of parsed.requirements) {
+    const existing = current.requirements.find((item) => item.id === row.requirement.id);
+    if (existing && row.action !== "删除") row.requirement = { ...row.requirement, source: existing.source, medicalSubmissionMilestones: existing.medicalSubmissionMilestones, medicalRoadmapSortOrder: existing.medicalRoadmapSortOrder };
+  }
   const plan = planWorkspaceWorkbookImport(current, parsed, "local-wins", new Date().toISOString());
   const excelPlan = planWorkspaceWorkbookImport(current, parsed, "excel-wins", new Date().toISOString());
   const differences = diffWorkspaceData(current, excelPlan.data);
@@ -413,6 +425,7 @@ export async function inspectWorkspaceWorkbook(
     parsed,
     preview: {
       formatVersion: parsed.formatVersion,
+      warnings: current.roadmapAssignments !== undefined ? ["旧版 Excel 中的来源修改将忽略；路标匹配和医疗节点只在路标管理中调整。"] : [],
       exportedAt: parsed.exportedAt,
       counts: plan.counts,
       errors,
@@ -501,7 +514,7 @@ function applyV8FieldSelection(current: WorkspaceData, prepared: PreparedWorkspa
     }
   }
   tiering.supportRecords = [...records.values()];
-  const result: WorkspaceData = { ...scoped, tiering };
+  const result: WorkspaceData = normalizeWorkbookRoadmaps({ ...scoped, tiering }, current);
   try { validateWorkspaceData(result); }
   catch (error) { throw new Error(`所选差异组合无效，未写入任何数据：${error instanceof Error ? error.message : String(error)}`); }
   return result;
@@ -551,8 +564,8 @@ function createV8FieldChanges(current: WorkspaceData, rows: readonly V8ParsedRow
     const existing = byId.get(row.requirementId);
     if (!existing) continue;
     if (row.action === "删除") {
-      const conflict = requirementHashV7(existing) !== row.baselineHash || (isTieringEligibleRequirement(existing) && (
-        workbookSeriesForVersion(formatVersion).some((series) => currentSeriesStatus(current, existing.id, series.id) !== row.baselineSeries[series.id])
+      const conflict = !requirementBaselineMatches(existing, row.baselineHash, formatVersion) || (isTieringEligibleRequirement(existing) && (
+        workbookSeriesForVersion(formatVersion).some((series) => currentSeriesStatus(current, existing.id, series.id) !== (row.baselineSeries[series.id] || "未判断"))
         || BUILT_IN_TIERING_PRODUCT_SERIES.some((series) => !(series.id in row.baselineSeries) && currentSeriesStatus(current, existing.id, series.id) !== "未判断")
       ));
       changes.push({ id: `${existing.id}:delete`, requirementId: existing.id, row: row.row, title: existing.title, kind: "delete", field: "删除整条需求", baselineValue: row.baselineFields.title, currentValue: existing.title, excelValue: "删除", conflict });
@@ -602,7 +615,7 @@ function createRequirementSheetV8(
     ];
     const feature = featureByRequirement.get(item.id);
     for (const series of seriesForWorkbook) {
-      values.push(isTieringEligibleRequirement(item) && feature
+      values.push(workbookRequirementEligible(item, formatVersion) && feature
         ? supportById.get(tieringSupportId(feature.id, series.id))?.status ?? "未判断" : null);
     }
     return offset ? [index + 1, ...values] : values;
@@ -613,7 +626,7 @@ function createRequirementSheetV8(
       requirementId: item.id, rowToken: workbookRowToken(item), baselineUpdatedAt: item.updatedAt, baselineHash: requirementHashV7(item),
       baselineVisible: canonicalVisibleRowV8(offset ? rows[index].slice(1) : rows[index]), baselineFields: v8RequirementFields(item),
       baselineSeries: Object.fromEntries(seriesForWorkbook.map((series) => [series.id,
-        isTieringEligibleRequirement(item) && feature
+        workbookRequirementEligible(item, formatVersion) && feature
           ? supportById.get(tieringSupportId(feature.id, series.id))?.status ?? "未判断" : ""])),
     };
   });
@@ -655,7 +668,7 @@ function createRequirementSheetV8(
       applyListValidation(sheet, rangeFor(13 + index), labels, true);
     });
     data.requirements.forEach((item, index) => {
-      if (!isTieringEligibleRequirement(item)) return;
+      if (!workbookRequirementEligible(item, formatVersion)) return;
       for (let column = 17; column < 17 + seriesForWorkbook.length; column += 1) applyListValidation(sheet, `${columnLetter(column + offset)}${index + 2}:${columnLetter(column + offset)}${index + 2}`, ["支持", "不支持", "未判断"]);
     });
   }
@@ -900,14 +913,14 @@ async function readV6Payload(bytes: Buffer): Promise<V6WorkbookPayload | undefin
     if (propertiesPayload && xmlPayload && stableHash(propertiesPayload) !== stableHash(xmlPayload)) throw new Error("metadata-copies-disagree");
     const payload = propertiesPayload ?? xmlPayload;
     if (!payload) return undefined;
-    if (payload?.metadata?.formatKey !== FORMAT_KEY || !["v10", "v9", "v8", "v7", "v6"].includes(payload.metadata.formatVersion) || !validTimestamp(payload.metadata.exportedAt)
+    if (payload?.metadata?.formatKey !== FORMAT_KEY || !["v11", "v10", "v9", "v8", "v7", "v6"].includes(payload.metadata.formatVersion) || !validTimestamp(payload.metadata.exportedAt)
       || !Array.isArray(payload.rows) || !payload.dictionaries || !Array.isArray(payload.dictionaries.domainL0)
       || !Array.isArray(payload.dictionaries.domainL1) || !Array.isArray(payload.dictionaries.products)) {
       throw new Error("schema");
     }
     const ids = new Set<string>();
     const rowTokens = new Set<string>();
-    if (["v7", "v8", "v9", "v10"].includes(payload.metadata.formatVersion) && (!Array.isArray(payload.dictionaries.members) || payload.dictionaries.members.some((member) => !member.id || typeof member.label !== "string" || typeof member.role !== "string"))) throw new Error("members");
+    if (["v7", "v8", "v9", "v10", "v11"].includes(payload.metadata.formatVersion) && (!Array.isArray(payload.dictionaries.members) || payload.dictionaries.members.some((member) => !member.id || typeof member.label !== "string" || typeof member.role !== "string"))) throw new Error("members");
     if (isSelectiveWorkbookVersion(payload.metadata.formatVersion) && payload.integrity !== stableHash({ metadata: payload.metadata, dictionaries: payload.dictionaries, rows: payload.rows })) throw new Error("integrity");
     for (const row of payload.rows) {
       if (!row.requirementId || ids.has(row.requirementId) || !validTimestamp(row.baselineUpdatedAt)
@@ -1461,7 +1474,7 @@ function parseRequirementSheetV6(
     if (!domainL1) addIssue(errors, sheet.name, cellAddress(row, columns.get("领域 L1")!), `领域 L1“${domainL1Name || "空"}”不存在于当前字典`);
     if (domainL0 && domainL1 && domainL1.parentId !== domainL0.id) addIssue(errors, sheet.name, cellAddress(row, columns.get("领域 L1")!), `领域 L1“${domainL1Name}”不属于领域 L0“${domainL0Name}”`);
 
-    const source = normalizeLegacySource(values["来源"]);
+    const source = current.roadmapAssignments !== undefined ? existing.source ?? (existing.targetMonth === "" ? "NMPA认证" : "行业") : normalizeLegacySource(values["来源"]);
     const scope = values["适用范围"];
     const allowUpgradeText = values["允许最近版本升级"];
     const category = values["分类"];
@@ -1530,7 +1543,7 @@ function parseRequirementSheetV6(
 }
 
 function visibleV8WorksheetRow(sheet: ExcelJS.Worksheet, row: number, columns: ReadonlyMap<string, number>, formatVersion: SelectiveWorkbookVersion): string[] {
-  const headers = formatVersion === "v10" ? V10_REQUIREMENT_HEADERS.slice(1) : V8_REQUIREMENT_HEADERS;
+  const headers = formatVersion === "v10" || formatVersion === "v11" ? V10_REQUIREMENT_HEADERS.slice(1) : V8_REQUIREMENT_HEADERS;
   return headers.map((header, index) => {
     const cell = sheet.getCell(row, columns.get(header)!);
     if (index === 8) return parseMonth(cell.value) ?? cellText(cell);
@@ -1683,7 +1696,7 @@ function parseRequirementSheetV8(sheet: ExcelJS.Worksheet, current: WorkspaceDat
           incomingFields[key] = member?.id ?? "";
         } else if (key === "targetMonth") {
           const parsedMonth = parseMonth(sheet.getCell(raw.row, column).value);
-          if (!parsedMonth && !(isMedicalSubmissionSource(existing.source) && !value)) addIssue(errors, sheet.name, cellAddress(raw.row, column), "上线月份应为有效年月；仅医疗认证来源可留空");
+          if (!parsedMonth && !(existing.targetMonth === "" && !value)) addIssue(errors, sheet.name, cellAddress(raw.row, column), "上线月份应为有效年月；历史空日期允许保留");
           incomingFields[key] = parsedMonth ?? "";
         } else if (key === "deviceWorkloadPm" || key === "appWorkloadPm" || key === "cloudWorkloadPm") {
           const number = parseNonNegativeNumber(value);
@@ -1698,10 +1711,10 @@ function parseRequirementSheetV8(sheet: ExcelJS.Worksheet, current: WorkspaceDat
       if (!CATEGORIES.includes(incomingFields.category as Requirement["category"])) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get("分类")!), "分类无效");
       seriesForWorkbook.forEach((series, index) => {
         const value = raw.visible[16 + index];
-        if (isTieringEligibleRequirement(existing)) {
+        if (formatVersion === "v11" || metadata.baselineSeries?.[series.id]) {
           if (!["支持", "不支持", "未判断"].includes(value)) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get(series.name)!), `${series.name}必须选择支持、不支持或未判断，不可清空`);
           incomingSeries[series.id] = value;
-        } else if (value) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get(series.name)!), "该来源不纳入分层分级，系列单元格不可回写");
+        } else if (value) addIssue(errors, sheet.name, cellAddress(raw.row, columns.get(series.name)!), "旧版表格此行未包含分层记录，系列单元格不可回写，请重新导出");
       });
     }
     result.push({ row: raw.row, requirementId: metadata.requirementId, action: raw.action, incomingFields, baselineFields: metadata.baselineFields, incomingSeries, baselineSeries: metadata.baselineSeries, baselineHash: metadata.baselineHash });
@@ -1851,7 +1864,7 @@ function planWorkspaceWorkbookImport(
         counts.unchanged += 1;
         continue;
       }
-      const localChanged = Boolean(row.baselineHash) && baselineRequirementHash(existing) !== row.baselineHash;
+      const localChanged = Boolean(row.baselineHash) && !requirementBaselineMatches(existing, row.baselineHash, parsed.formatVersion);
       if (localChanged) {
         const issue = conflictIssue(row.sheet, row.row, "本机需求在 Excel 导出后已更新，删除操作发生冲突");
         conflicts.push(issue);
@@ -1881,11 +1894,11 @@ function planWorkspaceWorkbookImport(
       counts.added += 1;
       continue;
     }
-    if (row.baselineHash && baselineRequirementHash(incoming) === row.baselineHash) {
+    if (row.baselineHash && requirementBaselineMatches(incoming, row.baselineHash, parsed.formatVersion)) {
       counts.unchanged += 1;
       continue;
     }
-    const localChanged = Boolean(row.baselineHash) && baselineRequirementHash(existing) !== row.baselineHash;
+    const localChanged = Boolean(row.baselineHash) && !requirementBaselineMatches(existing, row.baselineHash, parsed.formatVersion);
     if (localChanged) {
       conflicts.push(conflictIssue(row.sheet, row.row, `需求“${incoming.title}”在本机和 Excel 中都已修改`));
       if (conflictMode === "local-wins") {
@@ -1974,15 +1987,16 @@ function planWorkspaceWorkbookImport(
   tiering.changeLogs = tiering.changeLogs.filter((item) => !removedFeatureIds.has(item.featureId));
   tiering.verificationIssues = tiering.verificationIssues.filter((item) => !removedFeatureIds.has(item.featureId));
   return {
-    data: {
+    data: normalizeWorkbookRoadmaps({
+      ...current,
       requirements: nextRequirements,
       domains: nextDomains,
       products: productMerge.items,
-      groupOverrides: [...overrides.values()],
+      groupOverrides: current.roadmapAssignments !== undefined ? current.groupOverrides : [...overrides.values()],
       members: current.members,
       pptAccessPolicy: current.pptAccessPolicy,
       ...(current.tiering ? { tiering } : {}),
-    },
+    }, current),
     counts,
     conflicts,
   };
@@ -2175,6 +2189,12 @@ function requirementHashV7(item: Requirement): string {
   return stableHash({ baseline: requirementHashV6(item, true), owners: WORKBOOK_OWNER_FIELDS.map(({ key }) => item[key] ?? "") });
 }
 
+/** Source removal is a schema migration, not a concurrent requirement edit. */
+function requirementBaselineMatches(item: Requirement, hash: string, version: string): boolean {
+  const hashOf = version === "v2" ? requirementHashV2 : ["v7", "v8", "v9", "v10", "v11"].includes(version) ? requirementHashV7 : version === "v6" ? requirementHashV6 : requirementHash;
+  return hashOf(item) === hash || (item.source === undefined && version !== "v11" && SOURCES.some((source) => hashOf({ ...item, source }) === hash));
+}
+
 function requirementHashV6(item: Requirement, canonicalSource = false): string {
   return stableHash({
     id: item.id,
@@ -2216,7 +2236,7 @@ function requirementHashV2(item: Requirement): string {
 }
 
 function legacyWorkbookSource(source: Requirement["source"]): string {
-  return source === "NMPA认证" ? "NMPA送检" : source === "CE认证" ? "CE送检" : source;
+  return source === "NMPA认证" ? "NMPA送检" : source === "CE认证" ? "CE送检" : source ?? "";
 }
 
 function dictionaryHash(item: DictionaryItem): string {

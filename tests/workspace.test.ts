@@ -26,7 +26,7 @@ describe("工作区合并", () => {
     expect(merged.products).toHaveLength(1);
     expect(merged.domains.find((item) => item.id === "local-sleep")?.parentId).toBe("local-health");
     expect(merged.requirements[0]).toMatchObject({ domainL0Id: "local-health", domainId: "local-sleep", productIds: ["local-watch"] });
-    expect(merged.groupOverrides[0].groupKey).toBe("local-sleep::健康基础::2027-03");
+    expect(merged.groupOverrides[0].groupKey).toBe("健康::健康基础::local-sleep::2027-03");
   });
 
   it("同ID需求保留更新时间较新版本", () => {

@@ -26,8 +26,8 @@ describe("需求复制", () => {
     expect(copy.productIds).not.toBe(source.productIds);
     expect(copy.tieringFeatureId).toBeUndefined();
     expect(copy.historicalLaunch).toBeUndefined();
-    expect(copy.medicalSubmissionMilestones).toEqual(source.medicalSubmissionMilestones);
-    expect(copy.medicalSubmissionMilestones).not.toBe(source.medicalSubmissionMilestones);
+    expect(copy.medicalSubmissionMilestones).toBeUndefined();
+    expect(copy.source).toBeUndefined();
   });
 });
 

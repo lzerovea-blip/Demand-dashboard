@@ -35,14 +35,14 @@ export const TIERING_ELIGIBLE_SOURCES = [
 const TIERING_ELIGIBLE_SOURCE_SET = new Set<RequirementSource>(TIERING_ELIGIBLE_SOURCES);
 
 /**
- * 分层分级只管理运动、健康和 AI 路标。显式列举来源，避免新增业务来源时被意外纳入。
+ * 仅用于旧协作表格的九来源布局兼容；新版分层分级管理全部需求。
  */
-export function isTieringEligibleSource(source: RequirementSource): boolean {
-  return TIERING_ELIGIBLE_SOURCE_SET.has(source);
+export function isTieringEligibleSource(source: RequirementSource | undefined): boolean {
+  return Boolean(source && TIERING_ELIGIBLE_SOURCE_SET.has(source));
 }
 
-export function isTieringEligibleRequirement(requirement: Pick<Requirement, "source">): boolean {
-  return isTieringEligibleSource(requirement.source);
+export function isTieringEligibleRequirement(_requirement: Pick<Requirement, "source">): boolean {
+  return true;
 }
 
 export const TIERING_EXPECTED_COUNTS = {
@@ -443,7 +443,7 @@ export function buildHistoricalRequirement(
     images: [],
     domainL0Id: domainL0.id,
     domainId: domainL1.id,
-    source: tieringSourceForL0(feature.l0),
+    source: undefined,
     scope: "仅国内",
     allowLatestVersionUpgrade: true,
     overseasRegions: [],

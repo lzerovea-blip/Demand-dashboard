@@ -33,7 +33,7 @@ describe("算法责任人", () => {
   });
   it("v8 往返和人员 ID 重映射，旧包缺字段合并保留本机", async () => {
     const bytes = await createWorkspacePackage(data, "0.8.21");
-    expect(JSON.parse(await (await JSZip.loadAsync(bytes)).file("manifest.json")!.async("string")).formatVersion).toBe(9);
+    expect(JSON.parse(await (await JSZip.loadAsync(bytes)).file("manifest.json")!.async("string")).formatVersion).toBe(10);
     expect((await inspectWorkspacePackage(bytes, "算法.roadmap")).data.requirements[0].algorithmMemberId).toBe("algo");
     const incoming = { ...data, members: [{ ...member, id: "remote" }], requirements: [{ ...row, algorithmMemberId: "remote", updatedAt: "2099-01-01T00:00:00.000Z" }] };
     expect(mergeWorkspaceData(data, incoming).requirements[0].algorithmMemberId).toBe("algo");

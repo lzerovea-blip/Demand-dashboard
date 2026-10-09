@@ -33,10 +33,12 @@ import { filterMembers, isMemberFilterValid, requirementMatchesResponsibleMember
 import { formatHistoricalLaunch, historicalLaunchStatusLabel } from "../shared/tieringLaunches";
 import { isTieringEligibleRequirement } from "../shared/tiering";
 import { restoreFocusAfterConfirmation } from "./confirmation";
-import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS } from "../shared/pptExport";
+import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS, pptExportSections } from "../shared/pptExport";
 import { moveImageViewerIndex } from "./imageViewer";
 import { formatMedicalSubmissionMonth, initialRequirementTargetMonth, isMedicalSubmissionSource, medicalSubmissionTimeline, validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission";
 import { TieringPage } from "./TieringPage";
+import { MedicalPlanEditor, RoadmapDictionaryPanel, RoadmapMatchingPage } from "./RoadmapManagementPage";
+import { roadmapDefinitionsFor, roadmapLanesFor } from "../shared/roadmapManagement";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
 import {
   CATEGORY_META,
@@ -65,6 +67,7 @@ import {
   type SaveMemberInput,
   type SavePptAccessPolicyInput,
   type SaveRequirementInput,
+  type SaveGroupOrderInput,
   type Track,
   type WorkspaceImportMode,
   type WorkspaceImportPreview,
@@ -86,7 +89,7 @@ import {
 import { moveMedicalRoadmapRow } from "../shared/medicalRoadmapOrder";
 import { adoptedWorkbookDeleteCount, allWorkbookChangeIds } from "../shared/workbookSelection";
 
-type Page = "requirements" | "summary" | "roadmap" | "tiering" | "dictionaries" | "template";
+type Page = "requirements" | "summary" | "roadmap" | "matching" | "tiering" | "dictionaries" | "template";
 
 interface ConfirmationRequest {
   title: string;
@@ -105,8 +108,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.8.30",
-  releasedAt: "2026-09-24",
+  version: "0.9.0",
+  releasedAt: "2026-10-09",
   author: "林忠维",
 };
 
@@ -169,6 +172,7 @@ export default function App() {
   const [notice, setNotice] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [editor, setEditor] = useState<Requirement | "new" | null>(null);
+  const [medicalEditor, setMedicalEditor] = useState<{ requirement: Requirement; roadmapId: string } | null>(null);
   const [selectedGroupContext, setSelectedGroupContext] = useState<{ key: string; region: RoadmapRegion | null; requirementId?: string } | null>(null);
   const [summaryStartHalf, setSummaryStartHalf] = useState(DEFAULT_START_HALF);
   const [summaryEndHalf, setSummaryEndHalf] = useState(DEFAULT_END_HALF);
@@ -280,7 +284,7 @@ export default function App() {
   })();
   const summaries = useMemo(() => {
     try {
-      return buildHalfYearSummaries(snapshot.requirements, summaryStartHalf, summaryEndHalf);
+      return buildHalfYearSummaries(snapshot.requirements, summaryStartHalf, summaryEndHalf, snapshot);
     } catch {
       return [];
     }
@@ -384,10 +388,14 @@ export default function App() {
           </div>
         </div>
         <nav>
+          <div className="nav-group-label">需求管理</div>
           <NavButton active={page === "requirements"} icon="⌘" label="需求池" onClick={() => setPage("requirements")} />
-          <NavButton active={page === "summary"} icon="↗" label="汇总分析" onClick={() => setPage("summary")} />
-          <NavButton active={page === "roadmap"} icon="▦" label="路标" onClick={() => setPage("roadmap")} />
           <NavButton active={page === "tiering"} icon="▥" label="分层分级" onClick={() => setPage("tiering")} />
+          <NavButton active={page === "summary"} icon="↗" label="汇总分析" onClick={() => setPage("summary")} />
+          <div className="nav-group-label">路标管理</div>
+          <NavButton active={page === "matching"} icon="☑" label="需求匹配" onClick={() => setPage("matching")} />
+          <NavButton active={page === "roadmap"} icon="▦" label="路标查看" onClick={() => setPage("roadmap")} />
+          <div className="nav-group-label">共享设置</div>
           <NavButton active={page === "dictionaries"} icon="◇" label="字典设置" onClick={() => setPage("dictionaries")} />
           <NavButton active={page === "template"} icon="⇩" label="导出中心" onClick={() => setPage("template")} />
         </nav>
@@ -439,9 +447,11 @@ export default function App() {
               requestConfirmation={requestConfirmation}
             />
           )}
-          {page === "summary" && <SummaryPage summaries={summaries} />}
+          {page === "summary" && <SummaryPage summaries={summaries} snapshot={snapshot} />}
+          {page === "matching" && <RoadmapMatchingPage snapshot={snapshot} confirm={requestConfirmation} onOpenRequirement={setEditor} onMedical={(requirement, roadmapId) => setMedicalEditor({ requirement, roadmapId })} onSave={async (input) => { await update(() => window.roadmapApi.saveRoadmapAssignments(input), input.roadmapId ? "路标匹配已保存" : "需求已移出路标"); }} />}
           {page === "roadmap" && (
             <RoadmapPage
+              snapshot={snapshot}
               groups={groups}
               focusGroups={regionalGroups[roadmapRegion]}
               start={roadmapStartHalf}
@@ -456,8 +466,8 @@ export default function App() {
               onReorderGroups={async (input) => {
                 await update(() => window.roadmapApi.saveGroupOrder(input), "卡片顺序已更新");
               }}
-              onReorderMedicalRows={async (requirementIds) => {
-                await update(() => window.roadmapApi.saveMedicalRoadmapOrder({ requirementIds }), "医疗泳道顺序已更新");
+              onReorderMedicalRows={async (roadmapId, requirementIds) => {
+                await update(() => window.roadmapApi.saveMedicalRoadmapPlanOrder({ roadmapId, requirementIds }), "医疗泳道顺序已更新");
               }}
             />
           )}
@@ -475,6 +485,7 @@ export default function App() {
               requestConfirmation={requestConfirmation}
             />
           )}
+          {page === "dictionaries" && <RoadmapDictionaryPanel snapshot={snapshot} confirm={requestConfirmation} onSaveRoadmap={async (input) => { await update(() => window.roadmapApi.saveRoadmap(input), "路标字典已保存"); }} onDeleteRoadmap={async (id) => { await update(() => window.roadmapApi.deleteRoadmap(id), "路标已删除"); }} onSaveLane={async (input) => { await update(() => window.roadmapApi.saveRoadmapLane(input), "泳道已保存"); }} onDeleteLane={async (id) => { await update(() => window.roadmapApi.deleteRoadmapLane(id), "泳道已删除"); }} />}
           {page === "tiering" && (
             <TieringPage
               snapshot={snapshot}
@@ -585,7 +596,8 @@ export default function App() {
           key={selectedGroup.key}
           group={selectedGroup}
           onClose={() => setSelectedGroupContext(null)}
-          onEditRequirement={setEditor}
+          onEditRequirement={(req) => setEditor(snapshot.requirements.find((item) => item.id === req.id) ?? req)}
+          onEditMedical={selectedGroup.roadmapKind === "medical" ? (req) => setMedicalEditor({ requirement: snapshot.requirements.find((item) => item.id === req.id) ?? req, roadmapId: selectedGroup.track }) : undefined}
         />
       )}
       {editor && (
@@ -599,7 +611,7 @@ export default function App() {
           }}
           requestConfirmation={requestConfirmation}
           onSave={async (input, keepOpen) => {
-            const nextSnapshot = await update(() => window.roadmapApi.saveRequirement(input), input.id ? "需求已更新" : "需求已加入路标");
+            const nextSnapshot = await update(() => window.roadmapApi.saveRequirement(input), input.id ? "需求已更新" : "需求已加入需求池，请到路标管理匹配");
             if (input.id && selectedGroupContext) {
               const visibleRequirements = selectedGroupContext.region
                 ? filterRequirementsForRegion(nextSnapshot.requirements, selectedGroupContext.region)
@@ -623,6 +635,7 @@ export default function App() {
         />
       )}
       {aboutOpen && <AboutDialog info={appInfo} onClose={() => setAboutOpen(false)} />}
+      {medicalEditor && <MedicalPlanEditor key={`${medicalEditor.roadmapId}:${medicalEditor.requirement.id}`} requirement={medicalEditor.requirement} roadmapId={medicalEditor.roadmapId} snapshot={snapshot} onClose={() => setMedicalEditor(null)} onDelete={() => requestConfirmation({ title: "清除医疗配置", message: "清除五个医疗节点及其排序？需求和当前匹配保留。", confirmLabel: "清除配置", action: async () => { await update(() => window.roadmapApi.deleteMedicalRoadmapPlan({ requirementId: medicalEditor.requirement.id, roadmapId: medicalEditor.roadmapId }), "医疗配置已清除"); setMedicalEditor(null); } })} onSave={async (input) => { await update(() => window.roadmapApi.saveMedicalRoadmapPlan(input), "医疗节点已保存"); }} />}
       {confirmation && (
         <ConfirmationDialog
           title={confirmation.title}
@@ -687,7 +700,7 @@ function AboutDialog({ info, onClose }: { info: AppInfo; onClose: () => void }) 
           <h3>使用说明</h3>
           <ol>
             <li><b>准备字典</b><span>在“字典设置”维护领域和产品，作为需求录入的统一口径。</span></li>
-            <li><b>录入需求</b><span>在“需求池”新建或编辑需求，填写来源、上线月份、三端工作量、描述、图片和匹配产品。</span></li>
+            <li><b>录入需求</b><span>在“需求池”新建或编辑需求，填写上线月份、工作量、描述、图片和匹配产品；再到需求匹配选择路标与泳道。</span></li>
             <li><b>查看汇总与路标</b><span>选择半年区间查看投入分析和七张路标；路标页可进入全屏 Tab 查看。</span></li>
             <li><b>输出与交接</b><span>在“导出中心”生成需求路标、协作 Excel 或完整需求包。</span></li>
           </ol>
@@ -775,7 +788,6 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
             <table className="requirements-table">
               <colgroup>
                 <col className="requirement-col-title" />
-                <col className="requirement-col-source" />
                 <col className="requirement-col-scope" />
                 <col className="requirement-col-month" />
                 <col className="requirement-col-product" />
@@ -785,12 +797,11 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
                 <col className="requirement-col-workload" />
                 <col className="requirement-col-actions" />
               </colgroup>
-              <thead><tr><th>需求标题</th><th>来源</th><th>适用范围</th><th>上线月份 / 版本</th><th>匹配产品</th><th>规划</th><th>产品经理</th><th>SE</th><th className="numeric">工作量</th><th /></tr></thead>
+              <thead><tr><th>需求标题</th><th>适用范围</th><th>上线月份 / 版本</th><th>匹配产品</th><th>规划</th><th>产品经理</th><th>SE</th><th className="numeric">工作量</th><th /></tr></thead>
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
                     <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={requirementPoolTitle(domains.get(item.domainId), item.title)}>{requirementPoolTitle(domains.get(item.domainId), item.title)}</strong><div className="requirement-badges">{item.historicalLaunch && <span className="historical-baseline-badge">历史基线</span>}{item.historicalLaunch?.verificationStatus === "pending" && <span className="historical-pending-badge">{historicalLaunchStatusLabel(item.historicalLaunch)}</span>}{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></div></td>
-                    <td><SourceBadge source={item.source} /></td>
                     <td><ScopeBadge scope={item.scope} compact /></td>
                     <td><div className="release-cell"><b>{formatRequirementLaunch(item)}</b>{item.targetMonth && <small>{hmosVersionForMonth(item.targetMonth)}</small>}</div></td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
@@ -810,16 +821,17 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
   );
 }
 
-export function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
+export function SummaryPage({ summaries, snapshot }: { summaries: HalfYearSummary[]; snapshot?: AppSnapshot }) {
   const [selectedSide, setSelectedSide] = useState<WorkloadSide>("device");
   const device = summaries.reduce((sum, item) => sum + item.deviceWorkload, 0);
   const app = summaries.reduce((sum, item) => sum + item.appWorkload, 0);
   const cloud = summaries.reduce((sum, item) => sum + item.cloudWorkload, 0);
   const researchApp = summaries.reduce((sum, item) => sum + item.researchAppWorkload, 0);
   const total = analysisWorkloadTotal(summaries);
-  const trackWorkload = Object.fromEntries(ROADMAP_TRACKS.map((track) => [
+  const roadmapOptions = [...roadmapDefinitionsFor(snapshot ?? {}).map((item) => ({ id: item.id, name: item.name })), { id: "未匹配", name: "未匹配" }];
+  const trackWorkload = Object.fromEntries(roadmapOptions.map(({ id: track }) => [
     track,
-    summaries.reduce((sum, item) => sum + item.byTrack[track], 0),
+    summaries.reduce((sum, item) => sum + (item.byTrack[track] ?? 0), 0),
   ])) as Record<Track, number>;
   const categoryWorkload = summarizeCategoryWorkloadForSide(summaries, selectedSide);
   const sideSelector = (className = "") => (
@@ -853,10 +865,10 @@ export function SummaryPage({ summaries }: { summaries: HalfYearSummary[] }) {
           { label: "运动健康 App", value: app, color: WORKLOAD_SIDE_META.app.color },
           { label: "云侧", value: cloud, color: WORKLOAD_SIDE_META.cloud.color },
         ]} />
-        <DonutChart title="各路标来源投入占比" subtitle="按需求来源归属" items={ROADMAP_TRACKS.map((track) => ({
-          label: track,
-          value: trackWorkload[track],
-          color: TRACK_COLORS[track],
+        <DonutChart title="路标匹配投入占比" subtitle="按独立路标匹配归属，包含未匹配需求" items={roadmapOptions.map(({ id, name }) => ({
+          label: name,
+          value: trackWorkload[id],
+          color: TRACK_COLORS[id] ?? "#70808b",
         }))} />
         <DonutChart title="需求分类投入占比" subtitle={`${WORKLOAD_SIDE_META[selectedSide].label} · 体验优化 / 平台演进 / 产品专属`} action={sideSelector("donut-side-tabs")} items={CATEGORIES.map((category) => ({
           label: category,
@@ -972,7 +984,8 @@ function SideCategoryChart({ summaries, side }: { summaries: HalfYearSummary[]; 
   );
 }
 
-function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onRegionChange, onOpenGroup, onReorderGroups, onReorderMedicalRows }: {
+function RoadmapPage({ snapshot, groups, focusGroups, start, end, focusMode, region, onRegionChange, onOpenGroup, onReorderGroups, onReorderMedicalRows }: {
+  snapshot: AppSnapshot;
   groups: RoadmapGroup[];
   focusGroups: RoadmapGroup[];
   start: string;
@@ -981,10 +994,11 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
   region: RoadmapRegion;
   onRegionChange: (region: RoadmapRegion) => void;
   onOpenGroup: (group: RoadmapGroup, region: RoadmapRegion | null, requirementId?: string) => void;
-  onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
-  onReorderMedicalRows: (requirementIds: string[]) => Promise<void>;
+  onReorderGroups: (input: SaveGroupOrderInput) => Promise<void>;
+  onReorderMedicalRows: (roadmapId: string, requirementIds: string[]) => Promise<void>;
 }) {
-  const tracks = roadmapTrackOrder(groups);
+  const definitions = roadmapDefinitionsFor(snapshot);
+  const tracks = definitions.map((item) => item.id);
   const [focusIndex, setFocusIndex] = useState(0);
   const displayedGroups = focusMode ? focusGroups : groups;
 
@@ -1008,7 +1022,8 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
           aria-labelledby={focusMode ? `roadmap-focus-tab-${index}` : undefined}
         >
           <RoadmapBoard
-            title={`${track}路标`}
+            snapshot={snapshot}
+            title={definitions.find((item) => item.id === track)!.name}
             track={track}
             groups={displayedGroups}
             start={start}
@@ -1019,7 +1034,7 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
             onRegionChange={onRegionChange}
             onOpenGroup={(group, requirementId) => onOpenGroup(group, focusMode ? region : null, requirementId)}
             onReorderGroups={onReorderGroups}
-            onReorderMedicalRows={onReorderMedicalRows}
+            onReorderMedicalRows={(ids) => onReorderMedicalRows(track, ids)}
           />
         </div>
       ))}
@@ -1037,7 +1052,7 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
               style={focusIndex === index ? { background: TRACK_COLORS[track] } : undefined}
               onClick={() => setFocusIndex(index)}
             >
-              {track}路标
+              {definitions.find((item) => item.id === track)!.name}
             </button>
           ))}
         </div>
@@ -1047,6 +1062,7 @@ function RoadmapPage({ groups, focusGroups, start, end, focusMode, region, onReg
 }
 
 interface RoadmapBoardProps {
+  snapshot?: AppSnapshot;
   title: string;
   track: Track;
   groups: RoadmapGroup[];
@@ -1057,16 +1073,17 @@ interface RoadmapBoardProps {
   region: RoadmapRegion;
   onRegionChange: (region: RoadmapRegion) => void;
   onOpenGroup: (group: RoadmapGroup, requirementId?: string) => void;
-  onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
+  onReorderGroups: (input: SaveGroupOrderInput) => Promise<void>;
   onReorderMedicalRows: (requirementIds: string[]) => Promise<void>;
 }
 
 function RoadmapBoard(props: RoadmapBoardProps) {
-  if (props.track === "医疗认证") return <MedicalSubmissionRoadmapBoard {...props} />;
+  if (props.snapshot?.roadmaps?.find((item) => item.id === props.track)?.kind === "medical" || props.track === "医疗认证") return <MedicalSubmissionRoadmapBoard {...props} />;
   return <StandardRoadmapBoard {...props} />;
 }
 
-export function MedicalSubmissionRoadmapBoard({ title, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup, onReorderMedicalRows }: RoadmapBoardProps) {
+export function MedicalSubmissionRoadmapBoard({ title, track, groups: allGroups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup, onReorderMedicalRows }: RoadmapBoardProps) {
+  const groups = allGroups.filter((item) => item.track === track);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingMonthAnchorRef = useRef<RoadmapMonthAnchor | null>(null);
   const [hoveredRequirementId, setHoveredRequirementId] = useState<string | null>(null);
@@ -1206,10 +1223,10 @@ export function MedicalSubmissionRoadmapBoard({ title, groups, start, end, focus
                 }}
                 onDragEnd={finishDrag}
                 onClick={() => openRow(group, requirement.id)}
-                aria-label={`${requirement.title}，${requirement.source}，点击查看需求详情`}
+                aria-label={`${requirement.title}，${group.laneName ?? requirement.source}，点击查看需求详情`}
               >
                 <strong>{requirement.title}</strong>
-                <span style={{ background: SOURCE_COLORS[requirement.source] }}>{requirement.source === "NMPA认证" ? "NMPA" : "CE"}</span>
+                <span style={{ background: SOURCE_COLORS[group.laneId as RequirementSource] ?? "#d64d85" }}>{group.laneName ?? requirement.source}</span>
                 <div className="medical-roadmap-products">{(group.requirementProductNames[requirement.id] ?? []).map((name) => <span key={name}>{name}</span>)}</div>
                 {missingNodes.length > 0 && <small>{missingNodes.length === timeline.length ? "时间节点未填写" : `待填写：${missingNodes.map((node) => node.label.replace("时间", "")).join("、")}`}</small>}
               </button>
@@ -1250,7 +1267,7 @@ function MedicalSubmissionCalendarTimeline({ requirement, months, width }: { req
   </span>;
 }
 
-function StandardRoadmapBoard({ title, track, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup, onReorderGroups }: RoadmapBoardProps) {
+function StandardRoadmapBoard({ snapshot, title, track, groups, start, end, focusMode, focusActive, region, onRegionChange, onOpenGroup, onReorderGroups }: RoadmapBoardProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingMonthAnchorRef = useRef<RoadmapMonthAnchor | null>(null);
   const skipAutoLocateRef = useRef(false);
@@ -1259,7 +1276,7 @@ function StandardRoadmapBoard({ title, track, groups, start, end, focusMode, foc
   const months = halves.flatMap(monthsForHalfYear);
   const scoped = groups.filter((item) => item.track === track);
   const firstGroup = scoped[0];
-  const lanes = roadmapLanesForTrack(track);
+  const lanes = roadmapLanesForTrack(track, snapshot);
   const firstLane = firstGroup ? roadmapPrimaryLane(firstGroup) : undefined;
   const monthColumnTemplate = roadmapMonthColumnTemplateForTrack(months, groups, track);
 
@@ -1335,7 +1352,7 @@ function StandardRoadmapBoard({ title, track, groups, start, end, focusMode, foc
                 aria-label={`当前${region === "domestic" ? "国内" : "海外"}路标，${region === "domestic" ? "切换海外" : "切换国内"}`}
                 onClick={() => changeRegion(region === "domestic" ? "overseas" : "domestic")}
               >{region === "domestic" ? "切换海外" : "切换国内"}</button>
-              : "来源泳道"}
+              : "路标泳道"}
           </div>
           {halves.map((half) => <div key={half} className="half-header" style={{ gridColumn: "span 6" }}>{formatHalfYearWithHmos(half)}</div>)}
           <div className="lane-corner muted">上线月份</div>
@@ -1344,6 +1361,7 @@ function StandardRoadmapBoard({ title, track, groups, start, end, focusMode, foc
             <RoadmapLane
               key={lane}
               lane={lane}
+              laneName={snapshot?.roadmapLanes?.find((item) => item.id === lane)?.name ?? lane}
               months={months}
               groups={scoped.filter((item) => groupMatchesRoadmapLane(item, lane))}
               reorderEnabled={!focusMode}
@@ -1362,7 +1380,8 @@ function StandardRoadmapBoard({ title, track, groups, start, end, focusMode, foc
 
 type RoadmapDropIndicator = { month: string; targetKey?: string; position: "before" | "after" | "end" };
 
-function RoadmapLane({ lane, months, groups, reorderEnabled, highlightEnabled, highlightedDomainId, onHighlightDomain, onOpenGroup, onReorderGroups }: {
+function RoadmapLane({ lane, laneName, months, groups, reorderEnabled, highlightEnabled, highlightedDomainId, onHighlightDomain, onOpenGroup, onReorderGroups }: {
+  laneName: string;
   lane: RoadmapLane;
   months: string[];
   groups: RoadmapGroup[];
@@ -1371,7 +1390,7 @@ function RoadmapLane({ lane, months, groups, reorderEnabled, highlightEnabled, h
   highlightedDomainId: string | null;
   onHighlightDomain: (domainId: string | null) => void;
   onOpenGroup: (group: RoadmapGroup) => void;
-  onReorderGroups: (input: { source: RequirementSource; targetMonth: string; groupKeys: string[] }) => Promise<void>;
+  onReorderGroups: (input: SaveGroupOrderInput) => Promise<void>;
 }) {
   const laneAccent = lane.startsWith("AI") || lane.endsWith("送检")
     ? SOURCE_COLORS[lane as RequirementSource]
@@ -1434,7 +1453,7 @@ function RoadmapLane({ lane, months, groups, reorderEnabled, highlightEnabled, h
     const nextKeys = moveRoadmapGroupKey(currentKeys, dragged.key, targetKey, position);
     if (nextKeys.every((key, index) => key === currentKeys[index])) return;
     try {
-      await onReorderGroups({ source: dragged.source, targetMonth: dragged.targetMonth, groupKeys: nextKeys });
+      await onReorderGroups({ source: dragged.source, roadmapId: dragged.roadmapId, laneId: dragged.laneId, targetMonth: dragged.targetMonth, groupKeys: nextKeys });
     } catch {
       // 全局更新流程已显示错误；当前列表由未变更的快照自然恢复。
     }
@@ -1450,7 +1469,7 @@ function RoadmapLane({ lane, months, groups, reorderEnabled, highlightEnabled, h
 
   return (
     <>
-      <div className="lane-label" style={laneAccent ? { borderLeft: `4px solid ${laneAccent}` } : undefined}><strong>{lane}</strong><span>{groups.length} 卡片</span></div>
+      <div className="lane-label" style={laneAccent ? { borderLeft: `4px solid ${laneAccent}` } : undefined}><strong>{laneName}</strong><span>{groups.length} 卡片</span></div>
       {months.map((month) => {
         const monthGroups = groups.filter((item) => item.targetMonth === month);
         const draggable = reorderEnabled && monthGroups.length > 1;
@@ -1602,7 +1621,7 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
       images: value.images ?? [],
       domainL0Id: value.domainL0Id ?? "",
       domainId: value.domainId,
-      source: value.source,
+      source: undefined,
       scope: value.scope,
       allowLatestVersionUpgrade: value.allowLatestVersionUpgrade,
       overseasRegions: value.overseasRegions ?? [],
@@ -1614,7 +1633,7 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
       cloudWorkloadPm: value.cloudWorkloadPm,
       researchAppWorkloadPm: value.researchAppWorkloadPm ?? 0,
       algorithmWorkloadPm: value.algorithmWorkloadPm ?? 0,
-      medicalSubmissionMilestones: value.medicalSubmissionMilestones ? { ...value.medicalSubmissionMilestones } : undefined,
+      medicalSubmissionMilestones: undefined,
     };
     const previous = latestRequirementSelections(snapshot.requirements);
     const domainL0Id = domainL0s.some((item) => item.id === previous?.domainL0Id) ? previous?.domainL0Id ?? "" : domainL0s[0]?.id ?? "";
@@ -1629,12 +1648,12 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
       images: [],
       domainL0Id,
       domainId: linkedDomainL1s.some((item) => item.id === previous?.domainId) ? previous?.domainId ?? "" : linkedDomainL1s[0]?.id ?? "",
-      source: previous?.source ?? "运动基础",
+      source: undefined,
       scope: previous?.scope ?? "全球",
       allowLatestVersionUpgrade: false,
       overseasRegions: previous?.overseasRegions ?? [],
       category: previous?.category ?? "体验优化",
-      targetMonth: initialRequirementTargetMonth(previous?.source ?? "运动基础", previous?.targetMonth, new Date().toISOString().slice(0, 7)),
+      targetMonth: previous?.targetMonth || new Date().toISOString().slice(0, 7),
       productIds: [],
       deviceWorkloadPm: 0,
       appWorkloadPm: 0,
@@ -1697,8 +1716,7 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
       return;
     }
     try {
-      validateRequirementTargetMonth(form.source, form.targetMonth);
-      validateMedicalSubmissionMilestones(form.source, form.targetMonth, form.medicalSubmissionMilestones);
+      if (!(value?.targetMonth === "" && form.targetMonth === "")) validateRequirementTargetMonth(undefined, form.targetMonth);
       setMedicalMilestoneError("");
     } catch (reason) {
       setMedicalMilestoneError(messageOf(reason));
@@ -1716,7 +1734,7 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
         algorithmWorkloadPm: draftParts.algorithm ?? 0,
       }, keepOpen && !value);
       if (keepOpen && !value) {
-        setForm((current) => ({ ...current, title: "", description: "", images: [], productIds: [], deviceWorkloadPm: 0, appWorkloadPm: 0, cloudWorkloadPm: 0, researchAppWorkloadPm: 0, algorithmWorkloadPm: 0, targetMonth: isMedicalSubmissionSource(current.source) ? "" : current.targetMonth, medicalSubmissionMilestones: undefined }));
+        setForm((current) => ({ ...current, title: "", description: "", images: [], productIds: [], deviceWorkloadPm: 0, appWorkloadPm: 0, cloudWorkloadPm: 0, researchAppWorkloadPm: 0, algorithmWorkloadPm: 0, medicalSubmissionMilestones: undefined }));
         setWorkloadTexts({ device: "", app: "", cloud: "", researchApp: "", algorithm: "" });
         setImageError("");
       }
@@ -1780,24 +1798,7 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
             }}><option value="">请选择领域 L0</option>{domainL0s.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
             <Field label="领域 L1" required><select value={domainL1s.some((item) => item.id === form.domainId) ? form.domainId : ""} disabled={!form.domainL0Id || domainL1s.length === 0} onChange={(event) => setForm({ ...form, domainId: event.target.value })}><option value="">{form.domainL0Id ? "请选择该 L0 下的领域 L1" : "请先选择领域 L0"}</option>{domainL1s.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
           </div>
-          <div className="form-row-pair">
-            <Field label="来源" required><select value={form.source} onChange={(event) => {
-              const source = event.target.value as RequirementSource;
-              setMedicalMilestoneError("");
-              setForm({ ...form, source, overseasRegions: [], targetMonth: isMedicalSubmissionSource(source) && !userSelectedTargetMonth.current ? "" : form.targetMonth });
-            }}>{SOURCES.map((item) => <option key={item}>{item}</option>)}</select></Field>
-            <Field label={isMedicalSubmissionSource(form.source) ? "送检版本" : "上线年月"} required={!isMedicalSubmissionSource(form.source)}><input type="month" required={!isMedicalSubmissionSource(form.source)} value={form.targetMonth} onChange={(event) => { userSelectedTargetMonth.current = true; setMedicalMilestoneError(""); setForm({ ...form, targetMonth: event.target.value }); }} />{isMedicalSubmissionSource(form.source) && <small>选填年月；送检时间与此处保持一致。</small>}</Field>
-          </div>
-          {isMedicalSubmissionSource(form.source) && <Field label="医疗认证时间节点">
-            <div className="medical-milestone-grid">
-              <label><span>注册启动时间</span><input type="month" value={form.medicalSubmissionMilestones?.registrationStartMonth ?? ""} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, medicalSubmissionMilestones: { ...form.medicalSubmissionMilestones, registrationStartMonth: event.target.value || undefined } }); }} /></label>
-              <label><span>送检时间</span>{form.targetMonth ? <input type="month" value={form.targetMonth} readOnly aria-readonly="true" /> : <input value="未填写" readOnly aria-readonly="true" />}</label>
-              <label><span>临床启动时间</span><input type="month" value={form.medicalSubmissionMilestones?.clinicalStartMonth ?? ""} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, medicalSubmissionMilestones: { ...form.medicalSubmissionMilestones, clinicalStartMonth: event.target.value || undefined } }); }} /></label>
-              <label><span>临床完成时间</span><input type="month" value={form.medicalSubmissionMilestones?.clinicalCompleteMonth ?? ""} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, medicalSubmissionMilestones: { ...form.medicalSubmissionMilestones, clinicalCompleteMonth: event.target.value || undefined } }); }} /></label>
-              <label><span>获证时间</span><input type="month" value={form.medicalSubmissionMilestones?.certificateMonth ?? ""} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, medicalSubmissionMilestones: { ...form.medicalSubmissionMilestones, certificateMonth: event.target.value || undefined } }); }} /></label>
-            </div>
-            <small>送检时间使用送检版本的年月；五个节点均可留空，不限制先后顺序，时间轴按实际年月对齐。</small>
-          </Field>}
+          <Field label="上线年月" required={value?.targetMonth !== ""}><input type="month" required={value?.targetMonth !== ""} value={form.targetMonth} onChange={(event) => { setMedicalMilestoneError(""); setForm({ ...form, targetMonth: event.target.value }); }} />{value?.targetMonth === "" && <small>保留历史空日期；医疗五节点请在路标管理中维护。</small>}</Field>
           {medicalMilestoneError && <small className="input-error" role="alert">{medicalMilestoneError}</small>}
           <div className="form-row-pair">
             <Field label="适用范围" required>
@@ -1855,7 +1856,7 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
               ? <small className="input-error">{workloadError}</small>
               : <small>五项均可留空或填写 0，按两位小数保存；若五项合计为 0，需求池会标记“工作量待评估”。</small>}
           </div>
-          <div className="merge-hint"><b>{isMedicalSubmissionSource(form.source) ? "医疗认证路标" : "自动合并规则"}</b><span>{isMedicalSubmissionSource(form.source) ? "每条医疗需求独立成行；时间轴按当前区域需求全部五节点自动计算，不受外部时间窗限制，五节点全空仍保留泳道。" : "同领域 L1、同来源、同上线年月的需求会合并为一张路标卡片；路标卡片只显示领域 L1。"}</span></div>
+          <div className="merge-hint"><b>需求与路标独立管理</b><span>保存后进入需求池和分层分级。请在“路标管理 → 需求匹配”勾选路标和泳道，医疗节点也在路标管理中填写。</span></div>
         </div>
         <div className="drawer-footer">
           {!value ? <label className="keep-open"><input type="checkbox" checked={keepOpen} onChange={(event) => setKeepOpen(event.target.checked)} /> 保存后继续录入</label> : <button type="button" className="button danger" onClick={(event) => requestConfirmation({ title: "删除需求", message: `确定删除“${value.title}”？删除后无法直接撤销。`, confirmLabel: "确认删除", action: () => onDelete(value.id) }, event.currentTarget)}>删除需求</button>}
@@ -1866,10 +1867,11 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
   );
 }
 
-function GroupDrawer({ group, onClose, onEditRequirement }: {
+function GroupDrawer({ group, onClose, onEditRequirement, onEditMedical }: {
   group: RoadmapGroup;
   onClose: () => void;
   onEditRequirement: (requirement: Requirement) => void;
+  onEditMedical?: (requirement: Requirement) => void;
 }) {
   const [expandedRequirementIds, setExpandedRequirementIds] = useState<Set<string>>(() => new Set(group.requirements.map((item) => item.id)));
   const [imageViewer, setImageViewer] = useState<{ images: RequirementImage[]; index: number } | null>(null);
@@ -1912,7 +1914,7 @@ function GroupDrawer({ group, onClose, onEditRequirement }: {
       <div className="overlay" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
         <div className="drawer group-drawer">
           <div className="drawer-header"><div><span className="eyebrow">ROADMAP GROUP</span><h2>{group.domainName}</h2></div><button className="icon-button" onClick={onClose}>×</button></div>
-          <div className="group-hero"><SourceBadge source={group.source} /><b>{formatRoadmapGroupLaunch(group)}</b><span>合计 {formatNumber(group.totalWorkloadPm)} 人月</span><span>{group.requirements.length} 条需求</span></div>
+          <div className="group-hero"><span>{group.roadmapName ?? group.track} · {group.laneName ?? group.source}</span><b>{formatRoadmapGroupLaunch(group)}</b><span>合计 {formatNumber(group.totalWorkloadPm)} 人月</span><span>{group.requirements.length} 条需求</span></div>
           <div className="form-body">
             {group.productNames.length > 0 && <div className="detail-products"><span>涉及产品</span>{group.productNames.map((name) => <b key={name}>{name}</b>)}</div>}
             <div className="detail-list">
@@ -1939,7 +1941,7 @@ function GroupDrawer({ group, onClose, onEditRequirement }: {
                     <i>查看详情</i>
                   </summary>
                   <div className="requirement-detail-body">
-                    <div className="requirement-detail-actions"><button type="button" className="button ghost" onClick={() => onEditRequirement(item)}>编辑需求</button></div>
+                    <div className="requirement-detail-actions"><button type="button" className="button ghost" onClick={() => onEditRequirement(item)}>编辑需求</button>{onEditMedical && <button type="button" className="button primary" onClick={() => onEditMedical(item)}>配置医疗节点</button>}</div>
                     {item.description ? <p>{item.description}</p> : <p className="muted-detail">暂无需求描述</p>}
                     {item.images.length > 0 && <div className="detail-image-grid">{item.images.map((image, imageIndex) => (
                       <figure key={image.id}>
@@ -2251,7 +2253,9 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
   const [workbookDeleteConfirmation, setWorkbookDeleteConfirmation] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [pptMaterialName, setPptMaterialName] = useState("解决方案需求路标");
-  const [pptSections, setPptSections] = useState<PptExportSectionId[]>([...DEFAULT_PPT_EXPORT_SECTIONS]);
+  const exportSections = pptExportSections(snapshot);
+  const [pptSections, setPptSections] = useState<PptExportSectionId[]>(() => exportSections.map((item) => item.id));
+  useEffect(() => { setPptSections((selected) => selected.filter((id) => exportSections.some((item) => item.id === id))); }, [snapshot.roadmaps]);
   const [whitelistEntries, setWhitelistEntries] = useState(snapshot.pptAccessPolicy.entries);
   const [candidateMemberId, setCandidateMemberId] = useState("");
   const [savingPolicy, setSavingPolicy] = useState(false);
@@ -2317,7 +2321,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
 
   async function applyWorkbook(conflictMode: WorkspaceWorkbookConflictMode, confirmedDeletes = false) {
     if (!workbookPreview || workbookPreview.errors.length) return;
-    const isSelective = ["v8", "v9", "v10"].includes(workbookPreview.formatVersion);
+    const isSelective = ["v8", "v9", "v10", "v11"].includes(workbookPreview.formatVersion);
     if (!isSelective && workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed) return;
     if (isSelective && workbookSelectedChanges.some((id) => workbookPreview.fieldChanges?.find((change) => change.id === id)?.conflict && !workbookConflictDecisions[id])) return;
     if (isSelective && selectedWorkbookDeletes > 0 && !confirmedDeletes) {
@@ -2400,8 +2404,8 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
           </dl>
         </section>
 
-        <p className="callout">封面数量、工作量、汇总分析及其他路标按所选区间统计；医疗认证 PPT 独立展示全部医疗需求及完整节点时间范围。未填写送检版本不计入半年统计或时间范围 Excel，完整需求包仍完整保存。</p>
-        <p className="callout">需求池协作 Excel v10 可编辑需求字段与 15 个系列支持状态，回导时逐项勾选差异。来源、匹配产品及创新研究 App、算法工作量不在表格中编辑，回导保留本机值。医疗认证 PPT 使用全部医疗需求的独立自动时间范围，不受导出区间限制。</p>
+        <p className="callout">需求数量、工作量和普通路标按各自选择的时间范围统计。医疗 PPT 使用已匹配需求的五节点时间范围；需求池 Excel 按通用上线年月筛选，医疗节点不会改变导出范围。历史空上线月份不计入按半年统计或时间范围 Excel，完整需求包仍完整保存。</p>
+        <p className="callout">需求池协作 Excel v11 可编辑需求字段与 15 个系列支持状态，回导时逐项勾选差异。路标匹配、医疗节点、匹配产品及创新研究 App、算法工作量在应用中维护。医疗 PPT 使用已匹配医疗需求的独立时间范围。</p>
         <div className="export-type-grid">
           <section className="panel export-type-card roadmap-export-card">
             <div className="export-type-head"><span className="export-type-icon">P</span><span className="eyebrow">POWERPOINT</span></div>
@@ -2416,7 +2420,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
               <label className="ppt-material-name"><span>材料名称</span><input value={pptMaterialName} maxLength={40} onChange={(event) => setPptMaterialName(event.target.value)} /></label>
               <div className="ppt-section-head"><b>导出内容</b><span>封面固定</span></div>
               <div className="ppt-section-list">
-                {PPT_EXPORT_SECTIONS.map((section) => <label key={section.id} className="ppt-section-option"><input type="checkbox" checked={pptSections.includes(section.id)} onChange={(event) => setPptSections((current) => event.target.checked ? [...current, section.id] : current.filter((item) => item !== section.id))} /><span>{section.label}</span></label>)}
+                {exportSections.map((section) => <label key={section.id} className="ppt-section-option"><input type="checkbox" checked={pptSections.includes(section.id)} onChange={(event) => setPptSections((current) => event.target.checked ? [...current, section.id] : current.filter((item) => item !== section.id))} /><span>{section.label}</span></label>)}
               </div>
               {halfYearSequence(start, end).length > MAX_PPT_HALF_YEARS && <p className="ppt-range-warning">PPT 一次最多支持 {MAX_PPT_HALF_YEARS} 个连续半年，请缩短导出区间。</p>}
             </div>
@@ -2432,7 +2436,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
             <dl className="export-type-meta">
               <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
               <div><dt>需求池</dt><dd>{workbookRequirementCount} 条</dd></div>
-              <div><dt>分层分级</dt><dd>{tieringWorkbookRequirementCount} 条符合需求</dd></div>
+              <div><dt>分层分级</dt><dd>{tieringWorkbookRequirementCount} 条需求</dd></div>
               <div><dt>图片</dt><dd>不包含</dd></div>
             </dl>
             <div className="export-card-actions">
@@ -2492,7 +2496,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
           <div className="import-file"><b>{workbookPreview.fileName}</b><span>{workbookPreview.formatVersion} · 导出于 {formatDateTime(workbookPreview.exportedAt)}</span></div>
           <dl className="import-counts workbook-counts"><div><dt>新增需求</dt><dd>{workbookPreview.counts.added} 条</dd></div><div><dt>修改需求</dt><dd>{workbookPreview.counts.updated} 条</dd></div><div><dt>删除需求</dt><dd>{workbookPreview.counts.deleted} 条</dd></div><div><dt>未变化</dt><dd>{workbookPreview.counts.unchanged} 条</dd></div><div><dt>领域 / 产品调整</dt><dd>{workbookPreview.counts.domainsChanged} / {workbookPreview.counts.productsChanged}</dd></div><div><dt>卡片调整</dt><dd>{workbookPreview.counts.groupOverridesChanged} 项</dd></div><div><dt>冲突</dt><dd>{workbookPreview.counts.conflicts} 项</dd></div><div><dt>校验错误</dt><dd>{workbookPreview.errors.length} 项</dd></div></dl>
           {workbookPreview.errors.length > 0 && <ImportIssueList title="需要先修正的错误" tone="error" items={workbookPreview.errors} />}
-          {["v8", "v9", "v10"].includes(workbookPreview.formatVersion) ? <>
+          {["v8", "v9", "v10", "v11"].includes(workbookPreview.formatVersion) ? <>
             {workbookPreview.errors.length === 0 && <div className="import-differences workbook-field-differences"><div className="import-differences-head"><b>逐项选择合入</b><div className="workbook-select-all"><span>已选 {workbookSelectedChanges.length} / {selectableWorkbookChangeIds.length} 项，默认不勾选</span><button type="button" className="button ghost" disabled={!selectableWorkbookChangeIds.length || Boolean(workbookApplying)} onClick={() => setWorkbookSelectedChanges((current) => selectableWorkbookChangeIds.every((id) => current.includes(id)) ? [] : selectableWorkbookChangeIds)}>{selectableWorkbookChangeIds.length && selectableWorkbookChangeIds.every((id) => workbookSelectedChanges.includes(id)) ? "取消全选" : "全选"}</button></div></div><div className="import-difference-scroll">
               {(workbookPreview.fieldChanges ?? []).map((change) => {
                 const checked = workbookSelectedChanges.includes(change.id);
@@ -2505,7 +2509,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
               })}
               {!workbookPreview.fieldChanges?.length && <p className="workbook-no-changes">文件与本机没有可合入的差异。</p>}
             </div></div>}
-            {workbookPreview.errors.length === 0 && <div className="import-guidance"><b>合入规则</b><span>只写入勾选并选择采用 Excel 的字段；未勾选的需求字段、来源、匹配产品、图片和详细规格均保留本机。删除需求仅由“操作”列触发。</span></div>}
+            {workbookPreview.errors.length === 0 && <div className="import-guidance"><b>合入规则</b><span>只写入勾选并选择采用 Excel 的字段；未勾选的需求字段、路标匹配、医疗节点、匹配产品、图片和详细规格均保留本机。删除需求仅由“操作”列触发。</span></div>}
             <div className="import-dialog-actions"><button className="button ghost" onClick={() => setWorkbookPreview(null)} disabled={Boolean(workbookApplying)}>取消</button><button className="button dark" onClick={() => applyWorkbook("local-wins")} disabled={Boolean(workbookApplying) || workbookPreview.errors.length > 0 || workbookSelectedChanges.some((id) => workbookPreview.fieldChanges?.find((change) => change.id === id)?.conflict && !workbookConflictDecisions[id])}>{workbookApplying ? "合入中…" : `合入已选 ${workbookSelectedChanges.length} 项`}</button></div>
           </> : <>
             {workbookPreview.errors.length === 0 && workbookPreview.conflicts.length > 0 && <ImportIssueList title="本机与 Excel 同时修改" tone="warning" items={workbookPreview.conflicts} />}
@@ -2578,11 +2582,11 @@ function Empty({ title, body }: { title: string; body: string }) {
 }
 
 function pageTitle(page: Page): string {
-  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标", tiering: "分层分级", dictionaries: "字典设置", template: "导出中心" })[page];
+  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标查看", matching: "需求匹配", tiering: "分层分级", dictionaries: "字典设置", template: "导出中心" })[page];
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "结构化维护上线需求，双击任意行快速编辑", summary: "按时间观察三端投入、业务占比与分类趋势", roadmap: "运动、健康、行业、全场景、health平台、AI、医疗认证七类路标", tiering: "离线管理十五个华为产品系列对运动健康原子功能的支持规格", dictionaries: "维护领域、产品与人员责任矩阵", template: "导出受保护需求路标、协作表格与完整需求包" })[page];
+  return ({ requirements: "录入与维护需求，路标归属在需求匹配中调整", matching: "勾选需求，独立匹配路标和泳道", summary: "按时间观察需求投入、路标匹配与分类趋势", roadmap: "按路标及泳道字典展示已匹配需求", tiering: "管理全部需求在十五个华为产品系列的支持规格", dictionaries: "维护领域、产品、人员及路标泳道", template: "导出受保护路标、需求表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {
@@ -2606,7 +2610,7 @@ function formatMonth(value: string): string {
 }
 
 function formatRequirementLaunch(item: Pick<Requirement, "targetMonth" | "historicalLaunch">): string {
-  if (!item.targetMonth) return "送检版本未填写";
+  if (!item.targetMonth) return "历史空日期";
   return item.historicalLaunch ? formatHistoricalLaunch(item.historicalLaunch, item.targetMonth) : formatMonth(item.targetMonth);
 }
 

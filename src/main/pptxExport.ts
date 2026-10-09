@@ -212,17 +212,25 @@ function addRoadmapSlide(pptx: PptxPresentation, page: PaginatedRoadmapPage): vo
   const continuation = page.continuationCount > 1
     ? `（${page.continuationIndex ? "续 " : ""}${page.continuationIndex + 1}/${page.continuationCount}）`
     : "";
-  text(slide, `${page.track}路标${continuation}`, 50, 20, 650, 38, 24, C.ink, true, "left", "mid");
+  text(slide, `${page.name ?? `${page.track}路标`}${continuation}`, 50, 20, 650, 38, 24, C.ink, true, "left", "mid");
   text(slide, String(slideNumber).padStart(2, "0"), 1170, 26, 46, 18, 9, C.ink, true, "right");
   line(slide, 50, 64, 1170, 0, C.faint, 1);
-  if (page.track === "医疗认证") drawMedicalCertificationTable(slide, page);
+  if (page.kind === "medical" || page.track === "医疗认证") drawMedicalCertificationTable(slide, page);
   else drawRoadmapTable(slide, page);
   notes(slide, page.track === "医疗认证" ? "全部医疗认证需求按独立泳道展示，共享五节点月份轴；超过十二个月或纵向容量时自动续页，产品名称显示在对应需求左侧。" : `${page.track}路标按半年展示；每条圆点文本对应一条独立需求记录，不展示产品名称。`);
 }
 
 export function paginateRoadmapPage(page: PptRoadmapPagePlan): PaginatedRoadmapPage[] {
-  if (page.track === "医疗认证") return paginateMedicalCertificationPage(page);
-  const lanes = roadmapLanesForTrack(page.track);
+  if (page.kind === "medical" || page.track === "医疗认证") return paginateMedicalCertificationPage(page);
+  if (page.lanes && page.lanes.length > 3) {
+    const parts: PaginatedRoadmapPage[] = [];
+    for (let index = 0; index < page.lanes.length; index += 3) {
+      const lanes = page.lanes.slice(index, index + 3);
+      parts.push(...paginateRoadmapPage({ ...page, lanes, groups: page.groups.filter((group) => lanes.some((lane) => groupMatchesRoadmapLane(group, lane.id))) }));
+    }
+    return parts.map((part, continuationIndex) => ({ ...part, continuationIndex, continuationCount: parts.length }));
+  }
+  const lanes = page.lanes ? (page.lanes.length ? page.lanes.map((item) => item.id) : ["__empty_lane"]) : roadmapLanesForTrack(page.track);
   const cellWidth = (ROADMAP_TABLE.w - ROADMAP_TABLE.laneW) / page.halfYears.length;
   const cellHeight = (ROADMAP_TABLE.h - ROADMAP_TABLE.headerH) / lanes.length;
   const chunksByCell: RoadmapGroup[][][] = [];
@@ -270,7 +278,7 @@ export function paginateRoadmapPage(page: PptRoadmapPagePlan): PaginatedRoadmapP
 
 function drawRoadmapTable(slide: PptxSlide, page: PptRoadmapPagePlan): void {
   const { x, y, w, h, laneW, headerH } = ROADMAP_TABLE;
-  const lanes = roadmapLanesForTrack(page.track);
+  const lanes = page.lanes ? (page.lanes.length ? page.lanes.map((item) => item.id) : ["__empty_lane"]) : roadmapLanesForTrack(page.track);
   const halfW = (w - laneW) / page.halfYears.length;
   const bodyH = h - headerH;
   const laneH = bodyH / lanes.length;
@@ -303,7 +311,8 @@ function drawRoadmapTable(slide: PptxSlide, page: PptRoadmapPagePlan): void {
   });
   lanes.forEach((lane, laneIndex) => {
     const rowY = y + headerH + laneIndex * laneH;
-    text(slide, lane, x + 4, rowY, laneW - 8, laneH, lane.length > 4 ? 12 : 16, C.ink, true, "center", "mid");
+    const laneName = page.lanes?.find((item) => item.id === lane)?.name ?? (lane === "__empty_lane" ? "请添加泳道" : lane);
+    text(slide, laneName, x + 4, rowY, laneW - 8, laneH, laneName.length > 4 ? 12 : 16, C.ink, true, "center", "mid");
     page.halfYears.forEach((halfYear, halfIndex) => {
       const cellX = x + laneW + halfIndex * halfW;
       const groups = groupsForHalfYear(page.groups, halfYear).filter((group) => groupMatchesRoadmapLane(group, lane));
@@ -460,7 +469,7 @@ function drawMedicalCertificationTable(slide: PptxSlide, page: PaginatedRoadmapP
     const titleH = titleLines.length * 15;
     text(slide, titleLines.join("\n"), x + 9, rowY + 10, laneW - 18, titleH, 8, C.ink, true, "left", "top", { margin: 0, wrap: false });
     rect(slide, x + 9, rowY + 13 + titleH, 48, 17, requirement.source === "NMPA认证" ? "D64D85" : C.blue, C.white, 0, 3);
-    text(slide, requirement.source === "NMPA认证" ? "NMPA" : "CE", x + 9, rowY + 13 + titleH, 48, 17, 8, C.white, true, "center", "mid");
+    text(slide, group.laneName ?? (requirement.source === "NMPA认证" ? "NMPA" : "CE"), x + 9, rowY + 13 + titleH, laneW - 18, 17, 8, C.white, true, "left", "mid");
     const names = group.requirementProductNames[requirement.id] ?? [];
     if (names.length) {
       const productLines = wrapText(names.join("、"), laneW - 30, 8, false);
@@ -490,7 +499,7 @@ function drawMedicalCertificationTable(slide: PptxSlide, page: PaginatedRoadmapP
     line(slide, x, rowY + height, w, 0, C.faint, 0.7);
     rowY += height;
   }
-  text(slide, months.length ? `全部医疗需求，独立自动范围；本段 ${months[0]} 至 ${months.at(-1)}` : "全部医疗需求，暂无已填写日期", x, y + h + 9, w, 20, 9, C.muted);
+  text(slide, months.length ? `已匹配医疗需求，独立自动范围；本段 ${months[0]} 至 ${months.at(-1)}` : "已匹配医疗需求，暂无已填写日期", x, y + h + 9, w, 20, 9, C.muted);
 }
 
 function wrapText(value: string, maxWidth: number, fontSize: number, bold: boolean): string[] {

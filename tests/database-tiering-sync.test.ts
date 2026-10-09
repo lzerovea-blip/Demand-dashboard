@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "sql.js";
 import JSZip from "jszip";
 import { LocalDatabase } from "../src/main/database";
+import { createWorkspacePackage, inspectWorkspacePackage } from "../src/main/workspacePackage";
 import { createWorkspaceWorkbook as createCurrentWorkspaceWorkbook, inspectWorkspaceWorkbook } from "../src/main/workspaceWorkbook";
 import { EMPTY_TIERING_DATA, domainReferenceMessages, renameIndependentTieringDomain, resolveTieringFeature } from "../src/shared/tiering";
 import type { DictionaryItem, Requirement, SaveRequirementInput, Member, TieringFeature, WorkspaceData } from "../src/shared/types";
@@ -56,6 +57,22 @@ afterEach(async () => {
 });
 
 describe("领域与分层同步（真实 SQLite 事务）", () => {
+  it("v0.9.0 新需求、独立医疗计划及解除匹配持久化；可生成隔离工作台验收数据", async () => {
+    const input = { ...requirement, id: undefined, source: undefined } as SaveRequirementInput;
+    await database.saveRequirement({ ...input, title: "批量匹配演示需求" });
+    const normal = database.getSnapshot().requirements.find((r)=>r.title==="批量匹配演示需求")!;
+    expect(database.getSnapshot().roadmapAssignments!.some((a)=>a.requirementId===normal.id)).toBe(false);
+    await database.saveRoadmapAssignments({ requirementIds:[normal.id], roadmapId:"运动", laneId:"运动高阶" });
+    await database.saveRequirement({ ...input, title:"医疗认证独立排期演示", targetMonth:"2027-06" });
+    const medical = database.getSnapshot().requirements.find((r)=>r.title==="医疗认证独立排期演示")!;
+    await database.saveRoadmapAssignments({ requirementIds:[medical.id], roadmapId:"医疗认证", laneId:"CE认证" });
+    await database.saveMedicalRoadmapPlan({ requirementId:medical.id, roadmapId:"医疗认证", registrationStartMonth:"2027-01", submissionMonth:"2027-02", clinicalStartMonth:"2027-04", clinicalCompleteMonth:"2027-07", certificateMonth:"2028-03", updatedAt:timestamp });
+    await database.saveRequirement({ ...input, title:"新录入尚未匹配的需求" });
+    const before = database.getSnapshot();
+    const reopened = await open(); expect(reopened.getSnapshot()).toEqual(before);
+    const qa = process.env.ROADMAP_V090_QA_DIR;
+    if (qa) { await mkdir(qa,{recursive:true}); await writeFile(join(qa,"roadmap.db"),Buffer.from(internals().db.export())); }
+  });
   it("v8 逐项勾选在同一事务写入需求标题与系列状态，未选字段保持本机", async () => {
     const bytes = await createCurrentWorkspaceWorkbook(database.getWorkspaceData(), "0.8.26", timestamp, undefined, "v8");
     const zip = await JSZip.loadAsync(bytes);
@@ -72,6 +89,15 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     expect(database.getSnapshot().tiering!.changeLogs).toHaveLength(1);
     const reopened = await open();
     expect(reopened.getSnapshot().tiering!.supportRecords.find((item) => item.seriesId === "PS01")?.status).toBe("支持");
+  });
+  it("升级前的 v10 删除操作不会因为来源字段移除而产生假冲突，回导同步清理匹配", async () => {
+    const original = await createCurrentWorkspaceWorkbook(data(), "0.8.31", timestamp, undefined, "v10");
+    const zip = await JSZip.loadAsync(original); const xml = await zip.file("xl/worksheets/sheet1.xml")!.async("string");
+    zip.file("xl/worksheets/sheet1.xml", xml.replace(/<c r="B2"([^>]*)>[\s\S]*?<\/c>/, (_all, attrs: string) => `<c r="B2" ${/s="\d+"/.exec(attrs)?.[0] ?? ""} t="inlineStr"><is><t>删除</t></is></c>`));
+    const prepared = await inspectWorkspaceWorkbook(await zip.generateAsync({type:"nodebuffer"}),"升级前v10.xlsx",database.getWorkspaceData());
+    expect(prepared.preview.errors).toEqual([]); expect(prepared.preview.fieldChanges?.[0]).toMatchObject({ kind:"delete", conflict:false });
+    await database.importWorkspaceWorkbook(prepared,"local-wins",{selectedChangeIds:["r1:delete"],conflictDecisions:{}});
+    expect(database.getSnapshot().roadmapAssignments).toEqual([]); expect(database.getSnapshot().requirements).toEqual([]);
   });
   it("删除记录跨重启持久化，旧包不复活需求，较新修改可以恢复", async () => {
     await database.deleteRequirement("r1");
@@ -147,34 +173,34 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
 
   it("医疗泳道排序跨来源、空日期持久化，编辑保留、复制追加且保存失败回滚", async () => {
     await database.importWorkspace(data(["a", "b", "c"].map((id, index) => ({ ...requirement, id, source: index === 1 ? "CE认证" : "NMPA认证", targetMonth: index === 2 ? "" : "2027-03" }))), "replace");
-    await database.saveMedicalRoadmapOrder({ requirementIds: ["c", "b", "a"] });
+    await database.saveMedicalRoadmapPlanOrder({ roadmapId: "医疗认证", requirementIds: ["c", "b", "a"] });
     const reopened = await open();
-    expect([...reopened.getSnapshot().requirements].sort((a, b) => a.medicalRoadmapSortOrder! - b.medicalRoadmapSortOrder!).map((item) => item.id)).toEqual(["c", "b", "a"]);
+    expect([...reopened.getSnapshot().medicalRoadmapPlans!].sort((a, b) => a.sortOrder! - b.sortOrder!).map((item) => item.requirementId)).toEqual(["c", "b", "a"]);
     const edited = reopened.getSnapshot().requirements.find((item) => item.id === "c")!;
     await reopened.saveRequirement({ ...edited, title: "改名仍保留顺序" } as SaveRequirementInput);
-    expect(reopened.getSnapshot().requirements.find((item) => item.id === "c")?.medicalRoadmapSortOrder).toBe(0);
+    expect(reopened.getSnapshot().medicalRoadmapPlans!.find((item) => item.requirementId === "c")?.sortOrder).toBe(0);
     await reopened.duplicateRequirement("c");
     expect(reopened.getSnapshot().requirements.find((item) => !["a", "b", "c"].includes(item.id))?.medicalRoadmapSortOrder).toBeUndefined();
     const before = reopened.getSnapshot();
-    await expect(reopened.saveMedicalRoadmapOrder({ requirementIds: ["a", "a"] })).rejects.toThrow(/重复/);
-    await expect(reopened.saveMedicalRoadmapOrder({ requirementIds: ["a", "missing"] })).rejects.toThrow(/刷新/);
+    await expect(reopened.saveMedicalRoadmapPlanOrder({ roadmapId: "医疗认证", requirementIds: ["a", "a"] })).rejects.toThrow(/集合已变化/);
+    await expect(reopened.saveMedicalRoadmapPlanOrder({ roadmapId: "医疗认证", requirementIds: ["a", "missing"] })).rejects.toThrow(/集合已变化/);
     const persist = vi.spyOn(internals(reopened), "persist").mockRejectedValueOnce(new Error("模拟落盘失败"));
-    await expect(reopened.saveMedicalRoadmapOrder({ requirementIds: ["a", "b", "c"] })).rejects.toThrow("模拟落盘失败");
+    await expect(reopened.saveMedicalRoadmapPlanOrder({ roadmapId: "医疗认证", requirementIds: ["a", "b", "c"] })).rejects.toThrow("模拟落盘失败");
     persist.mockRestore();
     expect(reopened.getSnapshot()).toEqual(before);
     // Exercise SQL transaction rollback separately from a persistence failure.
     const run = internals(reopened).db.run.bind(internals(reopened).db);
     let writes = 0;
     const spy = vi.spyOn(internals(reopened).db, "run").mockImplementation((sql, params) => {
-      if (String(sql).startsWith("UPDATE requirements SET payload") && ++writes === 2) throw new Error("模拟事务失败");
+      if (String(sql).startsWith("INSERT INTO medical_roadmap_plans") && ++writes === 2) throw new Error("模拟事务失败");
       return run(sql, params);
     });
-    await expect(reopened.saveMedicalRoadmapOrder({ requirementIds: ["a", "b", "c"] })).rejects.toThrow("模拟事务失败");
+    await expect(reopened.saveMedicalRoadmapPlanOrder({ roadmapId: "医疗认证", requirementIds: ["a", "b", "c"] })).rejects.toThrow("模拟事务失败");
     spy.mockRestore();
     expect(reopened.getSnapshot()).toEqual(before);
   });
 
-  it("仅九个运动、健康和 AI 来源生成分层记录，其他来源复制也不生成", async () => {
+  it("旧十四来源需求均进入分层；复制生成分层但不复制路标归属", async () => {
     const included = [
       "运动基础", "运动进阶", "运动高阶",
       "健康基础", "健康进阶", "健康高阶",
@@ -189,59 +215,60 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     }));
     await database.importWorkspace(data(requirements), "replace");
     const snapshot = database.getSnapshot();
-    expect(snapshot.tiering?.features).toHaveLength(included.length);
-    expect(snapshot.tiering?.supportRecords).toHaveLength(included.length * 15);
-    expect(snapshot.requirements.filter((item) => included.includes(item.source as typeof included[number])).every((item) => Boolean(item.tieringFeatureId))).toBe(true);
-    expect(snapshot.requirements.filter((item) => excluded.includes(item.source as typeof excluded[number])).every((item) => item.tieringFeatureId === undefined)).toBe(true);
-    const excludedRequirement = snapshot.requirements.find((item) => item.source === "行业")!;
+    expect(snapshot.tiering?.features).toHaveLength(requirements.length);
+    expect(snapshot.tiering?.supportRecords).toHaveLength(requirements.length * 15);
+    expect(snapshot.requirements.every((item) => Boolean(item.tieringFeatureId))).toBe(true);
+    const excludedRequirement = snapshot.requirements.find((item) => item.title === "行业需求")!;
     const duplicated = await database.duplicateRequirement(excludedRequirement.id);
-    expect(duplicated.tiering?.features).toHaveLength(included.length);
-    expect(duplicated.requirements.find((item) => item.id !== excludedRequirement.id && item.title.startsWith("行业需求 副本"))?.tieringFeatureId).toBeUndefined();
+    expect(duplicated.tiering?.features).toHaveLength(requirements.length + 1);
+    const copy = duplicated.requirements.find((item) => item.title.startsWith("行业需求 副本"))!;
+    expect(copy.tieringFeatureId).toBeDefined();
+    expect(duplicated.roadmapAssignments!.some((item) => item.requirementId === copy.id)).toBe(false);
   });
 
-  it("来源跨范围修改原子清理普通规格、支持明细、待核验和变更记录，再改回时重建未判断矩阵", async () => {
+  it("路标归属调整不改变需求分层、支持明细、待核验或变更记录", async () => {
     await database.saveTieringSupport({ recordId: "REQ-r1::PS01", status: "支持", reason: "确认支持" });
     const issue = {
       id: "issue-r1", featureId: "REQ-r1", seriesIds: ["PS01"], issueType: "待核验", description: "核验",
       priority: "P1", status: "待处理", sourceIds: [], owner: "", createdAt: timestamp, targetDate: "", updatedAt: timestamp, resolution: "",
     };
     internals().db.run("INSERT INTO tiering_issues (id, updated_at, payload) VALUES (?, ?, ?)", [issue.id, issue.updatedAt, JSON.stringify(issue)]);
-    const excluded = await database.saveRequirement({ ...database.getSnapshot().requirements[0], source: "行业" } as SaveRequirementInput);
-    expect(excluded.requirements[0].source).toBe("行业");
-    expect(excluded.requirements[0]).not.toHaveProperty("tieringFeatureId");
-    expect(excluded.tiering).toMatchObject({ features: [], supportRecords: [], verificationIssues: [], changeLogs: [] });
-
-    const restored = await database.saveRequirement({ ...excluded.requirements[0], source: "AI综合" } as SaveRequirementInput);
+    const before = database.getSnapshot();
+    const excluded = await database.saveRoadmapAssignments({ requirementIds: ["r1"], roadmapId: "行业", laneId: "行业" });
+    expect(excluded.requirements).toEqual(before.requirements);
+    expect(excluded.tiering).toEqual(before.tiering);
+    const restored = await database.saveRoadmapAssignments({ requirementIds: ["r1"], roadmapId: "AI", laneId: "AI综合" });
     expect(restored.requirements[0].tieringFeatureId).toBe("REQ-r1");
     expect(restored.tiering?.features).toHaveLength(1);
     expect(restored.tiering?.supportRecords).toHaveLength(15);
-    expect(restored.tiering?.supportRecords.every((item) => item.status === "未判断")).toBe(true);
-    expect(restored.tiering?.verificationIssues).toEqual([]);
-    expect(restored.tiering?.changeLogs).toEqual([]);
+    expect(restored.tiering?.supportRecords.find((item) => item.id === "REQ-r1::PS01")?.status).toBe("支持");
+    expect(restored.tiering?.verificationIssues).toHaveLength(1);
+    expect(restored.tiering?.changeLogs).toHaveLength(1);
   });
 
   it("历史 F001–F156 在关联需求移出范围时只解除关联，保留历史规格和支持矩阵", async () => {
     await database.importWorkspace(data([{ ...requirement, tieringFeatureId: "F001" }]), "replace");
     await database.saveTieringSupport({ recordId: "F001::PS01", status: "支持", reason: "历史核验" });
-    const moved = await database.saveRequirement({ ...database.getSnapshot().requirements[0], source: "health平台" } as SaveRequirementInput);
-    expect(moved.requirements[0].tieringFeatureId).toBeUndefined();
-    expect(moved.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: undefined }));
+    const moved = await database.saveRoadmapAssignments({ requirementIds: ["r1"], roadmapId: "health平台", laneId: "health平台" });
+    expect(moved.requirements[0].tieringFeatureId).toBe("F001");
+    expect(moved.tiering?.features).toContainEqual(expect.objectContaining({ id: "F001", requirementId: "r1" }));
     expect(moved.tiering?.supportRecords).toHaveLength(15);
     expect(moved.tiering?.supportRecords.find((item) => item.id === "F001::PS01")?.status).toBe("支持");
     expect(moved.tiering?.changeLogs).toHaveLength(1);
   });
 
-  it("v11 启动迁移清理旧库中非目标路标的普通分层数据，保留需求本身", async () => {
+  it("v12 启动为全部旧需求保留分层并迁移来源，重复运行不重建归属", async () => {
     const current = database.getSnapshot().requirements[0];
     const legacy = { ...current, source: "全场景" as const, tieringFeatureId: "REQ-r1" };
     internals().db.run("UPDATE requirements SET payload = ? WHERE id = ?", [JSON.stringify(legacy), legacy.id]);
     internals().db.run("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
+    internals().db.run("DELETE FROM settings WHERE key='roadmap_management_initialized'");
     await internals().persist();
     const upgraded = await open();
-    expect(upgraded.getSnapshot().requirements).toContainEqual(expect.objectContaining({ id: "r1", source: "全场景" }));
-    expect(upgraded.getSnapshot().requirements[0]).not.toHaveProperty("tieringFeatureId");
-    expect(upgraded.getSnapshot().tiering).toMatchObject({ features: [], supportRecords: [], verificationIssues: [], changeLogs: [] });
-    expect(internals(upgraded).db.exec("SELECT value FROM meta WHERE key = 'schema_version'")[0].values[0][0]).toBe("11");
+    expect(upgraded.getSnapshot().requirements[0]).toMatchObject({ id: "r1", tieringFeatureId: "REQ-r1" });
+    expect(upgraded.getSnapshot().requirements[0].source).toBeUndefined();
+    expect(upgraded.getSnapshot().roadmapAssignments).toContainEqual(expect.objectContaining({ roadmapId: "全场景", requirementId: "r1" }));
+    expect(internals(upgraded).db.exec("SELECT value FROM meta WHERE key = 'schema_version'")[0].values[0][0]).toBe("12");
   });
 
   it("旧包中的普通孤立规格会清理，F001–F156 独立历史规格继续保留", async () => {
@@ -259,7 +286,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     expect(imported.tiering?.supportRecords.filter((item) => item.featureId === "F002")).toHaveLength(15);
   });
 
-  it("Excel 回导将来源移出范围时，需求更新与分层清理同一事务生效", async () => {
+  it("旧 Excel 的来源修改被忽略，分层与路标匹配均保持", async () => {
     await database.saveTieringSupport({ recordId: "REQ-r1::PS01", status: "支持", reason: "回导前状态" });
     const workspace = database.getWorkspaceData();
     const zip = await JSZip.loadAsync(await createWorkspaceWorkbook(workspace, "0.8.24", timestamp));
@@ -268,9 +295,10 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     const prepared = await inspectWorkspaceWorkbook(await zip.generateAsync({ type: "nodebuffer" }), "来源移出范围.xlsx", workspace);
     expect(prepared.preview.errors).toEqual([]);
     const imported = await database.importWorkspaceWorkbook(prepared, "excel-wins");
-    expect(imported.requirements[0].source).toBe("行业");
-    expect(imported.requirements[0]).not.toHaveProperty("tieringFeatureId");
-    expect(imported.tiering).toMatchObject({ features: [], supportRecords: [], verificationIssues: [], changeLogs: [] });
+    expect(imported.requirements[0].source).toBeUndefined();
+    expect(imported.requirements[0].tieringFeatureId).toBe("REQ-r1");
+    expect(imported.roadmapAssignments).toEqual(workspace.roadmapAssignments);
+    expect(imported.tiering?.supportRecords.find((item)=>item.id === "REQ-r1::PS01")?.status).toBe("支持");
   });
 
   it("v7 启动升级前备份，唯一责任人补齐并为全部规格增加四个未判断系列", async () => {
@@ -291,7 +319,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     expect(snapshot.tiering?.productSeries.map((item) => item.name)).toEqual(["WATCH数字系列", "WATCH Pro系列", "GT系列", "GT Pro系列", "ULTIMATE系列", "FIT系列", "FIT Pro系列", "D系列", "WATCH Buds系列", "Band系列", "Band Pro系列", "儿童手表", "体脂秤", "戒指系列", "无屏系列"]);
     expect(snapshot.tiering?.supportRecords).toHaveLength(15);
     expect(snapshot.tiering?.supportRecords.filter((item) => ["PS10", "PS11", "PS12", "PS13"].includes(item.seriesId)).every((item) => item.status === "未判断")).toBe(true);
-    expect((await readdir(join(environment.directory, "backups"))).some((name) => name.startsWith("roadmap-before-v0.8.24-"))).toBe(true);
+    expect((await readdir(join(environment.directory, "backups"))).some((name) => name.startsWith("roadmap-before-v0.9.0-"))).toBe(true);
   });
 
   it("旧库启动补齐 WATCH Pro 与 Band Pro，不继承原系列结论且重复启动不产生副本", async () => {
@@ -348,37 +376,87 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     expect(deleted.tiering!.supportRecords.find((item) => item.id === "REQ-r1::PS01")?.status).toBe("支持");
   });
 
-  it("医疗认证需求保存、复制和切换普通来源时正确维护节点", async () => {
-    const medical = await database.saveRequirement({
-      ...database.getSnapshot().requirements[0],
-      source: "NMPA认证",
-      targetMonth: "2027-03",
-      medicalSubmissionMilestones: { registrationStartMonth: "2027-01", clinicalStartMonth: "2027-04", certificateMonth: "2027-08" },
-    } as SaveRequirementInput);
-    expect(medical.requirements[0].medicalSubmissionMilestones).toEqual({ registrationStartMonth: "2027-01", clinicalStartMonth: "2027-04", certificateMonth: "2027-08" });
-    const copied = await database.duplicateRequirement(medical.requirements[0].id);
-    expect(copied.requirements.find((item) => item.id !== medical.requirements[0].id)?.medicalSubmissionMilestones).toEqual(medical.requirements[0].medicalSubmissionMilestones);
-    await expect(database.saveRequirement({ ...medical.requirements[0], targetMonth: "2026-12" } as SaveRequirementInput)).resolves.toBeDefined();
-    const cleared = await database.saveRequirement({ ...medical.requirements[0], source: "健康基础" } as SaveRequirementInput);
-    expect(cleared.requirements.find((item) => item.id === medical.requirements[0].id)?.medicalSubmissionMilestones).toBeUndefined();
+  it("医疗节点独立保存，需求编辑、复制和解除匹配均不篡改节点", async () => {
+    await database.saveRoadmapAssignments({ requirementIds: ["r1"], roadmapId: "医疗认证", laneId: "CE认证" });
+    const plan = { requirementId: "r1", roadmapId: "医疗认证", submissionMonth: "2028-05", registrationStartMonth: "2027-01", clinicalStartMonth: "2026-04", certificateMonth: "2025-08", updatedAt: timestamp };
+    await database.saveMedicalRoadmapPlan(plan);
+    const before = database.getSnapshot().medicalRoadmapPlans;
+    await database.saveRequirement({ ...database.getSnapshot().requirements[0], targetMonth: "2026-12" } as SaveRequirementInput);
+    expect(database.getSnapshot().medicalRoadmapPlans).toEqual(before);
+    const copied = await database.duplicateRequirement("r1");
+    const copy = copied.requirements.find((item)=>item.id!=="r1")!;
+    expect(copied.roadmapAssignments!.some((a)=>a.requirementId===copy.id)).toBe(false);
+    expect(copied.medicalRoadmapPlans).toEqual(before);
+    await database.saveRoadmapAssignments({ requirementIds: ["r1"] });
+    expect((await open()).getSnapshot().medicalRoadmapPlans).toEqual(before);
+    await database.saveRoadmapAssignments({ requirementIds: ["r1"], roadmapId: "医疗认证", laneId: "NMPA认证" });
+    expect(database.getSnapshot().medicalRoadmapPlans).toEqual(before);
   });
 
-  it("空送检版本保存、复制、重启不补日期；非法日期或切回普通来源失败不部分更新", async () => {
-    const input = { ...requirement, source: "CE认证", targetMonth: "", medicalSubmissionMilestones: { registrationStartMonth: "2027-12", certificateMonth: "2025-01" } } as SaveRequirementInput;
-    await database.saveRequirement(input);
-    await database.duplicateRequirement(requirement.id);
+  it("历史空日期编辑和复制兼容，新建需求必填日期，非法医疗节点事务不写入", async () => {
+    await database.importWorkspace(data([{ ...requirement, source: "CE认证", targetMonth: "", medicalSubmissionMilestones: { certificateMonth: "2025-01" } }]), "replace");
+    await database.saveRequirement({ ...database.getSnapshot().requirements[0], title: "旧需求编辑" } as SaveRequirementInput);
+    await database.duplicateRequirement("r1");
     const reopened = await open();
-    expect(reopened.getSnapshot().requirements).toHaveLength(2);
-    expect(reopened.getSnapshot().requirements.every((item) => item.targetMonth === "" && item.medicalSubmissionMilestones?.certificateMonth === "2025-01")).toBe(true);
-    expect(reopened.getSnapshot().tiering?.features).toHaveLength(0);
-    expect(reopened.getSnapshot().requirements.every((item) => item.tieringFeatureId === undefined)).toBe(true);
+    expect(reopened.getSnapshot().requirements.every((item) => item.targetMonth === "")).toBe(true);
+    expect(reopened.getSnapshot().tiering?.features).toHaveLength(2);
+    expect(reopened.getSnapshot().medicalRoadmapPlans).toHaveLength(1);
     const before = reopened.getSnapshot();
-    await expect(reopened.saveRequirement({ ...input, source: "健康基础" })).rejects.toThrow(/上线年月/);
-    await expect(reopened.saveRequirement({ ...input, targetMonth: "2027-00" })).rejects.toThrow(/送检版本/);
+    await expect(reopened.saveRequirement({ ...requirement, id: undefined, targetMonth: "" } as SaveRequirementInput)).rejects.toThrow("新需求必须填写上线年月");
+    await expect(reopened.saveMedicalRoadmapPlan({ requirementId: "r1", roadmapId: "医疗认证", submissionMonth: "2027-00", updatedAt: timestamp })).rejects.toThrow("有效年月");
     expect(reopened.getSnapshot()).toEqual(before);
-    await reopened.saveRequirement({ ...input, targetMonth: "2028-03" });
-    await reopened.saveRequirement(input);
-    expect(reopened.getSnapshot().requirements.find((item) => item.id === requirement.id)?.targetMonth).toBe("");
+  });
+  it("遗留来源参数不能清空普通需求日期或改变路标匹配", async () => {
+    const before = database.getSnapshot();
+    await expect(database.saveRequirement({ ...before.requirements[0], source:"CE认证", targetMonth:"" } as SaveRequirementInput)).rejects.toThrow("上线年月");
+    expect(database.getSnapshot()).toEqual(before);
+  });
+
+  it("路标字典和批量匹配保护引用，保存失败及无效批次完整回滚", async () => {
+    await database.saveRoadmap({ name: "试验路标", kind: "standard", sortOrder: 0 });
+    const map = database.getSnapshot().roadmaps!.find((r)=>r.name==="试验路标")!;
+    await database.saveRoadmapLane({ roadmapId: map.id, name: "规划泳道", sortOrder: 0 });
+    const lane = database.getSnapshot().roadmapLanes!.find((r)=>r.roadmapId===map.id)!;
+    const beforeRequirement = database.getSnapshot().requirements[0];
+    await database.saveRoadmapAssignments({ requirementIds: ["r1"], roadmapId: map.id, laneId: lane.id });
+    expect(database.getSnapshot().requirements[0]).toEqual(beforeRequirement);
+    await expect(database.deleteRoadmap(map.id)).rejects.toThrow("仍有需求匹配");
+    await expect(database.deleteRoadmapLane(lane.id)).rejects.toThrow("仍被需求使用");
+    await expect(database.saveRoadmap({ ...map, kind: "medical" })).rejects.toThrow("不能更改");
+    const before = database.getSnapshot();
+    await expect(database.saveRoadmapAssignments({ requirementIds: ["r1","missing"], roadmapId: "健康", laneId: "健康基础" })).rejects.toThrow("集合已变化");
+    const persist = vi.spyOn(internals(),"persist").mockRejectedValueOnce(new Error("模拟落盘失败"));
+    await expect(database.saveRoadmapAssignments({ requirementIds:["r1"] })).rejects.toThrow("模拟落盘失败"); persist.mockRestore();
+    expect(database.getSnapshot()).toEqual(before);
+    await database.saveRoadmapAssignments({ requirementIds:["r1"] });
+    await expect(database.saveRoadmap({ ...map, kind:"medical" })).rejects.toThrow("不能更改");
+    await database.deleteRoadmapLane(lane.id); await database.deleteRoadmap(map.id);
+    expect((await open()).getSnapshot().roadmaps!.some((r)=>r.id===map.id)).toBe(false);
+  });
+  it("新分组键的卡片排序可以随完整包往返，导出不会出现空卡片标题", async () => {
+    const key = "健康::健康基础::a1::2027-03";
+    await database.saveGroupOrder({ source:"健康基础",roadmapId:"健康",laneId:"健康基础",targetMonth:"2027-03",groupKeys:[key] });
+    expect(database.getSnapshot().groupOverrides[0]).toMatchObject({ groupKey:key,cardTitle:"原标签",sortOrder:0 });
+    const archive = await createWorkspacePackage(database.getWorkspaceData(),"0.9.0");
+    const imported = await inspectWorkspacePackage(archive,"排序.roadmap");
+    expect(imported.data.groupOverrides[0]).toMatchObject({ groupKey:key,cardTitle:"原标签",sortOrder:0 });
+  });
+
+  it("删除无引用路标或泳道时一并清理旧卡片排序，完整包仍可导出", async () => {
+    await database.saveRoadmap({ name: "临时路标", kind: "standard" });
+    const roadmap = database.getSnapshot().roadmaps!.find((item) => item.name === "临时路标")!;
+    await database.saveRoadmapLane({ roadmapId: roadmap.id, name: "临时泳道" });
+    const lane = database.getSnapshot().roadmapLanes!.find((item) => item.roadmapId === roadmap.id)!;
+    await database.saveRoadmapAssignments({ requirementIds: ["r1"], roadmapId: roadmap.id, laneId: lane.id });
+    const groupKey = `${roadmap.id}::${lane.id}::a1::2027-03`;
+    await database.saveGroupOrder({ source: "", roadmapId: roadmap.id, laneId: lane.id, targetMonth: "2027-03", groupKeys: [groupKey] });
+    expect(database.getSnapshot().groupOverrides.some((item) => item.groupKey === groupKey)).toBe(true);
+    await database.saveRoadmapAssignments({ requirementIds: ["r1"] });
+    await database.deleteRoadmapLane(lane.id);
+    expect(database.getSnapshot().groupOverrides.some((item) => item.groupKey === groupKey)).toBe(false);
+    await database.deleteRoadmap(roadmap.id);
+    const archive = await createWorkspacePackage(database.getWorkspaceData(), "0.9.0");
+    expect((await inspectWorkspacePackage(archive, "删除后.roadmap")).data.groupOverrides).toEqual([]);
   });
 
   it("需求引用成员时禁止删除或更改岗位，改名不破坏责任人引用", async () => {

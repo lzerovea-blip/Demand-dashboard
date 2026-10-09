@@ -12,8 +12,14 @@ import { sumWorkloadBreakdown, workloadBreakdownOf, type WorkloadBreakdown, type
 import { splitTextIntoLines } from "./text.js";
 import { compareMedicalRoadmapRequirements } from "./medicalRoadmapOrder.js";
 import { isMedicalSubmissionSource, isValidRequirementMonth, medicalSubmissionTimeline } from "./medicalSubmission.js";
+import { assignmentGroupKey, projectedMedicalRequirement, roadmapDefinitionsFor, roadmapLanesFor } from "./roadmapManagement.js";
 
 export interface RoadmapGroup {
+  roadmapId?: string;
+  laneId?: string;
+  laneName?: string;
+  roadmapName?: string;
+  roadmapKind?: "standard" | "medical";
   key: string;
   domainId: string;
   domainName: string;
@@ -42,7 +48,7 @@ export interface MedicalRoadmapDemandRow {
 
 export function medicalRoadmapDemandRows(groups: RoadmapGroup[]): MedicalRoadmapDemandRow[] {
   return groups
-    .filter((group) => group.track === "医疗认证")
+    .filter((group) => group.roadmapKind === "medical" || group.track === "医疗认证")
     .flatMap((group) => group.requirements.map((requirement) => ({ group, requirement })))
     .sort((a, b) => compareMedicalRoadmapRequirements(a.requirement, b.requirement));
 }
@@ -109,7 +115,8 @@ export interface HalfYearSummary {
   requirementCount: number;
 }
 
-export function trackOf(source: RequirementSource): Track {
+export function trackOf(source: RequirementSource | undefined): Track {
+  if (!source) return "未匹配";
   if (source.startsWith("运动")) return "运动";
   if (source.startsWith("健康")) return "健康";
   if (source.startsWith("AI")) return "AI";
@@ -117,7 +124,8 @@ export function trackOf(source: RequirementSource): Track {
   return source as Track;
 }
 
-export function levelOf(source: RequirementSource): Level | null {
+export function levelOf(source: RequirementSource | undefined): Level | null {
+  if (!source) return null;
   if (!source.startsWith("运动") && !source.startsWith("健康")) return null;
   return source.replace(/^运动|^健康/, "") as Level;
 }
@@ -206,24 +214,39 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
   const overrides = new Map(snapshot.groupOverrides.map((item) => [item.groupKey, item]));
   const groups = new Map<string, Requirement[]>();
 
-  const dated = requirementsInRange(snapshot.requirements, start, end);
+  const assignments = new Map(snapshot.roadmapAssignments?.map((item) => [item.requirementId, item]));
+  const definitions = new Map(roadmapDefinitionsFor(snapshot).map((item) => [item.id, item]));
+  const lanes = new Map((snapshot.roadmapLanes ?? []).map((item) => [item.id, item]));
+  const candidates = snapshot.roadmapAssignments === undefined ? snapshot.requirements : snapshot.requirements
+    .filter((item) => assignments.has(item.id))
+    .map((item) => {
+      const assignment = assignments.get(item.id)!;
+      return definitions.get(assignment.roadmapId)?.kind === "medical"
+        ? projectedMedicalRequirement(item, snapshot.medicalRoadmapPlans?.find((plan) => plan.requirementId === item.id && plan.roadmapId === assignment.roadmapId), assignment.laneId) : item;
+    });
+  const dated = requirementsInRange(candidates, start, end);
   const visible = options.medicalDemandRows
     ? [...dated.filter((item) => !isMedicalSubmissionSource(item.source)),
-      ...snapshot.requirements.filter((item) => isMedicalSubmissionSource(item.source) && (options.medicalRange !== "selected" || medicalRequirementInRange(item, start, end)))]
+      ...candidates.filter((item) => isMedicalSubmissionSource(item.source) && (options.medicalRange !== "selected" || medicalRequirementInRange(item, start, end)))]
     : dated;
   for (const requirement of visible) {
     // Application-only medical lanes use identity keys, never persisted month/order keys.
     // Export callers retain the original dated grouping and exclude undated requirements.
+    const assignment = assignments.get(requirement.id);
     const key = options.medicalDemandRows && isMedicalSubmissionSource(requirement.source)
-      ? `medical-requirement:${requirement.id}` : groupKeyFor(requirement);
+      ? assignment ? `medical-requirement:${assignment.roadmapId}:${requirement.id}` : `medical-requirement:${requirement.id}`
+      : assignment ? assignmentGroupKey(assignment.roadmapId, assignment.laneId, requirement.domainId, requirement.targetMonth) : groupKeyFor(requirement);
     groups.set(key, [...(groups.get(key) ?? []), requirement]);
   }
 
   return [...groups.entries()]
     .map(([key, requirements]) => {
       const seed = requirements[0];
+      const assignment = assignments.get(seed.id);
+      const definition = assignment ? definitions.get(assignment.roadmapId) : undefined;
+      const lane = assignment ? lanes.get(assignment.laneId) : undefined;
       const domainName = domains.get(seed.domainId)?.name ?? "未命名领域";
-      const override = seed.targetMonth ? overrides.get(groupKeyFor(seed)) : undefined;
+      const override = seed.targetMonth ? overrides.get(key) : undefined;
       const productIds = [...new Set(requirements.flatMap((item) => item.productIds))];
       const overseasRegions = [...new Set(requirements.flatMap((item) => item.overseasRegions))];
       const categories = [...new Set(requirements.map((item) => item.category))];
@@ -239,8 +262,9 @@ export function buildRoadmapGroups(snapshot: AppSnapshot, start: string, end: st
         domainId: seed.domainId,
         domainName,
         domainSortOrder: domains.get(seed.domainId)?.sortOrder ?? Number.MAX_SAFE_INTEGER,
-        source: seed.source,
-        track: trackOf(seed.source),
+        roadmapId: assignment?.roadmapId, laneId: assignment?.laneId, laneName: lane?.name, roadmapName: definition?.name, roadmapKind: definition?.kind,
+        source: (assignment?.laneId ?? seed.source ?? "行业") as RequirementSource,
+        track: assignment?.roadmapId ?? trackOf(seed.source),
         level: levelOf(seed.source),
         overseasRegions,
         targetMonth: seed.targetMonth,
@@ -300,23 +324,26 @@ export function roadmapTrackOrder(groups: Pick<RoadmapGroup, "track">[]): Track[
 
 export type AiRoadmapLane = "AI运动" | "AI健康" | "AI综合";
 export type MedicalSubmissionRoadmapLane = "NMPA认证" | "CE认证";
-export type RoadmapLane = Level | AiRoadmapLane | MedicalSubmissionRoadmapLane | "需求";
+export type RoadmapLane = string;
 
-export function roadmapLanesForTrack(track: Track): readonly RoadmapLane[] {
+export function roadmapLanesForTrack(track: Track, snapshot?: Partial<AppSnapshot>): readonly RoadmapLane[] {
+  if (snapshot?.roadmapLanes !== undefined) return roadmapLanesFor(snapshot, track).map((lane) => lane.id);
   if (track === "运动" || track === "健康") return ["高阶", "进阶", "基础"];
   if (track === "AI") return ["AI运动", "AI健康", "AI综合"];
   if (track === "医疗认证") return ["NMPA认证", "CE认证"];
   return ["需求"];
 }
 
-export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level" | "source">, lane: RoadmapLane): boolean {
+export function groupMatchesRoadmapLane(group: Pick<RoadmapGroup, "track" | "level" | "source"> & Partial<Pick<RoadmapGroup, "laneId">>, lane: RoadmapLane): boolean {
+  if (group.laneId) return group.laneId === lane;
   if (group.track === "运动" || group.track === "健康") return group.level === lane;
   if (group.track === "AI") return group.source === lane;
   if (group.track === "医疗认证") return group.source === lane;
   return lane === "需求";
 }
 
-export function roadmapPrimaryLane(group: Pick<RoadmapGroup, "track" | "level" | "source">): RoadmapLane {
+export function roadmapPrimaryLane(group: Pick<RoadmapGroup, "track" | "level" | "source"> & Partial<Pick<RoadmapGroup, "laneId">>): RoadmapLane {
+  if (group.laneId) return group.laneId;
   if (group.track === "运动" || group.track === "健康") return group.level ?? "基础";
   if (group.track === "AI") return group.source as AiRoadmapLane;
   if (group.track === "医疗认证") return group.source as MedicalSubmissionRoadmapLane;
@@ -341,7 +368,7 @@ export function roadmapMonthColumnTemplateForTrack(
   return roadmapMonthColumnTemplate(months, groups.filter((item) => item.track === track));
 }
 
-export function buildHalfYearSummaries(requirements: Requirement[], start: string, end: string): HalfYearSummary[] {
+export function buildHalfYearSummaries(requirements: Requirement[], start: string, end: string, snapshot?: Partial<AppSnapshot>): HalfYearSummary[] {
   return halfYearSequence(start, end).map((halfYear) => {
     const items = requirements.filter((item) => isValidRequirementMonth(item.targetMonth) && halfYearOf(item.targetMonth) === halfYear);
     const threeSideTotal = (item: Requirement) => item.deviceWorkloadPm + item.appWorkloadPm + item.cloudWorkloadPm;
@@ -352,13 +379,13 @@ export function buildHalfYearSummaries(requirements: Requirement[], start: strin
       ]),
     ) as Record<RequirementSource, number>;
     const byTrack = Object.fromEntries(
-      ROADMAP_TRACKS.map((track) => [
+      (snapshot?.roadmapAssignments !== undefined ? [...roadmapDefinitionsFor(snapshot).map((item) => item.id), "未匹配"] : ROADMAP_TRACKS).map((track) => [
         track,
-        round(items.filter((item) => trackOf(item.source) === track).reduce((sum, item) => sum + threeSideTotal(item), 0)),
+        round(items.filter((item) => (snapshot?.roadmapAssignments !== undefined ? snapshot.roadmapAssignments.find((assignment) => assignment.requirementId === item.id)?.roadmapId ?? "未匹配" : trackOf(item.source)) === track).reduce((sum, item) => sum + threeSideTotal(item), 0)),
       ]),
     ) as Record<Track, number>;
-    const sportsWorkload = byTrack.运动;
-    const healthWorkload = byTrack.健康;
+    const sportsWorkload = byTrack.运动 ?? 0;
+    const healthWorkload = byTrack.健康 ?? 0;
     const byCategory = Object.fromEntries(CATEGORIES.map((category) => [
       category,
       round(items.filter((item) => item.category === category).reduce((sum, item) => sum + threeSideTotal(item), 0)),

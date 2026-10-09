@@ -39,7 +39,7 @@ describe("协作 Excel v10 十五系列", () => {
     expect(sheet.getCell("AB2").dataValidation.type).toBe("list");
     expect(sheet.getCell("AF1").text).toBe("无屏系列");
     const stored = await payload(bytes) as { metadata: { formatVersion: string }; rows: Array<{ baselineVisible: string[]; baselineSeries: Record<string, string> }> };
-    expect(stored.metadata.formatVersion).toBe("v10");
+    expect(stored.metadata.formatVersion).toBe("v11");
     expect(stored.rows[0].baselineVisible).toHaveLength(31);
     expect(Object.keys(stored.rows[0].baselineSeries)).toHaveLength(15);
     const xml = await (await JSZip.loadAsync(bytes)).file("xl/worksheets/sheet1.xml")!.async("string");

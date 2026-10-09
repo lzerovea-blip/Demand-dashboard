@@ -61,7 +61,8 @@ describe("五项工作量与兼容", () => {
     const member = normalizeMember({ id: "algo", name: "算法甲", employeeNumber: "A1", microsoftAccount: "algo@example.com", role: "算法", domainL1Ids: ["l1"], createdAt: time, updatedAt: time, sortOrder: 0 });
     const data = { ...workspace, requirements: [{ ...row, source: "CE认证" as const, medicalRoadmapSortOrder: 2 }], members: [member], pptAccessPolicy: { entries: [{ memberId: "algo", permission: "read" as const }], updatedAt: time } };
     const inspected = await inspectWorkspacePackage(await createWorkspacePackage(data, "0.8.17"), "v7.roadmap");
-    expect(inspected.data.requirements[0]).toMatchObject({ researchAppWorkloadPm: 4, algorithmWorkloadPm: 5, medicalRoadmapSortOrder: 2 });
+    expect(inspected.data.requirements[0]).toMatchObject({ researchAppWorkloadPm: 4, algorithmWorkloadPm: 5 });
+    expect(inspected.data.medicalRoadmapPlans?.[0].sortOrder).toBe(2);
     expect(inspected.data.members[0].role).toBe("算法");
     const cleared = { ...data, requirements: [{ ...data.requirements[0], researchAppWorkloadPm: 0, algorithmWorkloadPm: 0, workloadPm: 6, updatedAt: "2026-09-10T00:00:00.000Z" }] };
     const preview = await inspectWorkspacePackage(await createWorkspacePackage(cleared, "0.8.17"), "清零.roadmap", data);

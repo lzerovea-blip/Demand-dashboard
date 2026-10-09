@@ -38,7 +38,7 @@ export const CATEGORY_META: Record<RequirementCategory, {
 };
 export type RequirementScope = (typeof REQUIREMENT_SCOPES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
-export type Track = (typeof ROADMAP_TRACKS)[number];
+export type Track = string;
 export type MemberRole = (typeof MEMBER_ROLES)[number];
 export type TieringSupportStatus = (typeof TIERING_SUPPORT_STATUSES)[number];
 export type TieringAuditStatus = (typeof TIERING_AUDIT_STATUSES)[number];
@@ -96,7 +96,8 @@ export interface Requirement {
   images: RequirementImage[];
   domainL0Id: string;
   domainId: string;
-  source: RequirementSource;
+  /** Legacy input only. v0.9 roadmaps use independent assignments. */
+  source?: RequirementSource;
   scope: RequirementScope;
   allowLatestVersionUpgrade: boolean;
   overseasRegions: OverseasRegion[];
@@ -317,6 +318,62 @@ export interface AppSnapshot {
   pptAccessPolicy: PptAccessPolicy;
   tiering?: TieringData;
   templates: TemplateProfile[];
+  roadmaps?: RoadmapDefinition[];
+  roadmapLanes?: RoadmapLaneDefinition[];
+  roadmapAssignments?: RequirementRoadmapAssignment[];
+  roadmapAssignmentTombstones?: RoadmapAssignmentTombstone[];
+  medicalRoadmapPlans?: MedicalRoadmapPlan[];
+}
+
+export type RoadmapKind = "standard" | "medical";
+export interface RoadmapDefinition {
+  id: string;
+  name: string;
+  kind: RoadmapKind;
+  sortOrder: number;
+  updatedAt: string;
+  usedAt?: string;
+}
+export interface RoadmapLaneDefinition {
+  id: string;
+  roadmapId: string;
+  name: string;
+  sortOrder: number;
+  updatedAt: string;
+}
+export interface RequirementRoadmapAssignment {
+  requirementId: string;
+  roadmapId: string;
+  laneId: string;
+  updatedAt: string;
+}
+export interface RoadmapAssignmentTombstone {
+  requirementId: string;
+  removedAt: string;
+}
+export interface MedicalRoadmapPlan extends MedicalSubmissionMilestones {
+  requirementId: string;
+  roadmapId: string;
+  submissionMonth?: string;
+  sortOrder?: number;
+  updatedAt: string;
+}
+export interface SaveRoadmapInput {
+  id?: string;
+  name: string;
+  kind: RoadmapKind;
+  sortOrder?: number;
+}
+export interface SaveRoadmapLaneInput {
+  id?: string;
+  roadmapId: string;
+  name: string;
+  sortOrder?: number;
+}
+export interface SaveRoadmapAssignmentsInput {
+  requirementIds: string[];
+  roadmapId?: string;
+  laneId?: string;
 }
 
 export interface SaveRequirementInput {
@@ -330,7 +387,7 @@ export interface SaveRequirementInput {
   images: RequirementImage[];
   domainL0Id: string;
   domainId: string;
-  source: RequirementSource;
+  source?: RequirementSource;
   scope: RequirementScope;
   allowLatestVersionUpgrade: boolean;
   overseasRegions: OverseasRegion[];
@@ -431,7 +488,9 @@ export interface SaveGroupOverrideInput {
 }
 
 export interface SaveGroupOrderInput {
-  source: RequirementSource;
+  source: string;
+  roadmapId?: string;
+  laneId?: string;
   targetMonth: string;
   groupKeys: string[];
 }
@@ -456,12 +515,19 @@ export type WorkspaceData = Omit<AppSnapshot, "templates" | "tiering"> & {
   tiering?: TieringData;
   requirementTombstones?: RequirementTombstone[];
   requirementDeletionTrackingStartedAt?: string;
+  /** Reader-only marker; never written to new packages. */
+  legacyRoadmapInput?: boolean;
 };
 export type WorkspaceImportMode = "merge" | "replace";
 export type WorkspacePackageKind = "workspace" | "tiering-seed";
 export type LegacyRequirementDecision = "merge" | "keep-deleted";
 
 export interface WorkspacePackageCounts {
+  roadmaps?: number;
+  roadmapLanes?: number;
+  roadmapAssignments?: number;
+  medicalRoadmapPlans?: number;
+  roadmapAssignmentTombstones?: number;
   requirements: number;
   requirementTombstones: number;
   images: number;
@@ -487,7 +553,7 @@ export interface WorkspaceFieldDifference {
 }
 
 export interface WorkspaceImportDifference {
-  entity: "需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单" | "分层功能" | "产品系列" | "系列支持" | "证据来源" | "待核验项" | "变更记录";
+  entity: "需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单" | "分层功能" | "产品系列" | "系列支持" | "证据来源" | "待核验项" | "变更记录" | "路标字典" | "泳道字典" | "路标匹配" | "医疗路标配置";
   key: string;
   title: string;
   change: WorkspaceDifferenceChange;
@@ -528,6 +594,7 @@ export interface WorkspaceWorkbookImportCounts {
 }
 
 export interface WorkspaceWorkbookImportPreview {
+  warnings?: string[];
   token: string;
   fileName: string;
   formatVersion: string;
@@ -566,6 +633,14 @@ export interface AppInfo {
 }
 
 export interface ElectronApi {
+  deleteMedicalRoadmapPlan(input: { requirementId: string; roadmapId: string }): Promise<AppSnapshot>;
+  saveRoadmap(input: SaveRoadmapInput): Promise<AppSnapshot>;
+  deleteRoadmap(id: string): Promise<AppSnapshot>;
+  saveRoadmapLane(input: SaveRoadmapLaneInput): Promise<AppSnapshot>;
+  deleteRoadmapLane(id: string): Promise<AppSnapshot>;
+  saveRoadmapAssignments(input: SaveRoadmapAssignmentsInput): Promise<AppSnapshot>;
+  saveMedicalRoadmapPlan(input: MedicalRoadmapPlan): Promise<AppSnapshot>;
+  saveMedicalRoadmapPlanOrder(input: { roadmapId: string; requirementIds: string[] }): Promise<AppSnapshot>;
   getAppInfo(): Promise<AppInfo>;
   getSnapshot(): Promise<AppSnapshot>;
   getWindowFullscreen(): Promise<boolean>;

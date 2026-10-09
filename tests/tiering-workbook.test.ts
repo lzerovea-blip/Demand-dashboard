@@ -177,7 +177,7 @@ describe("分层分级 Excel 导出", () => {
     const details = workbook.getWorksheet("规格明细")!;
     const matrixHeaders = headerValues(matrix);
     expect(matrixHeaders.slice(0, 12)).toEqual([
-      "序号", "功能ID", "L0", "L1", "需求", "来源", "上线月份", "HMOS版本", "规划", "产品经理", "SE", "算法",
+      "序号", "功能ID", "L0", "L1", "需求", "路标匹配", "上线月份", "HMOS版本", "规划", "产品经理", "SE", "算法",
     ]);
     expect(matrixHeaders.slice(12)).toEqual(BUILT_IN_TIERING_PRODUCT_SERIES.map((item) => item.name));
     expect(matrix.columnCount).toBe(27);
@@ -198,13 +198,13 @@ describe("分层分级 Excel 导出", () => {
     expect(matrix.getCell("A2").text).toContain("27H1–27H1");
     expect(matrix.getCell("A3").text).toContain("不支持回导");
     expect(matrix.views[0]).toMatchObject({ state: "frozen", xSplit: 5, ySplit: 4 });
-    expect(matrix.autoFilter).toBe("A4:AA5");
+    expect(matrix.autoFilter).toBe("A4:AA6");
 
     expect(headerValues(details)).toEqual([
-      "序号", "功能ID", "L0", "L1", "需求", "来源", "上线月份", "HMOS版本", "系列", "支持状态", "支持型号", "排除型号", "系统/市场",
+      "序号", "功能ID", "L0", "L1", "需求", "路标匹配", "上线月份", "HMOS版本", "系列", "支持状态", "支持型号", "排除型号", "系统/市场",
       "最低运动健康App版本", "最低设备版本", "前置条件", "证据编号", "证据链接", "核验日期", "证据等级", "审核状态", "备注", "更新时间",
     ]);
-    expect(details.actualRowCount).toBe(19);
+    expect(details.actualRowCount).toBe(34);
     expect(details.getCell("A5").value).toBe(1);
     expect(details.getCell("A19").value).toBe(15);
     expect(details.getCell("I5").text).toBe("WATCH数字系列");
@@ -216,10 +216,11 @@ describe("分层分级 Excel 导出", () => {
     expect(details.getCell("J6").text).toBe("未判断");
     expect(details.getRow(5).height).toBeGreaterThan(54);
     expect(details.views[0]).toMatchObject({ state: "frozen", xSplit: 5, ySplit: 4 });
-    expect(details.autoFilter).toBe("A4:W19");
+    expect(details.getCell("A34").value).toBe(30);
+    expect(details.autoFilter).toBe("A4:W34");
   });
 
-  it("仅选取时间范围内的运动、健康和 AI 九个来源", () => {
+  it("选取时间范围内全部需求，不再按旧来源限制", () => {
     const base = workspace();
     base.requirements = [
       ...TIERING_ELIGIBLE_SOURCES.map((source, index) => requirement(`eligible-${index}`, source, "2027-03")),
@@ -233,7 +234,7 @@ describe("分层分级 Excel 导出", () => {
     base.tiering = { features: [], productSeries: [], supportRecords: [], evidenceSources: [], verificationIssues: [], changeLogs: [] };
 
     const demands = tieringDemandsForRange(base, { start: "2027H1", end: "2027H1" });
-    expect(demands.map((item) => item.requirement.source)).toEqual([...TIERING_ELIGIBLE_SOURCES]);
+    expect(new Set(demands.map((item) => item.requirement.id))).toEqual(new Set(base.requirements.filter((req)=>req.id!=="outside").map((req)=>req.id)));
   });
 
   it("空数据区间仍保留两张表、完整表头和可用筛选", async () => {

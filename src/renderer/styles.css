@@ -399,8 +399,33 @@ td strong { color: #1b2832; font-weight: 700; }
 
 .requirements-table-wrap { width: 100%; overflow-x: hidden; }
 .requirements-table { width: 100%; min-width: 0; table-layout: fixed; }
-.requirements-table .requirement-col-title { width: 25%; }
+.requirements-table .requirement-col-title { width: 33%; }
 .requirements-table .requirement-col-source { width: 8%; }
+.nav-group-label { padding: 13px 16px 5px; color: #94a3ad; font-size: 11px; letter-spacing: 1px; }
+.roadmap-matching, .roadmap-dictionary { margin-bottom: 24px; }
+.matching-filters, .matching-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 16px 22px; border-bottom: 1px solid #e6ecef; }
+.matching-filters input { flex: 2; min-width: 160px; }
+.matching-filters select, .matching-actions select, .matching-actions input { flex: 1; min-width: 145px; }
+.matching-filters input, .matching-filters select, .matching-actions input, .matching-actions select { font: inherit; font-size: 13px; padding: 10px 12px; border-radius: 9px; border: 1px solid #dce4e8; background: #fff; color: #283640; }
+.matching-actions .order-input { flex: 0 0 80px; min-width: 60px; width: 80px; }
+.matching-actions .button { font-size: 12px; padding: 10px 13px; }
+.matching-table-wrap { overflow: auto; }
+.matching-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.matching-table th, .matching-table td { padding: 12px 16px; text-align: left; vertical-align: top; border-bottom: 1px solid #e9eef1; overflow-wrap: anywhere; }
+.matching-table th { color: #74828b; background: #f6f8f9; }
+.matching-table th:first-child { width: 60px; }
+.matching-table th:nth-child(2) { width: 32%; }
+.matching-table th:last-child { width: 130px; }
+.text-button { font: inherit; color: #287ef0; background: none; border: 0; padding: 4px 7px; cursor: pointer; font-size: 12px; }
+.text-button.danger { color: #d65454; }
+.roadmap-dictionary-list { padding: 12px 22px; }
+.roadmap-dictionary-item { padding: 16px 0; border-bottom: 1px solid #e9eef1; }
+.roadmap-dictionary-item > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.roadmap-dictionary-item > div:first-child > span { color: #74828b; font-size: 12px; margin-right: auto; }
+.roadmap-lane-chips { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
+.roadmap-lane-chips > span { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; padding: 7px 10px; border-radius: 9px; background: #f4f7f8; font-size: 12px; }
+.roadmap-lane-chips small { color: #74828b; }
+.roadmap-focus-tabs { flex-wrap: wrap; }
 .requirements-table .requirement-col-scope { width: 7%; }
 .requirements-table .requirement-col-month { width: 9%; }
 .requirements-table .requirement-col-product { width: 8%; }

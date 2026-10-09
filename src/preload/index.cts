@@ -20,6 +20,14 @@ import type {
 } from "../shared/types.js";
 
 const api: ElectronApi = {
+  saveRoadmap: (input) => ipcRenderer.invoke("roadmaps:save", input),
+  deleteRoadmap: (id) => ipcRenderer.invoke("roadmaps:delete", id),
+  saveRoadmapLane: (input) => ipcRenderer.invoke("roadmap-lanes:save", input),
+  deleteRoadmapLane: (id) => ipcRenderer.invoke("roadmap-lanes:delete", id),
+  saveRoadmapAssignments: (input) => ipcRenderer.invoke("roadmap-assignments:save", input),
+  saveMedicalRoadmapPlan: (input) => ipcRenderer.invoke("medical-roadmap-plans:save", input),
+  deleteMedicalRoadmapPlan: (input) => ipcRenderer.invoke("medical-roadmap-plans:delete", input),
+  saveMedicalRoadmapPlanOrder: (input) => ipcRenderer.invoke("medical-roadmap-plans:reorder", input),
   getAppInfo: () => ipcRenderer.invoke("app:info"),
   getSnapshot: () => ipcRenderer.invoke("snapshot:get"),
   getWindowFullscreen: () => ipcRenderer.invoke("window:fullscreen:get"),

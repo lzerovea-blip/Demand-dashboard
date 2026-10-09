@@ -7,7 +7,7 @@ export function compareMedicalRoadmapRequirements(a: Requirement, b: Requirement
   return aOrder - bOrder
     || Number(!a.targetMonth) - Number(!b.targetMonth)
     || a.targetMonth.localeCompare(b.targetMonth)
-    || a.source.localeCompare(b.source, "zh-CN")
+    || (a.source ?? "").localeCompare(b.source ?? "", "zh-CN")
     || a.title.localeCompare(b.title, "zh-CN")
     || a.id.localeCompare(b.id);
 }

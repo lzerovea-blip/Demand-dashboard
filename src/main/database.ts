@@ -34,6 +34,8 @@ import type {
   WorkspaceImportMode,
   WorkspaceWorkbookConflictMode,
   WorkspaceWorkbookFieldSelection,
+  RoadmapDefinition, RoadmapLaneDefinition, RequirementRoadmapAssignment, RoadmapAssignmentTombstone, MedicalRoadmapPlan,
+  SaveRoadmapInput, SaveRoadmapLaneInput, SaveRoadmapAssignmentsInput,
 } from "../shared/types.js";
 import {
   MAX_REQUIREMENT_IMAGES,
@@ -72,9 +74,10 @@ import {
 } from "../shared/tiering.js";
 import { historicalLaunchForFeatureId, normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
 import { isMedicalSubmissionSource, normalizeMedicalSubmissionMilestones, validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission.js";
+import { normalizeRoadmapManagement, validateRoadmapManagement, assignmentGroupKey, projectedMedicalRequirement, legacyRoadmapId } from "../shared/roadmapManagement.js";
 
 const BACKUP_SCHEMA_VERSION = 1;
-const DATABASE_SCHEMA_VERSION = 11;
+const DATABASE_SCHEMA_VERSION = 12;
 
 export class LocalDatabase {
   private sql!: SqlJsStatic;
@@ -98,7 +101,7 @@ export class LocalDatabase {
     if (bytes && version < DATABASE_SCHEMA_VERSION) {
       const backupDir = join(app.getPath("userData"), "backups");
       await mkdir(backupDir, { recursive: true });
-      await writeFile(join(backupDir, `roadmap-before-v0.8.24-${Date.now()}-${crypto.randomUUID()}.db`), bytes, { flag: "wx" });
+      await writeFile(join(backupDir, `roadmap-before-v0.9.0-${Date.now()}-${crypto.randomUUID()}.db`), bytes, { flag: "wx" });
     }
     this.db.run("BEGIN");
     let skippedTieringRequirements: number;
@@ -115,6 +118,11 @@ export class LocalDatabase {
 
   getSnapshot(): AppSnapshot {
     return {
+      roadmaps: this.payloads<RoadmapDefinition>("roadmap_definitions", "id"),
+      roadmapLanes: this.payloads<RoadmapLaneDefinition>("roadmap_lanes", "id"),
+      roadmapAssignments: this.payloads<RequirementRoadmapAssignment>("roadmap_assignments", "id"),
+      roadmapAssignmentTombstones: this.payloads<RoadmapAssignmentTombstone>("roadmap_assignment_tombstones", "id"),
+      medicalRoadmapPlans: this.payloads<MedicalRoadmapPlan>("medical_roadmap_plans", "id"),
       requirements: this.all<{ payload: string }>("SELECT payload FROM requirements ORDER BY updated_at DESC").map((row) => normalizeRequirement(JSON.parse(row.payload))),
       domains: this.all<{ payload: string }>("SELECT payload FROM domains ORDER BY sort_order, name").map((row) => {
         const item = JSON.parse(row.payload) as DictionaryItem;
@@ -137,6 +145,9 @@ export class LocalDatabase {
   }
 
   async saveRequirement(input: SaveRequirementInput): Promise<AppSnapshot> {
+    const previous = input.id ? this.getPayload<Requirement>("requirements", "id", input.id) : undefined;
+    if (!previous && !input.targetMonth) throw new Error("新需求必须填写上线年月");
+    input = { ...input, source: previous?.targetMonth === "" && input.targetMonth === "" ? "NMPA认证" : undefined, medicalSubmissionMilestones: undefined };
     validateRequirement(input);
     validateRequirementOwners(input, this.getSnapshot().members, true);
     const domains = new Map(this.getSnapshot().domains.map((item) => [item.id, item]));
@@ -155,6 +166,8 @@ export class LocalDatabase {
     const requirementId = input.id ?? crypto.randomUUID();
     const requirement: Requirement = {
       ...input,
+      source: undefined,
+      algorithmMemberId: input.algorithmMemberId ?? "",
       id: requirementId,
       title: input.title.trim(),
       description: input.description.trim(),
@@ -176,8 +189,8 @@ export class LocalDatabase {
       historicalLaunch: existing?.historicalLaunch && input.targetMonth
         ? { ...existing.historicalLaunch, suggestedTargetMonth: input.targetMonth }
         : undefined,
-      medicalSubmissionMilestones: normalizeMedicalSubmissionMilestones(input.source, input.medicalSubmissionMilestones),
-      medicalRoadmapSortOrder: isMedicalSubmissionSource(input.source) ? existing?.medicalRoadmapSortOrder : undefined,
+      medicalSubmissionMilestones: undefined,
+      medicalRoadmapSortOrder: undefined,
     };
     const previousBytes = this.db.export();
     let committed = false;
@@ -210,6 +223,9 @@ export class LocalDatabase {
     this.db.run("BEGIN");
     try {
       this.run("DELETE FROM requirements WHERE id = ?", [id]);
+      this.run("DELETE FROM roadmap_assignments WHERE id = ?", [id]);
+      this.run("DELETE FROM roadmap_assignment_tombstones WHERE id = ?", [id]);
+      for (const plan of this.payloads<MedicalRoadmapPlan>("medical_roadmap_plans", "id").filter((item) => item.requirementId === id)) this.run("DELETE FROM medical_roadmap_plans WHERE id = ?", [`${plan.roadmapId}::${id}`]);
       if (requirement) {
         const tombstone: RequirementTombstone = { id, title: requirement.title, deletedAt: new Date().toISOString() };
         this.run("INSERT OR REPLACE INTO requirement_tombstones (id, deleted_at, payload) VALUES (?, ?, ?)", [id, tombstone.deletedAt, JSON.stringify(tombstone)]);
@@ -275,6 +291,92 @@ export class LocalDatabase {
 
   async saveDomain(input: SaveDictionaryInput): Promise<AppSnapshot> {
     return this.saveDictionary("domains", input);
+  }
+
+  async saveRoadmap(input: SaveRoadmapInput): Promise<AppSnapshot> {
+    const state = this.getWorkspaceData();
+    const old = state.roadmaps?.find((item) => item.id === input.id);
+    if (input.id && !old) throw new Error("路标不存在");
+    if (old && old.kind !== input.kind && (old.usedAt || (state.roadmapAssignments ?? []).some((item) => item.roadmapId === old.id) || (state.medicalRoadmapPlans ?? []).some((item) => item.roadmapId === old.id))) throw new Error("路标已经使用，不能更改展示类型");
+    const item: RoadmapDefinition = { id: old?.id ?? crypto.randomUUID(), name: input.name.trim(), kind: input.kind, sortOrder: input.sortOrder ?? old?.sortOrder ?? state.roadmaps!.length, updatedAt: new Date().toISOString(), usedAt: old?.usedAt };
+    return this.commitRoadmapState({ ...state, roadmaps: [...state.roadmaps!.filter((candidate) => candidate.id !== item.id), item] });
+  }
+  async deleteRoadmap(id: string): Promise<AppSnapshot> {
+    const state = this.getWorkspaceData();
+    if (state.roadmapAssignments!.some((item) => item.roadmapId === id) || state.medicalRoadmapPlans!.some((item) => item.roadmapId === id)) throw new Error("路标仍有需求匹配或医疗配置，请先解除关联并清理医疗草稿");
+    return this.commitRoadmapState({ ...state, roadmaps: state.roadmaps!.filter((item) => item.id !== id), roadmapLanes: state.roadmapLanes!.filter((item) => item.roadmapId !== id), groupOverrides: state.groupOverrides.filter((item) => item.groupKey.split("::")[0] !== id) });
+  }
+  async saveRoadmapLane(input: SaveRoadmapLaneInput): Promise<AppSnapshot> {
+    const state = this.getWorkspaceData();
+    const old = state.roadmapLanes!.find((item) => item.id === input.id);
+    if (input.id && !old) throw new Error("泳道不存在");
+    if (old && old.roadmapId !== input.roadmapId) throw new Error("泳道所属路标不能更改，请新建泳道后重新匹配");
+    const item: RoadmapLaneDefinition = { id: old?.id ?? crypto.randomUUID(), roadmapId: input.roadmapId, name: input.name.trim(), sortOrder: input.sortOrder ?? old?.sortOrder ?? state.roadmapLanes!.filter((lane) => lane.roadmapId === input.roadmapId).length, updatedAt: new Date().toISOString() };
+    return this.commitRoadmapState({ ...state, roadmapLanes: [...state.roadmapLanes!.filter((lane) => lane.id !== item.id), item] });
+  }
+  async deleteRoadmapLane(id: string): Promise<AppSnapshot> {
+    const state = this.getWorkspaceData();
+    if (state.roadmapAssignments!.some((item) => item.laneId === id)) throw new Error("泳道仍被需求使用，请先移出或调整匹配");
+    return this.commitRoadmapState({ ...state, roadmapLanes: state.roadmapLanes!.filter((item) => item.id !== id), groupOverrides: state.groupOverrides.filter((item) => item.groupKey.split("::")[1] !== id) });
+  }
+  async saveRoadmapAssignments(input: SaveRoadmapAssignmentsInput): Promise<AppSnapshot> {
+    const state = this.getWorkspaceData();
+    const ids = new Set(input.requirementIds);
+    if (!ids.size || ids.size !== input.requirementIds.length || [...ids].some((id) => !state.requirements.some((req) => req.id === id))) throw new Error("匹配需求集合已变化，请刷新后重试");
+    if (Boolean(input.roadmapId) !== Boolean(input.laneId)) throw new Error("请同时选择路标和泳道");
+    const now = new Date().toISOString();
+    const assignments = state.roadmapAssignments!.filter((item) => !ids.has(item.requirementId));
+    const removals = state.roadmapAssignmentTombstones!.filter((item) => !ids.has(item.requirementId));
+    for (const requirementId of ids) {
+      if (input.roadmapId && input.laneId) assignments.push({ requirementId, roadmapId: input.roadmapId, laneId: input.laneId, updatedAt: now });
+      else removals.push({ requirementId, removedAt: now });
+    }
+    return this.commitRoadmapState({ ...state, roadmaps: state.roadmaps!.map((map)=> map.id === input.roadmapId ? { ...map, usedAt: map.usedAt ?? now } : map), roadmapAssignments: assignments, roadmapAssignmentTombstones: removals });
+  }
+  async saveMedicalRoadmapPlan(input: MedicalRoadmapPlan): Promise<AppSnapshot> {
+    const state = this.getWorkspaceData();
+    const plan = { ...input, updatedAt: new Date().toISOString() };
+    return this.commitRoadmapState({ ...state, medicalRoadmapPlans: [...state.medicalRoadmapPlans!.filter((item) => item.requirementId !== plan.requirementId || item.roadmapId !== plan.roadmapId), plan] });
+  }
+  async deleteMedicalRoadmapPlan(input: { requirementId: string; roadmapId: string }): Promise<AppSnapshot> {
+    const state = this.getWorkspaceData();
+    return this.commitRoadmapState({ ...state, medicalRoadmapPlans: state.medicalRoadmapPlans!.filter((item) => item.requirementId !== input.requirementId || item.roadmapId !== input.roadmapId) });
+  }
+  async saveMedicalRoadmapPlanOrder(input: { roadmapId: string; requirementIds: string[] }): Promise<AppSnapshot> {
+    const state = this.getWorkspaceData();
+    const ids = new Set(input.requirementIds);
+    if (ids.size !== input.requirementIds.length || [...ids].some((id) => !state.roadmapAssignments!.some((item) => item.requirementId === id && item.roadmapId === input.roadmapId))) throw new Error("医疗泳道集合已变化");
+    const now = new Date().toISOString();
+    const matchedIds = new Set(state.roadmapAssignments!.filter((a) => a.roadmapId === input.roadmapId).map((a) => a.requirementId));
+    const sorted = reorderedMedicalRequirements(state.requirements.filter((req) => matchedIds.has(req.id)).map((req) => projectedMedicalRequirement(req, state.medicalRoadmapPlans!.find((p) => p.roadmapId === input.roadmapId && p.requirementId === req.id))), input.requirementIds);
+    const plans = state.medicalRoadmapPlans!.filter((item) => item.roadmapId !== input.roadmapId || !matchedIds.has(item.requirementId));
+    sorted.forEach(({ id: requirementId }, sortOrder) => plans.push({ ...state.medicalRoadmapPlans!.find((item) => item.roadmapId === input.roadmapId && item.requirementId === requirementId), requirementId, roadmapId: input.roadmapId, sortOrder, updatedAt: now }));
+    return this.commitRoadmapState({ ...state, medicalRoadmapPlans: plans });
+  }
+  private async commitRoadmapState(state: WorkspaceData): Promise<AppSnapshot> {
+    validateRoadmapManagement(state);
+    state = normalizeRoadmapManagement(state);
+    const previousBytes = this.db.export();
+    let committed = false;
+    this.db.run("BEGIN");
+    try {
+      this.writeRoadmapState(state);
+      this.db.run("DELETE FROM group_overrides");
+      for (const item of state.groupOverrides) this.run("INSERT INTO group_overrides (group_key, updated_at, payload) VALUES (?, ?, ?)", [item.groupKey, item.updatedAt, JSON.stringify(item)]);
+      this.db.run("COMMIT"); committed = true; await this.persist();
+    }
+    catch (error) { if (!committed) this.db.run("ROLLBACK"); else { this.db.close(); this.db = new this.sql.Database(previousBytes); } throw error; }
+    return this.getSnapshot();
+  }
+  private writeRoadmapState(state: WorkspaceData): void {
+    const collections: Array<[string, Array<{ id: string; payload: unknown }>]> = [
+      ["roadmap_definitions", (state.roadmaps ?? []).map((item) => ({ id: item.id, payload: item }))],
+      ["roadmap_lanes", (state.roadmapLanes ?? []).map((item) => ({ id: item.id, payload: item }))],
+      ["roadmap_assignments", (state.roadmapAssignments ?? []).map((item) => ({ id: item.requirementId, payload: item }))],
+      ["roadmap_assignment_tombstones", (state.roadmapAssignmentTombstones ?? []).map((item) => ({ id: item.requirementId, payload: item }))],
+      ["medical_roadmap_plans", (state.medicalRoadmapPlans ?? []).map((item) => ({ id: `${item.roadmapId}::${item.requirementId}`, payload: item }))],
+    ];
+    for (const [table, records] of collections) { this.db.run(`DELETE FROM ${table}`); for (const record of records) this.run(`INSERT INTO ${table} (id, payload) VALUES (?, ?)`, [record.id, JSON.stringify(record.payload)]); }
   }
 
   async saveProduct(input: SaveDictionaryInput): Promise<AppSnapshot> {
@@ -382,6 +484,7 @@ export class LocalDatabase {
   }
 
   async saveMedicalRoadmapOrder(input: { requirementIds: string[] }): Promise<AppSnapshot> {
+    if (this.getSnapshot().roadmapAssignments !== undefined) return this.saveMedicalRoadmapPlanOrder({ roadmapId: "医疗认证", requirementIds: input.requirementIds });
     const ordered = reorderedMedicalRequirements(this.getSnapshot().requirements, input?.requirementIds);
     const now = new Date().toISOString();
     const previousBytes = this.db.export();
@@ -408,7 +511,20 @@ export class LocalDatabase {
   }
 
   async saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot> {
-    if (!SOURCES.includes(input.source)) throw new Error("路标泳道无效");
+    if (!input.roadmapId && SOURCES.includes(input.source as never) && this.getSnapshot().roadmapAssignments !== undefined) input = { ...input, roadmapId: legacyRoadmapId(input.source), laneId: input.source };
+    if (input.roadmapId && input.laneId) {
+      const state = this.getWorkspaceData();
+      const ids = new Set(state.roadmapAssignments!.filter((item) => item.roadmapId === input.roadmapId && item.laneId === input.laneId).map((item) => item.requirementId));
+      const keys = [...new Set(state.requirements.filter((item) => ids.has(item.id) && item.targetMonth === input.targetMonth).map((item) => assignmentGroupKey(input.roadmapId!, input.laneId!, item.domainId, item.targetMonth)))];
+      if (keys.length !== input.groupKeys.length || new Set(input.groupKeys).size !== keys.length || keys.some((key) => !input.groupKeys.includes(key))) throw new Error("卡片集合已变化，请刷新后重试");
+      const now = new Date().toISOString();
+      const previousBytes = this.db.export();
+      this.db.run("BEGIN");
+      try { input.groupKeys.forEach((groupKey, sortOrder) => { const old = state.groupOverrides.find((item) => item.groupKey === groupKey); const domainName = state.domains.find((item)=>item.id===groupKey.split("::")[2])?.name ?? "未命名领域"; const value = { groupKey, cardTitle: old?.cardTitle || domainName, cardSummary: old?.cardSummary ?? "", sortOrder, updatedAt: now }; this.run("INSERT OR REPLACE INTO group_overrides (group_key, updated_at, payload) VALUES (?, ?, ?)", [groupKey, now, JSON.stringify(value)]); }); this.db.run("COMMIT"); await this.persist(); }
+      catch (error) { this.db.close(); this.db = new this.sql.Database(previousBytes); throw error; }
+      return this.getSnapshot();
+    }
+    if (!SOURCES.includes(input.source as never)) throw new Error("路标泳道无效");
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.targetMonth)) throw new Error("上线月份无效");
     const orderedKeys = input.groupKeys.map((key) => key.trim());
     if (!orderedKeys.length || orderedKeys.some((key) => !key) || new Set(orderedKeys).size !== orderedKeys.length) {
@@ -626,7 +742,8 @@ export class LocalDatabase {
     const mergedData = mode === "merge"
       ? mergeWorkspaceData(local, preparedIncoming, { legacyRequirementDecisions, decisionAt })
       : prepareReplacementWorkspace(local, preparedIncoming, decisionAt);
-    const data = normalizeWorkspaceTieringScope(mergedData);
+    const data = normalizeRoadmapManagement(normalizeWorkspaceTieringScope(mergedData));
+    validateRoadmapManagement(data);
     const requirements = data.requirements.map((item) => backfillRequirementOwners(normalizeRequirement(item), data.members ?? []));
     for (const item of requirements) validateRequirementOwners(item, data.members ?? []);
     const tiering = normalizeTieringData(data.tiering ?? EMPTY_TIERING_DATA);
@@ -634,9 +751,10 @@ export class LocalDatabase {
     let committed = false;
     this.db.run("BEGIN");
     try {
+      this.writeRoadmapState(data);
       for (const table of ["requirements", "requirement_tombstones", "domains", "products", "group_overrides", "members", "tiering_features", "tiering_product_series", "tiering_support_records", "tiering_evidence_sources", "tiering_issues", "tiering_change_logs"]) this.db.run(`DELETE FROM ${table}`);
       for (const item of requirements) {
-        const normalized = normalizeRequirement(item);
+        const normalized = { ...normalizeRequirement(item), source: undefined, medicalSubmissionMilestones: undefined, medicalRoadmapSortOrder: undefined };
         this.run("INSERT INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)", [normalized.id, normalized.updatedAt, JSON.stringify(normalized)]);
       }
       for (const item of data.requirementTombstones ?? []) this.run("INSERT INTO requirement_tombstones (id, deleted_at, payload) VALUES (?, ?, ?)", [item.id, item.deletedAt, JSON.stringify(item)]);
@@ -959,6 +1077,11 @@ export class LocalDatabase {
       CREATE TABLE IF NOT EXISTS tiering_evidence_sources (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS tiering_issues (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS tiering_change_logs (id TEXT PRIMARY KEY, changed_at TEXT NOT NULL, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS roadmap_definitions (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS roadmap_lanes (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS roadmap_assignments (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS roadmap_assignment_tombstones (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS medical_roadmap_plans (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
     `);
     if (!this.getPayload<PptAccessPolicy>("settings", "key", "ppt_access_policy")) {
       this.run("INSERT INTO settings (key, payload) VALUES (?, ?)", ["ppt_access_policy", JSON.stringify(EMPTY_PPT_ACCESS_POLICY)]);
@@ -984,6 +1107,15 @@ export class LocalDatabase {
     }
     const skippedTieringRequirements = this.reconcileTieringRequirements(true, true);
     this.ensureTieringSupportMatrix();
+    if (!this.getPayload<boolean>("settings", "key", "roadmap_management_initialized")) {
+      const state = normalizeRoadmapManagement({ ...this.getSnapshot(), roadmaps: undefined, roadmapLanes: undefined, roadmapAssignments: undefined, medicalRoadmapPlans: undefined });
+      validateRoadmapManagement(state);
+      this.writeRoadmapState(state);
+      this.db.run("DELETE FROM group_overrides");
+      for (const item of state.groupOverrides) this.run("INSERT OR REPLACE INTO group_overrides (group_key, updated_at, payload) VALUES (?, ?, ?)", [item.groupKey, item.updatedAt, JSON.stringify(item)]);
+      for (const item of state.requirements) this.run("UPDATE requirements SET payload = ? WHERE id = ?", [JSON.stringify({ ...item, source: undefined, medicalSubmissionMilestones: undefined, medicalRoadmapSortOrder: undefined }), item.id]);
+      this.run("INSERT INTO settings (key, payload) VALUES (?, ?)", ["roadmap_management_initialized", "true"]);
+    }
     this.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", [DATABASE_SCHEMA_VERSION]);
     return skippedTieringRequirements;
   }

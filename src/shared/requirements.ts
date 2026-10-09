@@ -11,7 +11,7 @@ export const LEGACY_UPPERCASE_AI_SOURCE = "AI" as const;
 export const LEGACY_MEDICAL_SUBMISSION_SOURCE = "医疗送检" as const;
 
 type LegacyRequirement = Omit<Requirement, "source" | "scope" | "allowLatestVersionUpgrade" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
-  { source: RequirementSource | "NMPA送检" | "CE送检" | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE } &
+  { source?: RequirementSource | "NMPA送检" | "CE送检" | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE } &
   Partial<Pick<Requirement, "scope" | "allowLatestVersionUpgrade" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
 
 export function normalizeRequirement(input: LegacyRequirement): Requirement {
@@ -24,7 +24,7 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
   const algorithmWorkloadPm = nonNegative(input.algorithmWorkloadPm);
   const categorized = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm + researchAppWorkloadPm + algorithmWorkloadPm);
   const legacyTotal = nonNegative(input.workloadPm);
-  const source = normalizeLegacySource(input.source) as RequirementSource;
+  const source = input.source ? normalizeLegacySource(input.source) as RequirementSource : undefined;
   const productIds = normalizeRequirementProductIds(input.category, input.productIds);
   let historicalLaunch = normalizeHistoricalLaunchMetadata(input.historicalLaunch);
   // An explicitly cleared submission month must never be restored from historical metadata.
@@ -190,8 +190,7 @@ export function cloneRequirementAsCopy(
     tieringFeatureId: undefined,
     medicalRoadmapSortOrder: undefined,
     historicalLaunch: undefined,
-    medicalSubmissionMilestones: source.medicalSubmissionMilestones
-      ? { ...source.medicalSubmissionMilestones }
-      : undefined,
+    source: undefined,
+    medicalSubmissionMilestones: undefined,
   };
 }
