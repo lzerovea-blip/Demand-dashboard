@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AppSnapshot, MedicalRoadmapPlan, Requirement, SaveRoadmapAssignmentsInput, SaveRoadmapInput, SaveRoadmapLaneInput } from "../shared/types";
+import type { AppSnapshot, MedicalRoadmapPlan, Requirement, RoadmapDefinition, SaveRoadmapAssignmentsInput, SaveRoadmapInput, SaveRoadmapLaneInput } from "../shared/types";
 import { MEDICAL_PLAN_LABELS, MEDICAL_PLAN_MONTH_KEYS, roadmapDefinitionsFor, roadmapLanesFor } from "../shared/roadmapManagement";
 import { listReleaseVersionOptions } from "../shared/requirements";
 import { halfYearOf } from "../shared/roadmap";
@@ -44,7 +44,7 @@ export function RoadmapMatchingPage({ snapshot, onSave, onOpenRequirement, onMed
     </div>
     <div className="matching-actions">
       <select aria-label="目标路标" value={roadmapId} onChange={(e) => setRoadmapId(e.target.value)}><option value="">选择目标路标</option>{roadmaps.map((map) => <option key={map.id} value={map.id}>{map.name}</option>)}</select>
-      <select aria-label="目标泳道" value={laneId} disabled={!roadmapId || !lanes.length} onChange={(e) => setLaneId(e.target.value)}><option value="">{roadmapId && !lanes.length ? "请先在字典添加泳道" : "选择目标泳道"}</option>{lanes.map((lane) => <option key={lane.id} value={lane.id}>{lane.name}</option>)}</select>
+      <select aria-label="目标泳道" value={laneId} disabled={!roadmapId || !lanes.length} onChange={(e) => setLaneId(e.target.value)}><option value="">{roadmapId && !lanes.length ? "请先在路标字典设置添加泳道" : "选择目标泳道"}</option>{lanes.map((lane) => <option key={lane.id} value={lane.id}>{lane.name}</option>)}</select>
       <button className="button primary" disabled={busy || !selected.length || !roadmapId || !laneId} onClick={() => void save()}>匹配已选 {selected.length} 条</button>
       <button className="button ghost" disabled={busy || !selected.some((id) => assignments.has(id))} onClick={() => void save(true)}>移出路标</button>
       <button className="button ghost" disabled={busy || !rows.length} onClick={() => setSelected(rows.map((item) => item.id))}>全选当前结果</button>
@@ -58,30 +58,82 @@ export function RoadmapMatchingPage({ snapshot, onSave, onOpenRequirement, onMed
 }
 
 export function RoadmapDictionaryPanel({ snapshot, onSaveRoadmap, onDeleteRoadmap, onSaveLane, onDeleteLane, confirm }: {
-  snapshot: AppSnapshot; onSaveRoadmap: (input: SaveRoadmapInput) => Promise<void>; onDeleteRoadmap: (id: string) => Promise<void>;
+  snapshot: AppSnapshot; onSaveRoadmap: (input: SaveRoadmapInput) => Promise<AppSnapshot>; onDeleteRoadmap: (id: string) => Promise<void>;
   onSaveLane: (input: SaveRoadmapLaneInput) => Promise<void>; onDeleteLane: (id: string) => Promise<void>; confirm: Confirm;
 }) {
-  const [mapForm, setMapForm] = useState<SaveRoadmapInput>({ name: "", kind: "standard" });
+  const [newMapForm, setNewMapForm] = useState<SaveRoadmapInput>({ name: "", kind: "standard" });
+  const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
+  const [editMapForm, setEditMapForm] = useState<SaveRoadmapInput | null>(null);
   const [laneForm, setLaneForm] = useState<SaveRoadmapLaneInput>({ name: "", roadmapId: "" });
   const [busy, setBusy] = useState(false);
   const roadmaps = roadmapDefinitionsFor(snapshot);
-  const run = async (action: () => Promise<void>) => { setBusy(true); try { await action(); } finally { setBusy(false); } };
-  return <section className="panel roadmap-dictionary"><div className="panel-title"><div><h2>路标与泳道字典</h2><p>名称和顺序由此处维护，路标查看及 PPT 同步使用。</p></div></div>
-    <form className="matching-actions" onSubmit={(e) => { e.preventDefault(); void run(async () => { await onSaveRoadmap(mapForm); setMapForm({ name: "", kind: "standard" }); }); }}>
-      <input required placeholder="路标名称，例如健康路标" value={mapForm.name} onChange={(e) => setMapForm({ ...mapForm, name: e.target.value })} />
-      <select value={mapForm.kind} onChange={(e) => setMapForm({ ...mapForm, kind: e.target.value as SaveRoadmapInput["kind"] })}><option value="standard">普通卡片</option><option value="medical">医疗认证时间轴</option></select>
-      <input className="order-input" type="number" min="0" placeholder="顺序" value={mapForm.sortOrder ?? ""} onChange={(e) => setMapForm({ ...mapForm, sortOrder: e.target.value === "" ? undefined : Number(e.target.value) })} />
-      <button className="button primary" disabled={busy}>{mapForm.id ? "保存路标" : "添加路标"}</button>{mapForm.id && <button className="button ghost" type="button" onClick={() => setMapForm({ name: "", kind: "standard" })}>取消编辑</button>}
+  const selectedMap = roadmaps.find((map) => map.id === selectedMapId);
+  useEffect(() => {
+    if (selectedMapId && !selectedMap) {
+      setSelectedMapId(null);
+      setEditMapForm(null);
+      setLaneForm({ name: "", roadmapId: "" });
+    }
+  }, [selectedMapId, selectedMap]);
+  function selectMap(map: RoadmapDefinition) {
+    if (selectedMapId === map.id) {
+      setSelectedMapId(null);
+      setEditMapForm(null);
+      setLaneForm({ name: "", roadmapId: "" });
+      return;
+    }
+    setSelectedMapId(map.id);
+    setEditMapForm({ id: map.id, name: map.name, kind: map.kind, sortOrder: map.sortOrder });
+    setLaneForm({ name: "", roadmapId: map.id });
+  }
+  const run = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    try { await action(); } catch { /* The application-level update helper shows the error. */ }
+    finally { setBusy(false); }
+  };
+  return <section className="panel roadmap-dictionary"><div className="panel-title"><div><h2>路标字典设置</h2><p>顶部新增路标；在下方选中路标后维护其名称、顺序和泳道。</p></div></div>
+    <form className="matching-actions roadmap-dictionary-create" onSubmit={(e) => { e.preventDefault(); void run(async () => {
+      const existingIds = new Set(roadmaps.map((map) => map.id));
+      const next = await onSaveRoadmap(newMapForm);
+      setNewMapForm({ name: "", kind: "standard" });
+      const created = roadmapDefinitionsFor(next).find((map) => !existingIds.has(map.id));
+      if (created) {
+        setSelectedMapId(created.id);
+        setEditMapForm({ id: created.id, name: created.name, kind: created.kind, sortOrder: created.sortOrder });
+        setLaneForm({ name: "", roadmapId: created.id });
+      }
+    }); }}>
+      <input required aria-label="新增路标名称" placeholder="路标名称，例如健康路标" value={newMapForm.name} onChange={(e) => setNewMapForm({ ...newMapForm, name: e.target.value })} />
+      <select aria-label="新增路标展示类型" value={newMapForm.kind} onChange={(e) => setNewMapForm({ ...newMapForm, kind: e.target.value as SaveRoadmapInput["kind"] })}><option value="standard">普通卡片</option><option value="medical">医疗认证时间轴</option></select>
+      <input aria-label="新增路标顺序" className="order-input" type="number" min="0" placeholder="顺序" value={newMapForm.sortOrder ?? ""} onChange={(e) => setNewMapForm({ ...newMapForm, sortOrder: e.target.value === "" ? undefined : Number(e.target.value) })} />
+      <button className="button primary" disabled={busy}>添加路标</button>
     </form>
-    <form className="matching-actions" onSubmit={(e) => { e.preventDefault(); void run(async () => { await onSaveLane(laneForm); setLaneForm({ name: "", roadmapId: laneForm.roadmapId }); }); }}>
-      <select required value={laneForm.roadmapId} onChange={(e) => setLaneForm({ name: "", roadmapId: e.target.value })}><option value="">选择所属路标</option>{roadmaps.map((map) => <option key={map.id} value={map.id}>{map.name}</option>)}</select>
-      <input required placeholder="泳道名称，例如高阶" value={laneForm.name} onChange={(e) => setLaneForm({ ...laneForm, name: e.target.value })} />
-      <input className="order-input" type="number" min="0" placeholder="顺序" value={laneForm.sortOrder ?? ""} onChange={(e) => setLaneForm({ ...laneForm, sortOrder: e.target.value === "" ? undefined : Number(e.target.value) })} />
-      <button className="button primary" disabled={busy}>{laneForm.id ? "保存泳道" : "添加泳道"}</button>{laneForm.id && <button type="button" className="button ghost" onClick={() => setLaneForm({ name: "", roadmapId: laneForm.roadmapId })}>取消编辑</button>}
-    </form>
-    <div className="roadmap-dictionary-list">{roadmaps.map((map) => <div key={map.id} className="roadmap-dictionary-item"><div><strong>{map.name}</strong><span>{map.kind === "medical" ? "医疗认证时间轴" : "普通卡片"} · 顺序 {map.sortOrder}</span><button className="text-button" onClick={() => setMapForm(map)}>编辑</button><button className="text-button danger" disabled={busy} onClick={() => confirm({ title: "删除路标", message: `删除“${map.name}”及其未使用泳道？有匹配或医疗配置时会阻止删除。`, confirmLabel: "删除", action: () => run(() => onDeleteRoadmap(map.id)) })}>删除</button></div>
-      <div className="roadmap-lane-chips">{roadmapLanesFor(snapshot, map.id).map((lane) => <span key={lane.id}><b>{lane.name}</b><small>顺序 {lane.sortOrder}</small><button className="text-button" onClick={() => setLaneForm(lane)}>编辑</button><button className="text-button danger" disabled={busy} onClick={() => confirm({ title: "删除泳道", message: `删除“${map.name} · ${lane.name}”？`, confirmLabel: "删除", action: () => run(() => onDeleteLane(lane.id)) })}>删除</button></span>)}{!roadmapLanesFor(snapshot,map.id).length && <small>尚未配置泳道</small>}</div>
-    </div>)}</div>
+    <div className="roadmap-dictionary-list">{roadmaps.map((map) => {
+      const expanded = selectedMapId === map.id;
+      const lanes = roadmapLanesFor(snapshot, map.id);
+      return <div key={map.id} className={`roadmap-dictionary-item${expanded ? " is-selected" : ""}`}>
+        <div className="roadmap-dictionary-heading">
+          <button type="button" className="roadmap-dictionary-select" disabled={busy} aria-expanded={expanded} aria-controls={expanded ? `roadmap-dictionary-detail-${map.id}` : undefined} onClick={() => selectMap(map)}><strong>{map.name}</strong><span>{map.kind === "medical" ? "医疗认证时间轴" : "普通卡片"} · 顺序 {map.sortOrder} · {lanes.length} 条泳道</span><i aria-hidden="true">{expanded ? "⌃" : "⌄"}</i></button>
+          <button type="button" className="text-button danger" disabled={busy} onClick={() => confirm({ title: "删除路标", message: `删除“${map.name}”及其未使用泳道？有匹配或医疗配置时会阻止删除。`, confirmLabel: "删除", action: () => run(() => onDeleteRoadmap(map.id)) })}>删除</button>
+        </div>
+        {expanded && editMapForm && <div id={`roadmap-dictionary-detail-${map.id}`} className="roadmap-dictionary-detail">
+          <form className="matching-actions" onSubmit={(e) => { e.preventDefault(); void run(async () => { await onSaveRoadmap({ ...editMapForm, id: map.id }); }); }}>
+            <input required aria-label={`编辑路标名称（${map.name}）`} value={editMapForm.name} onChange={(e) => setEditMapForm({ ...editMapForm, name: e.target.value })} />
+            <select aria-label={`${map.name}展示类型`} value={editMapForm.kind} onChange={(e) => setEditMapForm({ ...editMapForm, kind: e.target.value as SaveRoadmapInput["kind"] })}><option value="standard">普通卡片</option><option value="medical">医疗认证时间轴</option></select>
+            <input aria-label={`编辑路标顺序（${map.name}）`} className="order-input" type="number" min="0" value={editMapForm.sortOrder ?? ""} onChange={(e) => setEditMapForm({ ...editMapForm, sortOrder: e.target.value === "" ? undefined : Number(e.target.value) })} />
+            <button className="button primary" disabled={busy}>保存路标</button>
+          </form>
+          <div className="roadmap-dictionary-lane-title"><strong>{map.name}的泳道</strong><span>仅管理当前选中的路标</span></div>
+          <form className="matching-actions" onSubmit={(e) => { e.preventDefault(); void run(async () => { await onSaveLane({ ...laneForm, roadmapId: map.id }); setLaneForm({ name: "", roadmapId: map.id }); }); }}>
+            <input required aria-label={`${map.name}泳道名称`} placeholder="泳道名称，例如高阶" value={laneForm.name} onChange={(e) => setLaneForm({ ...laneForm, name: e.target.value })} />
+            <input aria-label={`${map.name}泳道顺序`} className="order-input" type="number" min="0" placeholder="顺序" value={laneForm.sortOrder ?? ""} onChange={(e) => setLaneForm({ ...laneForm, sortOrder: e.target.value === "" ? undefined : Number(e.target.value) })} />
+            <button className="button primary" disabled={busy}>{laneForm.id ? "保存泳道" : "添加泳道"}</button>{laneForm.id && <button type="button" className="button ghost" disabled={busy} onClick={() => setLaneForm({ name: "", roadmapId: map.id })}>取消编辑</button>}
+          </form>
+          <div className="roadmap-lane-chips">{lanes.map((lane) => <span key={lane.id}><b>{lane.name}</b><small>顺序 {lane.sortOrder}</small><button type="button" className="text-button" disabled={busy} onClick={() => setLaneForm({ id: lane.id, roadmapId: map.id, name: lane.name, sortOrder: lane.sortOrder })}>编辑</button><button type="button" className="text-button danger" disabled={busy} onClick={() => confirm({ title: "删除泳道", message: `删除“${map.name} · ${lane.name}”？`, confirmLabel: "删除", action: () => run(async () => { await onDeleteLane(lane.id); if (laneForm.id === lane.id) setLaneForm({ name: "", roadmapId: map.id }); }) })}>删除</button></span>)}{!lanes.length && <small>尚未配置泳道，请在上方添加。</small>}</div>
+        </div>}
+      </div>;
+    })}{!roadmaps.length && <p className="roadmap-dictionary-empty">暂无路标，请先在上方新增。</p>}</div>
   </section>;
 }
 

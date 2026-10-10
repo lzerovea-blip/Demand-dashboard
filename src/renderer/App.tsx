@@ -89,7 +89,7 @@ import {
 import { moveMedicalRoadmapRow } from "../shared/medicalRoadmapOrder";
 import { adoptedWorkbookDeleteCount, allWorkbookChangeIds } from "../shared/workbookSelection";
 
-type Page = "requirements" | "summary" | "roadmap" | "matching" | "tiering" | "dictionaries" | "template";
+type Page = "requirements" | "summary" | "roadmap" | "matching" | "tiering" | "requirementDictionaries" | "memberDictionaries" | "roadmapDictionaries" | "template";
 
 interface ConfirmationRequest {
   title: string;
@@ -108,7 +108,7 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.9.0",
+  version: "0.9.1",
   releasedAt: "2026-10-09",
   author: "林忠维",
 };
@@ -396,7 +396,9 @@ export default function App() {
           <NavButton active={page === "matching"} icon="☑" label="需求匹配" onClick={() => setPage("matching")} />
           <NavButton active={page === "roadmap"} icon="▦" label="路标查看" onClick={() => setPage("roadmap")} />
           <div className="nav-group-label">共享设置</div>
-          <NavButton active={page === "dictionaries"} icon="◇" label="字典设置" onClick={() => setPage("dictionaries")} />
+          <NavButton active={page === "requirementDictionaries"} icon="◇" label="需求字典设置" onClick={() => setPage("requirementDictionaries")} />
+          <NavButton active={page === "memberDictionaries"} icon="♙" label="人员字典设置" onClick={() => setPage("memberDictionaries")} />
+          <NavButton active={page === "roadmapDictionaries"} icon="▤" label="路标字典设置" onClick={() => setPage("roadmapDictionaries")} />
           <NavButton active={page === "template"} icon="⇩" label="导出中心" onClick={() => setPage("template")} />
         </nav>
         <div className="sidebar-foot">
@@ -471,21 +473,19 @@ export default function App() {
               }}
             />
           )}
-          {page === "dictionaries" && (
+          {page === "requirementDictionaries" && (
             <DictionariesPage
               domains={snapshot.domains}
               products={snapshot.products}
-              members={snapshot.members}
               onSaveDomain={async (input) => { await update(() => window.roadmapApi.saveDomain(input), "领域已保存"); }}
               onSaveProduct={async (input) => { await update(() => window.roadmapApi.saveProduct(input), "产品已保存"); }}
               onDeleteDomain={async (id) => { await update(() => window.roadmapApi.deleteDomain(id), "领域已删除"); }}
               onDeleteProduct={async (id) => { await update(() => window.roadmapApi.deleteProduct(id), "产品已删除"); }}
-              onSaveMember={async (input) => { await update(() => window.roadmapApi.saveMember(input), "成员已保存"); }}
-              onDeleteMember={async (id) => { await update(() => window.roadmapApi.deleteMember(id), "成员已删除"); }}
               requestConfirmation={requestConfirmation}
             />
           )}
-          {page === "dictionaries" && <RoadmapDictionaryPanel snapshot={snapshot} confirm={requestConfirmation} onSaveRoadmap={async (input) => { await update(() => window.roadmapApi.saveRoadmap(input), "路标字典已保存"); }} onDeleteRoadmap={async (id) => { await update(() => window.roadmapApi.deleteRoadmap(id), "路标已删除"); }} onSaveLane={async (input) => { await update(() => window.roadmapApi.saveRoadmapLane(input), "泳道已保存"); }} onDeleteLane={async (id) => { await update(() => window.roadmapApi.deleteRoadmapLane(id), "泳道已删除"); }} />}
+          {page === "memberDictionaries" && <MembersPanel domains={snapshot.domains} members={snapshot.members} onSave={async (input) => { await update(() => window.roadmapApi.saveMember(input), "成员已保存"); }} onDelete={async (id) => { await update(() => window.roadmapApi.deleteMember(id), "成员已删除"); }} requestConfirmation={requestConfirmation} />}
+          {page === "roadmapDictionaries" && <RoadmapDictionaryPanel snapshot={snapshot} confirm={requestConfirmation} onSaveRoadmap={(input) => update(() => window.roadmapApi.saveRoadmap(input), "路标字典已保存")} onDeleteRoadmap={async (id) => { await update(() => window.roadmapApi.deleteRoadmap(id), "路标已删除"); }} onSaveLane={async (input) => { await update(() => window.roadmapApi.saveRoadmapLane(input), "泳道已保存"); }} onDeleteLane={async (id) => { await update(() => window.roadmapApi.deleteRoadmapLane(id), "泳道已删除"); }} />}
           {page === "tiering" && (
             <TieringPage
               snapshot={snapshot}
@@ -699,7 +699,7 @@ function AboutDialog({ info, onClose }: { info: AppInfo; onClose: () => void }) 
         <div className="about-guide">
           <h3>使用说明</h3>
           <ol>
-            <li><b>准备字典</b><span>在“字典设置”维护领域和产品，作为需求录入的统一口径。</span></li>
+            <li><b>准备字典</b><span>在“需求字典设置”维护领域和产品，作为需求录入的统一口径。</span></li>
             <li><b>录入需求</b><span>在“需求池”新建或编辑需求，填写上线月份、工作量、描述、图片和匹配产品；再到需求匹配选择路标与泳道。</span></li>
             <li><b>查看汇总与路标</b><span>选择半年区间查看投入分析和七张路标；路标页可进入全屏 Tab 查看。</span></li>
             <li><b>输出与交接</b><span>在“导出中心”生成需求路标、协作 Excel 或完整需求包。</span></li>
@@ -1748,9 +1748,9 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
       <form className="drawer editor-drawer" onSubmit={submit}>
         <div className="drawer-header"><div><span className="eyebrow">STRUCTURED INPUT</span><h2>{value ? "编辑需求" : "新建需求"}</h2></div><button type="button" className="icon-button" onClick={onClose}>×</button></div>
         <div className="form-body">
-          {domainL0s.length === 0 && <div className="callout warning">请先到“字典设置”新增领域 L0。</div>}
-          {domainL0s.length > 0 && !allDomainL1s.some((item) => item.parentId) && <div className="callout warning">请先到“字典设置”为领域 L1 指定所属 L0。</div>}
-          {form.domainL0Id && domainL1s.length === 0 && <div className="callout warning">所选领域 L0 暂无关联的领域 L1，请先到字典设置完成关联。</div>}
+          {domainL0s.length === 0 && <div className="callout warning">请先到“需求字典设置”新增领域 L0。</div>}
+          {domainL0s.length > 0 && !allDomainL1s.some((item) => item.parentId) && <div className="callout warning">请先到“需求字典设置”为领域 L1 指定所属 L0。</div>}
+          {form.domainL0Id && domainL1s.length === 0 && <div className="callout warning">所选领域 L0 暂无关联的领域 L1，请先到需求字典设置完成关联。</div>}
           <Field label="需求标题" required><input autoFocus value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="例如：支持早间血压测量" /></Field>
           <Field label="需求描述">
             <textarea rows={5} maxLength={5000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="补充使用场景、用户问题、方案范围或验收要求" />
@@ -1833,7 +1833,7 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
           <div className="requirement-owner-row">
             {REQUIREMENT_OWNER_FIELDS.map(({ key, role, required }) => {
               const options = snapshot.members.filter((member) => member.role === role);
-              return <Field key={key} label={role} required={required}><select aria-label={`需求${role}`} required={required} value={form[key] ?? ""} onChange={(event) => { manualOwners.current.add(key); setForm({ ...form, [key]: event.target.value }); }}><option value="">{required ? `请选择${role}` : "未匹配算法人员"}</option>{options.map((member) => <option key={member.id} value={member.id}>{member.name}{options.some((other) => other.id !== member.id && other.name === member.name) ? `（${member.employeeNumber}）` : ""}</option>)}</select>{!options.length && <small>请先在字典设置添加{role}成员</small>}</Field>;
+              return <Field key={key} label={role} required={required}><select aria-label={`需求${role}`} required={required} value={form[key] ?? ""} onChange={(event) => { manualOwners.current.add(key); setForm({ ...form, [key]: event.target.value }); }}><option value="">{required ? `请选择${role}` : "未匹配算法人员"}</option>{options.map((member) => <option key={member.id} value={member.id}>{member.name}{options.some((other) => other.id !== member.id && other.name === member.name) ? `（${member.employeeNumber}）` : ""}</option>)}</select>{!options.length && <small>请先在人员字典设置添加{role}成员</small>}</Field>;
             })}
           </div>
           <div className="form-row-pair category-product-row">
@@ -1843,7 +1843,7 @@ export function RequirementEditor({ value, snapshot, onClose, onSave, onDelete, 
                 ? <div className="inline-empty">体验优化不匹配产品，路标卡片右侧会显示体验优化图标。</div>
                 : snapshot.products.some((item) => item.active)
                 ? <select className="product-wheel-select" value={form.productIds[0] ?? ""} onChange={(event) => setForm({ ...form, productIds: event.target.value ? [event.target.value] : [] })}><option value="">{form.category === "产品专属" ? "请选择一个产品" : "可选：请选择一个产品"}</option>{snapshot.products.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-                : <div className="inline-empty">暂无产品，请先到字典设置新增产品。</div>}
+                : <div className="inline-empty">暂无产品，请先到需求字典设置新增产品。</div>}
             </Field>
           </div>
           <div className="workload-section">
@@ -2020,7 +2020,7 @@ function ImageViewer({ images, index, closeButtonRef, onSelect, onClose }: {
   );
 }
 
-function DictionariesPage({ domains, products, members, onSaveDomain, onSaveProduct, onDeleteDomain, onDeleteProduct, onSaveMember, onDeleteMember, requestConfirmation }: { domains: DictionaryItem[]; products: DictionaryItem[]; members: Member[]; onSaveDomain: (input: SaveDictionaryInput) => Promise<void>; onSaveProduct: (input: SaveDictionaryInput) => Promise<void>; onDeleteDomain: (id: string) => Promise<void>; onDeleteProduct: (id: string) => Promise<void>; onSaveMember: (input: SaveMemberInput) => Promise<void>; onDeleteMember: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
+export function DictionariesPage({ domains, products, onSaveDomain, onSaveProduct, onDeleteDomain, onDeleteProduct, requestConfirmation }: { domains: DictionaryItem[]; products: DictionaryItem[]; onSaveDomain: (input: SaveDictionaryInput) => Promise<void>; onSaveProduct: (input: SaveDictionaryInput) => Promise<void>; onDeleteDomain: (id: string) => Promise<void>; onDeleteProduct: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const domainL0s = domains.filter((item) => item.level === "L0");
   const domainL1s = domains.filter((item) => (item.level ?? "L1") === "L1");
   return (
@@ -2028,12 +2028,11 @@ function DictionariesPage({ domains, products, members, onSaveDomain, onSaveProd
       <DictionaryPanel title="领域 L0 字典" subtitle="上游领域；一个 L0 可以关联多个 L1" items={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L0", parentId: undefined })} onDelete={onDeleteDomain} requestConfirmation={requestConfirmation} />
       <DictionaryPanel title="领域 L1 字典" subtitle="新增或调整 L1 时必须指定所属 L0；路标仅显示 L1" items={domainL1s} parentOptions={domainL0s} onSave={(input) => onSaveDomain({ ...input, level: "L1" })} onDelete={onDeleteDomain} requestConfirmation={requestConfirmation} />
       <DictionaryPanel title="产品字典" subtitle="平台演进可选一个产品，产品专属必须选择；体验优化不匹配产品" items={products} onSave={onSaveProduct} onDelete={onDeleteProduct} requestConfirmation={requestConfirmation} />
-      <MembersPanel domains={domains} members={members} onSave={onSaveMember} onDelete={onDeleteMember} requestConfirmation={requestConfirmation} />
     </div>
   );
 }
 
-function MembersPanel({ domains, members, onSave, onDelete, requestConfirmation }: { domains: DictionaryItem[]; members: Member[]; onSave: (input: SaveMemberInput) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
+export function MembersPanel({ domains, members, onSave, onDelete, requestConfirmation }: { domains: DictionaryItem[]; members: Member[]; onSave: (input: SaveMemberInput) => Promise<void>; onDelete: (id: string) => Promise<void>; requestConfirmation: RequestConfirmation }) {
   const domainL1s = domains.filter((item) => (item.level ?? "L1") === "L1");
   const [editingId, setEditingId] = useState<string | undefined>();
   const [name, setName] = useState("");
@@ -2582,11 +2581,11 @@ function Empty({ title, body }: { title: string; body: string }) {
 }
 
 function pageTitle(page: Page): string {
-  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标查看", matching: "需求匹配", tiering: "分层分级", dictionaries: "字典设置", template: "导出中心" })[page];
+  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标查看", matching: "需求匹配", tiering: "分层分级", requirementDictionaries: "需求字典设置", memberDictionaries: "人员字典设置", roadmapDictionaries: "路标字典设置", template: "导出中心" })[page];
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "录入与维护需求，路标归属在需求匹配中调整", matching: "勾选需求，独立匹配路标和泳道", summary: "按时间观察需求投入、路标匹配与分类趋势", roadmap: "按路标及泳道字典展示已匹配需求", tiering: "管理全部需求在十五个华为产品系列的支持规格", dictionaries: "维护领域、产品、人员及路标泳道", template: "导出受保护路标、需求表格与完整需求包" })[page];
+  return ({ requirements: "录入与维护需求，路标归属在需求匹配中调整", matching: "勾选需求，独立匹配路标和泳道", summary: "按时间观察需求投入、路标匹配与分类趋势", roadmap: "按路标及泳道字典展示已匹配需求", tiering: "管理全部需求在十五个华为产品系列的支持规格", requirementDictionaries: "维护领域 L0、领域 L1 和产品", memberDictionaries: "维护成员、岗位角色与负责领域", roadmapDictionaries: "新增路标，并在下方选中路标维护名称、顺序和泳道", template: "导出受保护路标、需求表格与完整需求包" })[page];
 }
 
 function formatNumber(value: number): string {

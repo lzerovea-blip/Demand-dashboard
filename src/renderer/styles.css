@@ -419,10 +419,20 @@ td strong { color: #1b2832; font-weight: 700; }
 .text-button { font: inherit; color: #287ef0; background: none; border: 0; padding: 4px 7px; cursor: pointer; font-size: 12px; }
 .text-button.danger { color: #d65454; }
 .roadmap-dictionary-list { padding: 12px 22px; }
-.roadmap-dictionary-item { padding: 16px 0; border-bottom: 1px solid #e9eef1; }
-.roadmap-dictionary-item > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-.roadmap-dictionary-item > div:first-child > span { color: #74828b; font-size: 12px; margin-right: auto; }
-.roadmap-lane-chips { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
+.roadmap-dictionary-item { border-bottom: 1px solid #e9eef1; }
+.roadmap-dictionary-heading { display: flex; align-items: center; gap: 10px; }
+.roadmap-dictionary-select { min-width: 0; flex: 1; display: flex; align-items: center; gap: 12px; padding: 16px 4px; border: 0; background: transparent; color: #25343e; font: inherit; text-align: left; cursor: pointer; }
+.roadmap-dictionary-select strong { min-width: 0; overflow-wrap: anywhere; }
+.roadmap-dictionary-select span { margin-left: auto; color: #74828b; font-size: 12px; }
+.roadmap-dictionary-select i { color: #74828b; font-size: 17px; font-style: normal; }
+.roadmap-dictionary-select:hover strong, .roadmap-dictionary-select:focus-visible strong { color: #287ef0; }
+.roadmap-dictionary-select:focus-visible { outline: 2px solid #287ef0; outline-offset: -2px; border-radius: 8px; }
+.roadmap-dictionary-detail { margin: 0 0 16px; overflow: hidden; border: 1px solid #e3eaf0; border-radius: 11px; background: #f9fbfc; }
+.roadmap-dictionary-detail .matching-actions { padding: 14px 16px; }
+.roadmap-dictionary-lane-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 0; }
+.roadmap-dictionary-lane-title span { color: #74828b; font-size: 11px; }
+.roadmap-dictionary-empty { margin: 12px 4px 20px; color: #74828b; font-size: 12px; }
+.roadmap-lane-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 16px; }
 .roadmap-lane-chips > span { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; padding: 7px 10px; border-radius: 9px; background: #f4f7f8; font-size: 12px; }
 .roadmap-lane-chips small { color: #74828b; }
 .roadmap-focus-tabs { flex-wrap: wrap; }
