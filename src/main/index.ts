@@ -37,13 +37,18 @@ import {
 import { createTieringWorkbook } from "./tieringWorkbook.js";
 import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 import { beginDiagnosticStage, diagnosticInfo, initializeStartupDiagnostics, sanitizeDiagnosticDetail, writeStartupDiagnostic } from "./diagnostics.js";
+import { McpProposalStore } from "./mcpProposals.js";
+import { LocalMcpBridge } from "./mcpBridge.js";
+import { serveMcpStdio } from "./mcpStdio.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-10-21";
+const APP_RELEASED_AT = "2026-10-22";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
 let database: LocalDatabase;
+let mcpProposals: McpProposalStore;
+let mcpBridge: LocalMcpBridge;
 let mainWindow: BrowserWindow | null = null;
 let startupPhase = "process-start";
 const BUILTIN_TEMPLATE_FILE = "需求路标模板-共创版-v0.1.pptx";
@@ -112,6 +117,32 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
+  ipcMain.handle("mcp:status", () => ({ enabled: mcpBridge.isRunning, pendingCount: mcpProposals.listPending().length }));
+  ipcMain.handle("mcp:set-enabled", async (_event, enabled: boolean) => {
+    if (typeof enabled !== "boolean") throw new Error("无效的 MCP 启用状态");
+    if (enabled) {
+      await mcpBridge.start();
+      try { await database.setMcpEnabled(true); } catch (error) { await mcpBridge.stop(); throw error; }
+    } else {
+      await database.setMcpEnabled(false);
+      await mcpBridge.stop();
+    }
+    mainWindow?.webContents.send("mcp:changed");
+    return { enabled: mcpBridge.isRunning, pendingCount: mcpProposals.listPending().length };
+  });
+  ipcMain.handle("mcp:proposals:list", () => mcpProposals.listPending());
+  ipcMain.handle("mcp:proposals:decide", async (_event, id: string, accept: boolean) => {
+    if (typeof accept !== "boolean") throw new Error("请明确选择确认或取消");
+    try {
+      const result = await mcpProposals.decide(id, accept);
+      writeStartupDiagnostic("mcp-proposal-decision", `result=${result.proposal.state} operations=${result.proposal.items.length}`);
+      if (result.snapshot) mainWindow?.webContents.send("snapshot:changed", result.snapshot);
+      return result;
+    } catch (error) {
+      writeStartupDiagnostic("mcp-proposal-failed", "stage=approval result=rejected");
+      throw error;
+    }
+  });
   ipcMain.handle("app:info", () => ({
     name: PRODUCT_NAME,
     version: app.getVersion(),
@@ -359,9 +390,16 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   startupPhase = "electron-ready";
+  app.setPath("userData", process.env.SOLUTION_REQUIREMENTS_USER_DATA_DIR || join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY));
+  if (process.argv.includes("--mcp-stdio")) {
+    process.stdin.once("end", () => app.quit());
+    await serveMcpStdio(app.getPath("userData"));
+    return;
+  }
+  if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+  app.on("second-instance", () => { mainWindow?.show(); mainWindow?.focus(); });
   nativeTheme.themeSource = "light";
   if (process.platform === "win32") app.setAppUserModelId("com.local.healthroadmap");
-  app.setPath("userData", process.env.SOLUTION_REQUIREMENTS_USER_DATA_DIR || join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY));
   initializeStartupDiagnostics(app.getPath("userData"), app.getVersion());
   writeStartupDiagnostic("process-ready", `pid=${process.pid}`);
   startupPhase = "user-data-initialization";
@@ -373,6 +411,14 @@ app.whenReady().then(async () => {
   const finishDatabase = beginDiagnosticStage("database-read-migration-and-built-in-series");
   const initialization = await database.initialize();
   finishDatabase();
+  mcpProposals = new McpProposalStore(database, () => mainWindow?.webContents.send("mcp:changed"));
+  mcpBridge = new LocalMcpBridge(app.getPath("userData"), () => database.getSnapshot(), mcpProposals,
+    (event, detail) => { writeStartupDiagnostic(event, detail); });
+  await rm(join(app.getPath("userData"), "mcp-session.json"), { force: true });
+  if (database.isMcpEnabled()) {
+    try { await mcpBridge.start(); }
+    catch (error) { writeStartupDiagnostic("mcp-start-failed", `stage=bridge ${safeErrorMessage(error)}`); }
+  }
   if (initialization.skippedTieringRequirements > 0) {
     writeStartupDiagnostic(
       "legacy-domain-links-skipped",
@@ -391,8 +437,10 @@ app.whenReady().then(async () => {
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
+  app.on("before-quit", () => { void mcpBridge?.stop(); });
 }).catch(async (error: unknown) => {
   const message = safeErrorMessage(error);
+  if (process.argv.includes("--mcp-stdio")) { console.error(`MCP stdio startup failed: ${message}`); app.exit(1); return; }
   const diagnosticPath = writeStartupDiagnostic("startup-failed", `stage=${startupPhase} ${message}`);
   dialog.showErrorBox(
     `${PRODUCT_NAME}无法启动`,
@@ -408,6 +456,7 @@ app.whenReady().then(async () => {
 
 process.on("uncaughtException", (error) => {
   const message = safeErrorMessage(error);
+  if (process.argv.includes("--mcp-stdio")) { console.error(`MCP stdio fatal error: ${message}`); app.exit(1); return; }
   const diagnosticPath = writeStartupDiagnostic("main-uncaught-exception", message);
   if (app.isReady()) {
     dialog.showErrorBox(

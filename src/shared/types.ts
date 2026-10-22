@@ -640,6 +640,12 @@ export interface AppInfo {
 }
 
 export interface ElectronApi {
+  getMcpStatus(): Promise<import("./mcp.js").McpConnectionStatus>;
+  setMcpEnabled(enabled: boolean): Promise<import("./mcp.js").McpConnectionStatus>;
+  getMcpProposals(): Promise<import("./mcp.js").McpProposal[]>;
+  decideMcpProposal(id: string, accept: boolean): Promise<{ proposal: import("./mcp.js").McpProposal; snapshot?: AppSnapshot }>;
+  onMcpChange(listener: () => void): () => void;
+  onSnapshotChange(listener: (snapshot: AppSnapshot) => void): () => void;
   deleteMedicalRoadmapPlan(input: { requirementId: string; roadmapId: string }): Promise<AppSnapshot>;
   saveRoadmap(input: SaveRoadmapInput): Promise<AppSnapshot>;
   deleteRoadmap(id: string): Promise<AppSnapshot>;

@@ -8,6 +8,7 @@ import type {
   SaveMemberInput,
   SavePptAccessPolicyInput,
   SaveRequirementInput,
+  AppSnapshot,
   SaveTieringSupportInput,
   SaveTieringEvidenceSourceInput,
   UpdateTieringIssueInput,
@@ -20,6 +21,12 @@ import type {
 } from "../shared/types.js";
 
 const api: ElectronApi = {
+  getMcpStatus: () => ipcRenderer.invoke("mcp:status"),
+  setMcpEnabled: (enabled) => ipcRenderer.invoke("mcp:set-enabled", enabled),
+  getMcpProposals: () => ipcRenderer.invoke("mcp:proposals:list"),
+  decideMcpProposal: (id, accept) => ipcRenderer.invoke("mcp:proposals:decide", id, accept),
+  onMcpChange: (listener) => { const subscription = () => listener(); ipcRenderer.on("mcp:changed", subscription); return () => ipcRenderer.removeListener("mcp:changed", subscription); },
+  onSnapshotChange: (listener) => { const subscription = (_event: IpcRendererEvent, snapshot: AppSnapshot) => listener(snapshot); ipcRenderer.on("snapshot:changed", subscription); return () => ipcRenderer.removeListener("snapshot:changed", subscription); },
   saveRoadmap: (input) => ipcRenderer.invoke("roadmaps:save", input),
   deleteRoadmap: (id) => ipcRenderer.invoke("roadmaps:delete", id),
   saveRoadmapLane: (input) => ipcRenderer.invoke("roadmap-lanes:save", input),

@@ -1,6 +1,6 @@
 import initSqlJs, { type Database as SqlDatabase, type SqlJsStatic } from "sql.js";
 import { app } from "electron";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -77,6 +77,7 @@ import {
 import { historicalLaunchForFeatureId, normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
 import { isMedicalSubmissionSource, normalizeMedicalSubmissionMilestones, validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission.js";
 import { normalizeRoadmapManagement, validateRoadmapManagement, assignmentGroupKey, projectedMedicalRequirement, legacyRoadmapId } from "../shared/roadmapManagement.js";
+import { MCP_EDITABLE_FIELDS, mcpSaveInput, type McpRequirementOperation } from "../shared/mcp.js";
 
 const BACKUP_SCHEMA_VERSION = 1;
 const DATABASE_SCHEMA_VERSION = 13;
@@ -85,6 +86,7 @@ export class LocalDatabase {
   private sql!: SqlJsStatic;
   private db!: SqlDatabase;
   private readonly databasePath: string;
+  private deferMcpPersistence = false;
 
   constructor() {
     this.databasePath = join(app.getPath("userData"), "roadmap.db");
@@ -145,6 +147,15 @@ export class LocalDatabase {
       }),
       templates: this.all<{ payload: string }>("SELECT payload FROM templates ORDER BY imported_at DESC").map((row) => JSON.parse(row.payload) as TemplateProfile),
     };
+  }
+
+  isMcpEnabled(): boolean {
+    return this.getPayload<boolean>("settings", "key", "mcp_enabled") === true;
+  }
+
+  async setMcpEnabled(enabled: boolean): Promise<void> {
+    this.run("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)", ["mcp_enabled", JSON.stringify(enabled)]);
+    await this.persist();
   }
 
   async saveRequirement(input: SaveRequirementInput): Promise<AppSnapshot> {
@@ -303,6 +314,45 @@ export class LocalDatabase {
       throw error;
     }
     return this.getSnapshot();
+  }
+
+  /** Execute the complete human-approved MCP batch against an isolated SQL database. */
+  async applyMcpRequirementBatch(operations: McpRequirementOperation[]): Promise<AppSnapshot> {
+    if (this.deferMcpPersistence) throw new Error("已有 MCP 修改批次正在执行");
+    const original = this.db;
+    this.db = new this.sql.Database(original.export());
+    this.deferMcpPersistence = true;
+    try {
+      for (const operation of operations) {
+        if (operation.type === "create") {
+          await this.saveRequirement({ ...operation.fields, images: [], overseasRegions: operation.fields.overseasRegions ?? [], productIds: operation.fields.productIds ?? [] });
+        } else if (operation.type === "update") {
+          if (Object.keys(operation.fields).some((key) => !(MCP_EDITABLE_FIELDS as readonly string[]).includes(key))) throw new Error("MCP 修改包含未开放字段");
+          const current = this.getSnapshot().requirements.find((item) => item.id === operation.id);
+          if (!current) throw new Error(`需求不存在：${operation.id}`);
+          await this.saveRequirement(mcpSaveInput(current, operation.fields));
+        } else if (operation.type === "duplicate") {
+          await this.duplicateRequirement(operation.id);
+        } else if (operation.type === "delete") {
+          if (!this.getSnapshot().requirements.some((item) => item.id === operation.id)) throw new Error(`需求不存在：${operation.id}`);
+          await this.deleteRequirement(operation.id);
+        }
+      }
+      // The final disk commit is synchronous, so no unrelated renderer IPC can
+      // interleave between the staged SQL state and its single atomic rename.
+      mkdirSync(app.getPath("userData"), { recursive: true });
+      const tempPath = `${this.databasePath}.tmp`;
+      writeFileSync(tempPath, Buffer.from(this.db.export()));
+      renameSync(tempPath, this.databasePath);
+      this.deferMcpPersistence = false;
+      original.close();
+      return this.getSnapshot();
+    } catch (error) {
+      this.deferMcpPersistence = false;
+      this.db.close();
+      this.db = original;
+      throw error;
+    }
   }
 
   async saveDomain(input: SaveDictionaryInput): Promise<AppSnapshot> {
@@ -1246,6 +1296,7 @@ export class LocalDatabase {
   }
 
   private async persist(): Promise<void> {
+    if (this.deferMcpPersistence) return;
     await mkdir(app.getPath("userData"), { recursive: true });
     const tempPath = `${this.databasePath}.tmp`;
     await writeFile(tempPath, Buffer.from(this.db.export()));

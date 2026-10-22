@@ -38,6 +38,8 @@ import { moveImageViewerIndex } from "./imageViewer";
 import { formatMedicalSubmissionMonth, initialRequirementTargetMonth, isMedicalSubmissionSource, medicalSubmissionTimeline, validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission";
 import { TieringPage } from "./TieringPage";
 import { MedicalPlanEditor, RoadmapDictionaryPanel, RoadmapMatchingPage } from "./RoadmapManagementPage";
+import { McpPage } from "./McpPage";
+import type { McpConnectionStatus, McpProposal } from "../shared/mcp";
 import { roadmapDefinitionsFor, roadmapLanesFor } from "../shared/roadmapManagement";
 import { captureRoadmapMonthAnchor, roadmapCardIsL1Related, roadmapScrollLeftForAnchor, type RoadmapMonthAnchor, type RoadmapMonthColumnMetrics } from "./roadmapInteraction";
 import {
@@ -89,7 +91,7 @@ import {
 import { moveMedicalRoadmapRow } from "../shared/medicalRoadmapOrder";
 import { adoptedWorkbookDeleteCount, allWorkbookChangeIds } from "../shared/workbookSelection";
 
-type Page = "requirements" | "summary" | "roadmap" | "matching" | "tiering" | "requirementDictionaries" | "memberDictionaries" | "roadmapDictionaries" | "template";
+type Page = "requirements" | "summary" | "roadmap" | "matching" | "tiering" | "requirementDictionaries" | "memberDictionaries" | "roadmapDictionaries" | "template" | "mcp";
 
 interface ConfirmationRequest {
   title: string;
@@ -108,8 +110,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.9.7",
-  releasedAt: "2026-10-21",
+  version: "0.9.8",
+  releasedAt: "2026-10-22",
   author: "林忠维",
 };
 
@@ -186,9 +188,21 @@ export default function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [confirmationBusy, setConfirmationBusy] = useState(false);
+  const [mcpStatus, setMcpStatus] = useState<McpConnectionStatus | null>(null);
+  const [mcpProposals, setMcpProposals] = useState<McpProposal[]>([]);
 
   useEffect(() => {
     window.roadmapApi.getAppInfo().then(setAppInfo).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => { void Promise.all([window.roadmapApi.getMcpStatus(), window.roadmapApi.getMcpProposals()])
+      .then(([status, proposals]) => { setMcpStatus(status); setMcpProposals(proposals); })
+      .catch((reason) => setError(messageOf(reason))); };
+    refresh();
+    const unsubscribeMcp = window.roadmapApi.onMcpChange(refresh);
+    const unsubscribeSnapshot = window.roadmapApi.onSnapshotChange(setSnapshot);
+    return () => { unsubscribeMcp(); unsubscribeSnapshot(); };
   }, []);
 
   useEffect(() => {
@@ -400,6 +414,7 @@ export default function App() {
           <NavButton active={page === "memberDictionaries"} icon="♙" label="人员字典设置" onClick={() => setPage("memberDictionaries")} />
           <NavButton active={page === "roadmapDictionaries"} icon="▤" label="路标字典设置" onClick={() => setPage("roadmapDictionaries")} />
           <NavButton active={page === "template"} icon="⇩" label="导出中心" onClick={() => setPage("template")} />
+          <NavButton active={page === "mcp"} icon="⌁" label={`模型接入${mcpStatus?.pendingCount ? ` (${mcpStatus.pendingCount})` : ""}`} onClick={() => setPage("mcp")} />
         </nav>
         <div className="sidebar-foot">
           <div className="offline-dot"><i /> 全程本地处理</div>
@@ -440,6 +455,21 @@ export default function App() {
         </header>
 
         <section className="content">
+          {page === "mcp" && <McpPage status={mcpStatus} proposals={mcpProposals} snapshot={snapshot} onToggle={async (enabled) => {
+            try { setMcpStatus(await window.roadmapApi.setMcpEnabled(enabled)); setNotice(enabled ? "本机 MCP 接入已启用" : "本机 MCP 接入已停用"); }
+            catch (reason) { setError(messageOf(reason)); throw reason; }
+          }} onDecide={(proposal, accept) => requestConfirmation({
+            title: accept ? "确认 MCP 整批修改" : "拒绝 MCP 提案",
+            message: accept ? `将一次写入 ${proposal.items.length} 项操作，其中删除 ${proposal.items.filter((item) => item.operation.type === "delete").length} 条需求。确认后无法撤销。` : "拒绝后模型需要重新提出该批修改。",
+            confirmLabel: accept ? "确认写入整批" : "拒绝整批",
+            action: async () => {
+              try {
+                const result = await window.roadmapApi.decideMcpProposal(proposal.id, accept);
+                if (result.snapshot) setSnapshot(result.snapshot);
+                setNotice(accept ? "MCP 提案已整批写入" : "MCP 提案已拒绝");
+              } catch (reason) { setError(messageOf(reason)); throw reason; }
+            },
+          })} />}
           {page === "requirements" && (
             <RequirementsPage
               snapshot={snapshot}
@@ -2583,11 +2613,11 @@ function Empty({ title, body }: { title: string; body: string }) {
 }
 
 function pageTitle(page: Page): string {
-  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标查看", matching: "需求匹配", tiering: "分层分级", requirementDictionaries: "需求字典设置", memberDictionaries: "人员字典设置", roadmapDictionaries: "路标字典设置", template: "导出中心" })[page];
+  return ({ requirements: "需求池", summary: "汇总分析", roadmap: "路标查看", matching: "需求匹配", tiering: "分层分级", requirementDictionaries: "需求字典设置", memberDictionaries: "人员字典设置", roadmapDictionaries: "路标字典设置", template: "导出中心", mcp: "模型接入" })[page];
 }
 
 function pageSubtitle(page: Page): string {
-  return ({ requirements: "录入与维护需求，路标归属在需求匹配中调整", matching: "勾选需求，独立匹配路标和泳道", summary: "按时间观察需求投入、路标匹配与分类趋势", roadmap: "按路标及泳道字典展示已匹配需求", tiering: "管理全部需求在十五个华为产品系列的支持规格", requirementDictionaries: "维护领域 L0、领域 L1 和产品", memberDictionaries: "维护成员、岗位角色与负责领域", roadmapDictionaries: "新增路标，并在下方选中路标维护名称、顺序和泳道", template: "导出受保护路标、需求表格与完整需求包" })[page];
+  return ({ requirements: "录入与维护需求，路标归属在需求匹配中调整", matching: "勾选需求，独立匹配路标和泳道", summary: "按时间观察需求投入、路标匹配与分类趋势", roadmap: "按路标及泳道字典展示已匹配需求", tiering: "管理全部需求在十五个华为产品系列的支持规格", requirementDictionaries: "维护领域 L0、领域 L1 和产品", memberDictionaries: "维护成员、岗位角色与负责领域", roadmapDictionaries: "新增路标，并在下方选中路标维护名称、顺序和泳道", template: "导出受保护路标、需求表格与完整需求包", mcp: "让公司模型提出需求池修改，由你逐批确认后写入" })[page];
 }
 
 function formatNumber(value: number): string {
