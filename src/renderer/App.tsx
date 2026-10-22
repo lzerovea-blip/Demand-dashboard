@@ -33,7 +33,7 @@ import { filterMembers, isMemberFilterValid, requirementMatchesResponsibleMember
 import { formatHistoricalLaunch, historicalLaunchStatusLabel } from "../shared/tieringLaunches";
 import { isTieringEligibleRequirement } from "../shared/tiering";
 import { restoreFocusAfterConfirmation } from "./confirmation";
-import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS, pptExportSections } from "../shared/pptExport";
+import { DEFAULT_PPT_EXPORT_SECTIONS, MAX_PPT_HALF_YEARS, PPT_EXPORT_SECTIONS, pptExportSections, pptBaseSlideCount } from "../shared/pptExport";
 import { moveImageViewerIndex } from "./imageViewer";
 import { formatMedicalSubmissionMonth, initialRequirementTargetMonth, isMedicalSubmissionSource, medicalSubmissionTimeline, validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission";
 import { TieringPage } from "./TieringPage";
@@ -108,8 +108,8 @@ type RequestConfirmation = (
 
 const DEFAULT_APP_INFO: AppInfo = {
   name: "解决方案需求管理",
-  version: "0.9.1",
-  releasedAt: "2026-10-09",
+  version: "0.9.7",
+  releasedAt: "2026-10-21",
   author: "林忠维",
 };
 
@@ -737,17 +737,19 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
   const [copyingId, setCopyingId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const domains = new Map(snapshot.domains.map((item) => [item.id, item.name]));
+  const allPoolRequirements = [...snapshot.requirements, ...(snapshot.draftRequirements ?? [])];
+  const draftIds = new Set((snapshot.draftRequirements ?? []).map((item) => item.id));
   const products = new Map(snapshot.products.map((item) => [item.id, item.name]));
   const domainSelection = domainFilterSelection(snapshot.domains, domainL0Id, domainL1Id);
   useEffect(() => {
     setDomainL0Id(domainSelection.domainL0Id);
     setDomainL1Id(domainSelection.domainL1Id);
   }, [domainSelection.domainL0Id, domainSelection.domainL1Id]);
-  const releaseVersions = listReleaseVersionOptions(snapshot.requirements);
+  const releaseVersions = listReleaseVersionOptions(allPoolRequirements);
   useEffect(() => {
     if (targetHalfYear && !releaseVersions.some((item) => item.halfYear === targetHalfYear)) setTargetHalfYear("");
   }, [targetHalfYear, releaseVersions.map((item) => item.halfYear).join("|")]);
-  const baseRows = filterRequirements(snapshot.requirements, domains, { query, domainL0Id: domainSelection.domainL0Id, domainL1Id: domainSelection.domainL1Id, targetHalfYear });
+  const baseRows = filterRequirements(allPoolRequirements, domains, { query, domainL0Id: domainSelection.domainL0Id, domainL1Id: domainSelection.domainL1Id, targetHalfYear });
   const planningMembers = visibleMembersForRole(snapshot.members, baseRows, "规划");
   const productManagers = visibleMembersForRole(snapshot.members, baseRows, "产品经理");
   const seMembers = visibleMembersForRole(snapshot.members, baseRows, "SE");
@@ -781,7 +783,7 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
           <select aria-label="筛选规划" value={planningMemberId} onChange={(event) => setPlanningMemberId(event.target.value)}><option value="">全部规划</option><option value={UNASSIGNED_MEMBER}>未配置规划</option>{planningMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
           <select aria-label="筛选产品经理" value={productManagerMemberId} onChange={(event) => setProductManagerMemberId(event.target.value)}><option value="">全部产品经理</option><option value={UNASSIGNED_MEMBER}>未配置产品经理</option>{productManagers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
           <select aria-label="筛选 SE" value={seMemberId} onChange={(event) => setSeMemberId(event.target.value)}><option value="">全部 SE</option><option value={UNASSIGNED_MEMBER}>未配置 SE</option>{seMembers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-          <span className="toolbar-count">显示 {rows.length} / {snapshot.requirements.length}</span>
+          <span className="toolbar-count">显示 {rows.length} / {allPoolRequirements.length}</span>
         </div>
         {rows.length ? (
           <div className="table-wrap requirements-table-wrap">
@@ -801,7 +803,7 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
               <tbody>
                 {rows.map((item) => (
                   <tr key={item.id} onDoubleClick={() => onEdit(item)}>
-                    <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={requirementPoolTitle(domains.get(item.domainId), item.title)}>{requirementPoolTitle(domains.get(item.domainId), item.title)}</strong><div className="requirement-badges">{item.historicalLaunch && <span className="historical-baseline-badge">历史基线</span>}{item.historicalLaunch?.verificationStatus === "pending" && <span className="historical-pending-badge">{historicalLaunchStatusLabel(item.historicalLaunch)}</span>}{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></div></td>
+                    <td className="requirement-title-column"><div className="requirement-title-cell"><strong title={requirementPoolTitle(domains.get(item.domainId), item.title)}>{requirementPoolTitle(domains.get(item.domainId), item.title)}</strong><div className="requirement-badges">{draftIds.has(item.id) && <span className="workload-pending-badge">待完善 · 不参与统计与路标</span>}{item.historicalLaunch && <span className="historical-baseline-badge">历史基线</span>}{item.historicalLaunch?.verificationStatus === "pending" && <span className="historical-pending-badge">{historicalLaunchStatusLabel(item.historicalLaunch)}</span>}{isWorkloadPendingEvaluation(item) && <span className="workload-pending-badge">工作量待评估</span>}</div></div></td>
                     <td><ScopeBadge scope={item.scope} compact /></td>
                     <td><div className="release-cell"><b>{formatRequirementLaunch(item)}</b>{item.targetMonth && <small>{hmosVersionForMonth(item.targetMonth)}</small>}</div></td>
                     <td>{item.productIds.map((id) => products.get(id)).filter(Boolean).join("、") || "—"}</td>
@@ -809,13 +811,13 @@ function RequirementsPage({ snapshot, onEdit, onDuplicate, onDelete, requestConf
                     <td><ResponsibilityCell members={savedResponsibleMembers(item, snapshot.members, "产品经理")} /></td>
                     <td><ResponsibilityCell members={savedResponsibleMembers(item, snapshot.members, "SE")} /></td>
                     <td className="numeric workload-cell"><b>{formatNumber(item.workloadPm)} PM</b><span>{formatWorkloadBreakdown(workloadBreakdownOf(item))}</span></td>
-                    <td className="row-actions"><button onClick={() => onEdit(item)}>编辑</button><button disabled={Boolean(copyingId)} onClick={() => void duplicate(item.id)}>{copyingId === item.id ? "复制中…" : "复制"}</button><button className="danger-text" onClick={(event) => requestConfirmation({ title: "删除需求", message: "确定删除这条需求？此操作可通过完整需求包恢复。", confirmLabel: "确认删除", action: () => onDelete(item.id) }, event.currentTarget, searchInputRef.current)}>删除</button></td>
+                    <td className="row-actions"><button onClick={() => onEdit(item)}>编辑</button><button disabled={Boolean(copyingId) || draftIds.has(item.id)} onClick={() => void duplicate(item.id)}>{copyingId === item.id ? "复制中…" : "复制"}</button><button className="danger-text" onClick={(event) => requestConfirmation({ title: "删除需求", message: "确定删除这条需求？此操作可通过完整需求包恢复。", confirmLabel: "确认删除", action: () => onDelete(item.id) }, event.currentTarget, searchInputRef.current)}>删除</button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        ) : <Empty title="还没有符合条件的需求" body={snapshot.requirements.length ? "尝试清空搜索或调整领域 L0、领域 L1、上线版本及责任人。" : "先维护领域与产品字典，再新建第一条需求。"} />}
+        ) : <Empty title="还没有符合条件的需求" body={allPoolRequirements.length ? "尝试清空搜索或调整领域 L0、领域 L1、上线版本及责任人。" : "先维护领域与产品字典，再新建第一条需求。"} />}
       </div>
     </>
   );
@@ -2262,7 +2264,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
   const [irmStatus, setIrmStatus] = useState<IrmEnvironmentStatus | null>(null);
   const [securityMessage, setSecurityMessage] = useState("");
   const imageCount = snapshot.requirements.reduce((sum, item) => sum + item.images.length, 0);
-  const workbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).length;
+  const workbookRequirementCount = requirementsInRange([...snapshot.requirements, ...(snapshot.draftRequirements ?? [])], start, end).length;
   const tieringWorkbookRequirementCount = requirementsInRange(snapshot.requirements, start, end).filter(isTieringEligibleRequirement).length;
   const selectableWorkbookChangeIds = allWorkbookChangeIds(workbookPreview?.fieldChanges ?? []);
   const selectedWorkbookDeletes = adoptedWorkbookDeleteCount(workbookPreview?.fieldChanges ?? [], workbookSelectedChanges, workbookConflictDecisions);
@@ -2320,7 +2322,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
 
   async function applyWorkbook(conflictMode: WorkspaceWorkbookConflictMode, confirmedDeletes = false) {
     if (!workbookPreview || workbookPreview.errors.length) return;
-    const isSelective = ["v8", "v9", "v10", "v11"].includes(workbookPreview.formatVersion);
+    const isSelective = ["v8", "v9", "v10", "v11", "v12"].includes(workbookPreview.formatVersion);
     if (!isSelective && workbookPreview.differences.length > 0 && !workbookDifferencesConfirmed) return;
     if (isSelective && workbookSelectedChanges.some((id) => workbookPreview.fieldChanges?.find((change) => change.id === id)?.conflict && !workbookConflictDecisions[id])) return;
     if (isSelective && selectedWorkbookDeletes > 0 && !confirmedDeletes) {
@@ -2404,15 +2406,15 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
         </section>
 
         <p className="callout">需求数量、工作量和普通路标按各自选择的时间范围统计。医疗 PPT 使用已匹配需求的五节点时间范围；需求池 Excel 按通用上线年月筛选，医疗节点不会改变导出范围。历史空上线月份不计入按半年统计或时间范围 Excel，完整需求包仍完整保存。</p>
-        <p className="callout">需求池协作 Excel v11 可编辑需求字段与 15 个系列支持状态，回导时逐项勾选差异。路标匹配、医疗节点、匹配产品及创新研究 App、算法工作量在应用中维护。医疗 PPT 使用已匹配医疗需求的独立时间范围。</p>
+        <p className="callout">需求池协作 Excel v12 支持企业在线表格编辑：通过可见需求编号匹配，预留 300 条新增行；缺少责任人的新增需求先进入“待完善”，不参与分层、汇总或路标。下载后可复制业务表到新工作簿回导，差异默认不勾选。路标匹配、医疗节点、匹配产品及创新研究 App、算法工作量仍在应用中维护。</p>
         <div className="export-type-grid">
           <section className="panel export-type-card roadmap-export-card">
             <div className="export-type-head"><span className="export-type-icon">P</span><span className="eyebrow">POWERPOINT</span></div>
             <h3>需求路标</h3>
-            <p>按当前半年区间生成原生可编辑 PowerPoint。封面固定保留；路标内容过多时自动续页，保留全部卡片及原有顺序。</p>
+            <p>按当前半年区间生成原生可编辑 PowerPoint。每张路标按国内、海外分别出页，全球需求两页均显示；内容过多时自动续页，汇总不重复计算。</p>
             <dl className="export-type-meta">
               <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
-              <div><dt>基础页数</dt><dd>{1 + pptSections.length} 页（内容过多自动续页）</dd></div>
+              <div><dt>基础页数</dt><dd>{pptBaseSlideCount(pptSections)} 页（国内、海外分开，内容过多自动续页）</dd></div>
               <div><dt>处理方式</dt><dd>全程本地</dd></div>
             </dl>
             <div className="ppt-export-config">
@@ -2431,7 +2433,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
           <section className="panel export-type-card excel-export-card">
             <div className="export-type-head"><span className="export-type-icon">X</span><span className="eyebrow">EXCEL COLLABORATION</span></div>
             <h3>Excel 表格</h3>
-            <p>需求池 Excel 可逐项编辑需求和 15 个系列支持状态，导入时逐字段勾选合入；字典或成员选项过多时可直接填写名称，回导仍会校验。分层分级 Excel 仅供查看。</p>
+            <p>需求池 Excel 可在公司在线表格中修改或新增需求，导入时逐项选择合入；分层分级 Excel 仅供查看。先用完整需求包在协作电脑上同步字典和成员。</p>
             <dl className="export-type-meta">
               <div><dt>导出区间</dt><dd>{shortHalf(start)} – {shortHalf(end)}</dd></div>
               <div><dt>需求池</dt><dd>{workbookRequirementCount} 条</dd></div>
@@ -2467,7 +2469,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
           <PanelTitle title="PPT 成员白名单与权限" subtitle="只影响受保护 PPT；权限配置会随完整需求包交接。" action={<span className="ppt-access-rule">未加入者默认不可读</span>} />
           <div className="ppt-access-content">
             <div className="ppt-access-summary">
-              <p className="ppt-expiry-notice"><b>固定有效期：导出日起半年</b><span>按六个日历月计算，月末自动收敛；实际到期日期会显示在 PPT 封面。</span></p>
+              <p className="ppt-expiry-notice"><b>固定有效期：导出日起半年</b><span>按六个日历月计算，月末自动收敛；权限到期后无法继续访问，PPT 页面不显示权限说明。</span></p>
               <div className="ppt-security-actions"><button type="button" className="button ghost" disabled={savingPolicy || !policyDirty} onClick={() => void savePolicy()}>{savingPolicy ? "保存中…" : "保存白名单"}</button><button type="button" className="button ghost" disabled={checkingIrm} onClick={() => void checkIrm()}>{checkingIrm ? "检测中…" : "检测 PowerPoint / IRM"}</button></div>
               {(securityMessage || irmStatus) && <p className={`ppt-irm-status ${irmStatus?.irmReady ? "ready" : ""}`}>{securityMessage || irmStatus?.message}</p>}
             </div>
@@ -2495,7 +2497,7 @@ export function TemplatePage({ snapshot, start, end, onExportPpt, onExportWorksp
           <div className="import-file"><b>{workbookPreview.fileName}</b><span>{workbookPreview.formatVersion} · 导出于 {formatDateTime(workbookPreview.exportedAt)}</span></div>
           <dl className="import-counts workbook-counts"><div><dt>新增需求</dt><dd>{workbookPreview.counts.added} 条</dd></div><div><dt>修改需求</dt><dd>{workbookPreview.counts.updated} 条</dd></div><div><dt>删除需求</dt><dd>{workbookPreview.counts.deleted} 条</dd></div><div><dt>未变化</dt><dd>{workbookPreview.counts.unchanged} 条</dd></div><div><dt>领域 / 产品调整</dt><dd>{workbookPreview.counts.domainsChanged} / {workbookPreview.counts.productsChanged}</dd></div><div><dt>卡片调整</dt><dd>{workbookPreview.counts.groupOverridesChanged} 项</dd></div><div><dt>冲突</dt><dd>{workbookPreview.counts.conflicts} 项</dd></div><div><dt>校验错误</dt><dd>{workbookPreview.errors.length} 项</dd></div></dl>
           {workbookPreview.errors.length > 0 && <ImportIssueList title="需要先修正的错误" tone="error" items={workbookPreview.errors} />}
-          {["v8", "v9", "v10", "v11"].includes(workbookPreview.formatVersion) ? <>
+          {["v8", "v9", "v10", "v11", "v12"].includes(workbookPreview.formatVersion) ? <>
             {workbookPreview.errors.length === 0 && <div className="import-differences workbook-field-differences"><div className="import-differences-head"><b>逐项选择合入</b><div className="workbook-select-all"><span>已选 {workbookSelectedChanges.length} / {selectableWorkbookChangeIds.length} 项，默认不勾选</span><button type="button" className="button ghost" disabled={!selectableWorkbookChangeIds.length || Boolean(workbookApplying)} onClick={() => setWorkbookSelectedChanges((current) => selectableWorkbookChangeIds.every((id) => current.includes(id)) ? [] : selectableWorkbookChangeIds)}>{selectableWorkbookChangeIds.length && selectableWorkbookChangeIds.every((id) => workbookSelectedChanges.includes(id)) ? "取消全选" : "全选"}</button></div></div><div className="import-difference-scroll">
               {(workbookPreview.fieldChanges ?? []).map((change) => {
                 const checked = workbookSelectedChanges.includes(change.id);

@@ -29,10 +29,11 @@ import { roundWorkload } from "../shared/workload.js";
 import { diffWorkspaceData, workspaceDifferenceDigest } from "../shared/workspaceDiff.js";
 import { validateWorkspaceData } from "./workspacePackage.js";
 import { BUILT_IN_TIERING_PRODUCT_SERIES, isHistoricalTieringFeature, isTieringEligibleRequirement, normalizeTieringData, normalizeWorkspaceTieringScope, renameIndependentTieringDomain, resolveTieringFeature, tieringSupportId } from "../shared/tiering.js";
+import { createOnlineWorkbook, inspectOnlineWorkbook, applyOnlineWorkbook, type OnlineWorkbookInspection } from "./workspaceWorkbookOnline.js";
 
 const FORMAT_KEY = "health-roadmap-collaboration";
-const FORMAT_VERSION = "v11";
-const LEGACY_FORMAT_VERSIONS = ["v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10"] as const;
+const FORMAT_VERSION = "v12";
+const LEGACY_FORMAT_VERSIONS = ["v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11"] as const;
 const SUPPORTED_FORMAT_VERSIONS: readonly string[] = [FORMAT_VERSION, ...LEGACY_FORMAT_VERSIONS];
 const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 const LEGACY_HEADER_ROW = 3;
@@ -267,6 +268,7 @@ export interface PreparedWorkspaceWorkbookImport {
   localFingerprint?: string;
   sourceFilePath?: string;
   sourceSha256?: string;
+  online?: OnlineWorkbookInspection;
 }
 
 interface ImportPlan {
@@ -287,8 +289,9 @@ export async function createWorkspaceWorkbook(
   appVersion: string,
   exportedAt = new Date().toISOString(),
   range?: HalfYearRange,
-  formatVersion: "v11" | "v10" | "v9" | "v8" | "v7" = "v11",
+  formatVersion: "v12" | "v11" | "v10" | "v9" | "v8" | "v7" = "v12",
 ): Promise<Buffer> {
+  if (formatVersion === "v12") return createOnlineWorkbook(range ? workspaceDataForWorkbookRange(data, range.start, range.end) : data, exportedAt);
   let exportedData = range ? workspaceDataForWorkbookRange(data, range.start, range.end) : data;
   if (formatVersion !== "v11") exportedData = { ...exportedData, requirements: exportedData.requirements.map((item) => ({ ...item, source: item.source ?? (data.roadmapAssignments?.find((a) => a.requirementId === item.id)?.laneId as Requirement["source"]) ?? "行业" })) };
   validateWorkspaceData(exportedData);
@@ -311,6 +314,7 @@ export function workspaceDataForWorkbookRange(data: WorkspaceData, start: string
   return {
     ...data,
     requirements: requirementsInRange(data.requirements, start, end),
+    draftRequirements: requirementsInRange(data.draftRequirements ?? [], start, end),
     domains: data.domains,
     products: data.products,
     groupOverrides: data.groupOverrides.filter((item) => months.has(item.groupKey.split("::").at(-1) ?? "")),
@@ -330,13 +334,27 @@ export async function inspectWorkspaceWorkbook(
 ): Promise<PreparedWorkspaceWorkbookImport> {
   if (!fileName.toLowerCase().endsWith(".xlsx")) throw new Error("请选择 .xlsx 协作工作簿");
   if (!bytes.length || bytes.length > MAX_WORKBOOK_BYTES) throw new Error("Excel 文件为空或超过 25MB 限制");
-  const storedPayload = await readV6Payload(bytes);
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(bytes as never);
   } catch {
     throw new Error("Excel 文件损坏或不是有效的 .xlsx 工作簿");
   }
+
+  const onlineHeaders = workbook.worksheets.length === 1
+    ? new Set((workbook.worksheets[0].getRow(1).values as ExcelJS.CellValue[]).map((value) => String(value ?? "").trim())) : new Set<string>();
+  if (onlineHeaders.has("需求编号") && onlineHeaders.has("操作")) {
+    const online = inspectOnlineWorkbook(workbook.worksheets[0], current, fileName);
+    return {
+      parsed: { formatVersion: "v12", exportedAt: online.exportedAt, domains: [], products: [], requirements: [], overrides: [], errors: online.errors },
+      online,
+      localFingerprint: online.localFingerprint,
+      preview: { formatVersion: "v12", exportedAt: online.exportedAt, counts: online.counts, errors: online.errors,
+        conflicts: [], differences: [], fieldChanges: online.changes, differenceDigest: online.digest,
+        warnings: ["在线协作表按可见需求编号匹配；所有差异默认不勾选，缺少可验证基线的差异按冲突处理。"], },
+    };
+  }
+  const storedPayload = await readV6Payload(bytes);
 
   const errors: WorkspaceWorkbookIssue[] = [];
   const requirementSheet = workbook.getWorksheet(SHEETS.requirements);
@@ -443,6 +461,7 @@ export function applyPreparedWorkspaceWorkbook(
   now = new Date().toISOString(),
   fieldSelection?: WorkspaceWorkbookFieldSelection,
 ): WorkspaceData {
+  if (prepared.online) return applyOnlineWorkbook(current, prepared.online, fieldSelection, now);
   if (prepared.parsed.errors.length) throw new Error("协作 Excel 存在校验错误，请修正后重新导入");
   if (isSelectiveWorkbookVersion(prepared.parsed.formatVersion)) return applyV8FieldSelection(current, prepared, fieldSelection, now);
   const plan = planWorkspaceWorkbookImport(current, prepared.parsed, conflictMode, now);

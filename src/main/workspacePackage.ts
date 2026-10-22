@@ -14,13 +14,13 @@ import { normalizeLegacyGroupOverride, normalizeLegacySource, normalizeRequireme
 import { mergeWorkspaceDataWithReport, workspaceCounts } from "../shared/workspace.js";
 import { diffWorkspaceData, workspaceDifferenceDigest } from "../shared/workspaceDiff.js";
 import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizePptAccessPolicy, validateRequirementOwners } from "../shared/members.js";
-import { EMPTY_TIERING_DATA, normalizeTieringData, normalizeWorkspaceTieringScope, validateTieringData } from "../shared/tiering.js";
+import { BUILT_IN_TIERING_PRODUCT_SERIES, EMPTY_TIERING_DATA, normalizeTieringData, normalizeWorkspaceTieringScope, validateTieringData } from "../shared/tiering.js";
 import { normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
 import { validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission.js";
 import { normalizeRoadmapManagement, validateRoadmapManagement } from "../shared/roadmapManagement.js";
 
 const PACKAGE_FORMAT = "health-roadmap-workspace";
-const PACKAGE_VERSION = 10;
+const PACKAGE_VERSION = 11;
 const TEMPLATE_VERSION = "v0.1";
 const DATA_PATH = "data.json";
 
@@ -90,6 +90,7 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
 
   const packedData: PackedWorkspaceData = {
     requirements: packedRequirements,
+    draftRequirements: data.draftRequirements ?? [],
     requirementTombstones: data.requirementTombstones ?? [],
     requirementDeletionTrackingStartedAt: data.requirementDeletionTrackingStartedAt,
     domains: normalizeDomains(data.domains),
@@ -147,7 +148,9 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, c
   if (!dataBytes) throw new Error("数据包缺少结构化数据");
   const packedData = JSON.parse(dataBytes.toString("utf8")) as PackedWorkspaceData;
   if (manifest.formatVersion >= 10 && [packedData.roadmaps, packedData.roadmapLanes, packedData.roadmapAssignments, packedData.roadmapAssignmentTombstones, packedData.medicalRoadmapPlans].some((items) => !Array.isArray(items))) throw new Error("数据包缺少完整的路标字典、匹配或医疗配置");
+  if (manifest.formatVersion >= 11 && !Array.isArray(packedData.draftRequirements)) throw new Error("数据包缺少待完善需求");
   const data: WorkspaceData = {
+    draftRequirements: packedData.draftRequirements ?? [],
     roadmaps: packedData.roadmaps, roadmapLanes: packedData.roadmapLanes, roadmapAssignments: packedData.roadmapAssignments,
     roadmapAssignmentTombstones: packedData.roadmapAssignmentTombstones, medicalRoadmapPlans: packedData.medicalRoadmapPlans,
     legacyRoadmapInput: manifest.formatVersion < 10,
@@ -289,7 +292,7 @@ function withMergeDifferences(prepared: PreparedWorkspaceImport, current?: Works
 }
 
 function validateManifest(value: WorkspacePackageManifest): void {
-  if (value?.format !== PACKAGE_FORMAT || ![1, 2, 3, 4, 5, 6, 7, 8, 9, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
+  if (value?.format !== PACKAGE_FORMAT || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
   if (value.packageKind && !["workspace", "tiering-seed"].includes(value.packageKind)) throw new Error("数据包类型无效");
   if (value.dataPath !== DATA_PATH || !value.files || !value.files[DATA_PATH]) throw new Error("数据包清单不完整");
   if (!value.exportedAt || !value.templateVersion || !value.counts) throw new Error("数据包元信息不完整");
@@ -363,6 +366,20 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (item.category === "平台演进" && item.productIds.length > 1) throw new Error(`平台演进需求“${item.title}”最多匹配一个产品`);
     if (item.images.length > MAX_REQUIREMENT_IMAGES) throw new Error(`需求“${item.title}”的图片数量超限`);
     for (const image of item.images) decodeDataUrl(image);
+  }
+
+  for (const draft of data.draftRequirements ?? []) {
+    if (!draft?.id || requirementIds.has(draft.id) || !draft.title?.trim()) throw new Error("待完善需求编号无效或与正式需求重复");
+    if (!validTimestamp(draft.createdAt) || !validTimestamp(draft.updatedAt)) throw new Error(`待完善需求“${draft.title}”时间无效`);
+    if (domainsById.get(draft.domainL0Id)?.level !== "L0" || domainsById.get(draft.domainId)?.parentId !== draft.domainL0Id) throw new Error(`待完善需求“${draft.title}”领域无效`);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(draft.targetMonth) || !CATEGORIES.includes(draft.category) || !REQUIREMENT_SCOPES.includes(draft.scope)) throw new Error(`待完善需求“${draft.title}”月份、分类或范围无效`);
+    if (draft.description.length > 5000 || draft.images.length || draft.productIds.length) throw new Error(`待完善需求“${draft.title}”内容无效`);
+    validateRawWorkload(draft);
+    validateRequirementOwners(draft, data.members);
+    for (const [seriesId, status] of Object.entries(draft.pendingSeries ?? {})) {
+      if (![...(data.tiering?.productSeries ?? []), ...BUILT_IN_TIERING_PRODUCT_SERIES].some((series) => series.id === seriesId) || !["支持", "不支持", "未判断"].includes(status)) throw new Error(`待完善需求“${draft.title}”系列状态无效`);
+    }
+    requirementIds.add(draft.id);
   }
 
   const overrideKeys = new Set<string>();
@@ -501,6 +518,7 @@ function validTimestamp(value: string): boolean {
 
 function sameCounts(left: WorkspacePackageCounts, right: WorkspacePackageCounts): boolean {
   return left.requirements === right.requirements
+    && (right.draftRequirements === undefined || left.draftRequirements === right.draftRequirements)
     && (right.roadmaps === undefined || left.roadmaps === right.roadmaps)
     && (right.roadmapLanes === undefined || left.roadmapLanes === right.roadmapLanes)
     && (right.roadmapAssignments === undefined || left.roadmapAssignments === right.roadmapAssignments)

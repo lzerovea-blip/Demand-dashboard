@@ -39,7 +39,7 @@ import type { WorkspaceWorkbookConflictMode } from "../shared/types.js";
 import { beginDiagnosticStage, diagnosticInfo, initializeStartupDiagnostics, sanitizeDiagnosticDetail, writeStartupDiagnostic } from "./diagnostics.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-10-09";
+const APP_RELEASED_AT = "2026-10-21";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
@@ -255,7 +255,7 @@ function registerIpc(): void {
     try {
       const bytes = await readFile(filePath);
       const prepared = await inspectWorkspaceWorkbook(bytes, basename(filePath), database.getWorkspaceData());
-      if (["v8", "v9", "v10", "v11"].includes(prepared.parsed.formatVersion)) {
+      if (["v8", "v9", "v10", "v11", "v12"].includes(prepared.parsed.formatVersion)) {
         prepared.sourceFilePath = filePath;
         prepared.sourceSha256 = createHash("sha256").update(bytes).digest("hex");
       }
@@ -279,7 +279,7 @@ function registerIpc(): void {
       writeStartupDiagnostic("workbook-apply-selection", `format=${prepared.parsed.formatVersion} selected=${input.fieldSelection?.selectedChangeIds.length ?? 0} previewErrors=${prepared.parsed.errors.length}`);
       if (input.differenceDigest !== prepared.preview.differenceDigest) throw new Error("请先核对并确认全部 Excel 差异");
       if (prepared.parsed.errors.length) throw new Error("Excel 存在校验错误，请修正后重新导入");
-      if (["v8", "v9", "v10", "v11"].includes(prepared.parsed.formatVersion)) {
+      if (["v8", "v9", "v10", "v11", "v12"].includes(prepared.parsed.formatVersion)) {
         if (!prepared.sourceFilePath || !prepared.sourceSha256) throw new Error("Excel 文件校验信息缺失，请重新选择文件");
         const latestBytes = await readFile(prepared.sourceFilePath).catch(() => { throw new Error("Excel 文件已移动或删除，请重新选择文件"); });
         if (createHash("sha256").update(latestBytes).digest("hex") !== prepared.sourceSha256) throw new Error("Excel 文件在预览后发生变化，请重新选择文件检查");

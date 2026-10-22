@@ -79,7 +79,7 @@ describe("v0.9.0 独立路标模型", () => {
   it("新包往返字典、匹配、医疗配置及解除记录", async () => {
     const state = normalizeWorkspaceTieringScope(data());
     const bytes = await createWorkspacePackage(state, "0.9.0", time);
-    expect(JSON.parse(await (await JSZip.loadAsync(bytes)).file("manifest.json")!.async("string")).formatVersion).toBe(10);
+    expect(JSON.parse(await (await JSZip.loadAsync(bytes)).file("manifest.json")!.async("string")).formatVersion).toBe(11);
     const result = await inspectWorkspacePackage(bytes, "v10.roadmap");
     expect(result.data.roadmapAssignments).toEqual(state.roadmapAssignments); expect(result.data.roadmaps).toEqual(normalizeRoadmapManagement(state).roadmaps);
     expect(result.data.requirements.every((r) => r.source === undefined)).toBe(true);
@@ -103,7 +103,7 @@ describe("v0.9.0 独立路标模型", () => {
   });
   it("协作 v11 可修改全部需求系列；逐项回导和删除保持路标数据一致", async () => {
     const state = normalizeWorkspaceTieringScope(data());
-    const original = await createWorkspaceWorkbook(state, "0.9.0", time);
+    const original = await createWorkspaceWorkbook(state, "0.9.0", time, undefined, "v11");
     const book = new ExcelJS.Workbook(); await book.xlsx.load(original as never);
     expect(book.getWorksheet("需求清单")!.getCell("AF3").text).toBe("未判断");
     const sourceZip = await JSZip.loadAsync(original);
@@ -121,9 +121,9 @@ describe("v0.9.0 独立路标模型", () => {
     const snapshot: AppSnapshot = { ...state, templates: [] };
     const request = { start: "2027H1", end: "2027H2", materialName: "v0.9.0 模块拆分验证", sections: ["summary", "custom", "clinical"] };
     const plan = buildPptExportPlan(snapshot, request);
-    expect(plan.roadmapPages).toHaveLength(2); expect(plan.requirements).toHaveLength(2);
+    expect(plan.roadmapPages).toHaveLength(4); expect(plan.requirements).toHaveLength(2);
     const ppt = await createRoadmapPresentation(snapshot, request);
-    expect(presentationSlideCount(plan)).toBe(5); await validateGeneratedPptx(ppt, 5);
+    expect(presentationSlideCount(plan)).toBe(8); await validateGeneratedPptx(ppt, 8);
     const zip = await JSZip.loadAsync(ppt); const xml = (await Promise.all(Object.keys(zip.files).filter((path)=>/^ppt\/slides\/slide\d+\.xml$/.test(path)).map((path)=>zip.file(path)!.async("string")))).join("");
     expect(xml).toContain("自定义健康规划"); expect(xml).toContain("自定义泳道4"); expect(xml).toContain("国际认证规划"); expect(xml).toContain("当前区间暂无");
     const qa = process.env.ROADMAP_V090_QA_DIR;

@@ -12,6 +12,7 @@ import type {
   Member,
   PptAccessPolicy,
   Requirement,
+  RequirementDraft,
   RequirementTombstone,
   SaveDictionaryInput,
   SaveGroupOrderInput,
@@ -69,6 +70,7 @@ import {
   resolveTieringFeature,
   resolveTieringRequirementDomains,
   tieringFeatureIdForRequirement,
+  tieringSupportId,
   unlinkDeletedHistoricalRequirement,
   validateTieringSupportRecord,
 } from "../shared/tiering.js";
@@ -77,7 +79,7 @@ import { isMedicalSubmissionSource, normalizeMedicalSubmissionMilestones, valida
 import { normalizeRoadmapManagement, validateRoadmapManagement, assignmentGroupKey, projectedMedicalRequirement, legacyRoadmapId } from "../shared/roadmapManagement.js";
 
 const BACKUP_SCHEMA_VERSION = 1;
-const DATABASE_SCHEMA_VERSION = 12;
+const DATABASE_SCHEMA_VERSION = 13;
 
 export class LocalDatabase {
   private sql!: SqlJsStatic;
@@ -124,6 +126,7 @@ export class LocalDatabase {
       roadmapAssignmentTombstones: this.payloads<RoadmapAssignmentTombstone>("roadmap_assignment_tombstones", "id"),
       medicalRoadmapPlans: this.payloads<MedicalRoadmapPlan>("medical_roadmap_plans", "id"),
       requirements: this.all<{ payload: string }>("SELECT payload FROM requirements ORDER BY updated_at DESC").map((row) => normalizeRequirement(JSON.parse(row.payload))),
+      draftRequirements: this.all<{ payload: string }>("SELECT payload FROM requirement_drafts ORDER BY updated_at DESC").map((row) => JSON.parse(row.payload) as RequirementDraft),
       domains: this.all<{ payload: string }>("SELECT payload FROM domains ORDER BY sort_order, name").map((row) => {
         const item = JSON.parse(row.payload) as DictionaryItem;
         return { ...item, level: item.level ?? "L1" };
@@ -145,7 +148,8 @@ export class LocalDatabase {
   }
 
   async saveRequirement(input: SaveRequirementInput): Promise<AppSnapshot> {
-    const previous = input.id ? this.getPayload<Requirement>("requirements", "id", input.id) : undefined;
+    const draft = input.id ? this.getPayload<RequirementDraft>("requirement_drafts", "id", input.id) : undefined;
+    const previous = input.id ? this.getPayload<Requirement>("requirements", "id", input.id) ?? draft : undefined;
     if (!previous && !input.targetMonth) throw new Error("新需求必须填写上线年月");
     input = { ...input, source: previous?.targetMonth === "" && input.targetMonth === "" ? "NMPA认证" : undefined, medicalSubmissionMilestones: undefined };
     validateRequirement(input);
@@ -181,7 +185,7 @@ export class LocalDatabase {
       algorithmWorkloadPm,
       unallocatedWorkloadPm: 0,
       workloadPm,
-      createdAt: existing?.createdAt ?? now,
+      createdAt: existing?.createdAt ?? draft?.createdAt ?? now,
       updatedAt: now,
       tieringFeatureId: isTieringEligibleRequirement(input)
         ? input.tieringFeatureId ?? existing?.tieringFeatureId ?? tieringFeatureIdForRequirement(requirementId)
@@ -200,8 +204,19 @@ export class LocalDatabase {
         "INSERT OR REPLACE INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)",
         [requirement.id, requirement.updatedAt, JSON.stringify(requirement)],
       );
+      this.run("DELETE FROM requirement_drafts WHERE id = ?", [requirement.id]);
       this.run("DELETE FROM requirement_tombstones WHERE id = ?", [requirement.id]);
       this.syncTieringForRequirement(requirement, domains, now, existing?.tieringFeatureId ?? input.tieringFeatureId);
+      if (draft?.pendingSeries) for (const [seriesId, status] of Object.entries(draft.pendingSeries)) {
+        const recordId = tieringSupportId(requirement.tieringFeatureId!, seriesId);
+        const previous = this.getPayload<TieringSupportRecord>("tiering_support_records", "id", recordId);
+        if (!previous || previous.status === status) continue;
+        const record = { ...previous, status, updatedAt: now };
+        this.run("UPDATE tiering_support_records SET updated_at = ?, payload = ? WHERE id = ?", [now, JSON.stringify(record), recordId]);
+        const log: TieringChangeLog = { id: crypto.randomUUID(), changedAt: now, triggerType: "待完善需求转正", featureId: requirement.tieringFeatureId!, seriesId,
+          before: JSON.stringify(previous), after: JSON.stringify(record), reason: "保留在线协作 Excel 中已选择的系列状态", sourceIds: [...record.sourceIds], reviewer: "", recordStatus: "有效", note: "", updatedAt: now };
+        this.run("INSERT INTO tiering_change_logs (id, changed_at, payload) VALUES (?, ?, ?)", [log.id, log.changedAt, JSON.stringify(log)]);
+      }
       this.db.run("COMMIT");
       committed = true;
       await this.persist();
@@ -217,12 +232,13 @@ export class LocalDatabase {
   }
 
   async deleteRequirement(id: string): Promise<AppSnapshot> {
-    const requirement = this.getPayload<Requirement>("requirements", "id", id);
+    const requirement = this.getPayload<Requirement>("requirements", "id", id) ?? this.getPayload<RequirementDraft>("requirement_drafts", "id", id);
     const previousBytes = this.db.export();
     let committed = false;
     this.db.run("BEGIN");
     try {
       this.run("DELETE FROM requirements WHERE id = ?", [id]);
+      this.run("DELETE FROM requirement_drafts WHERE id = ?", [id]);
       this.run("DELETE FROM roadmap_assignments WHERE id = ?", [id]);
       this.run("DELETE FROM roadmap_assignment_tombstones WHERE id = ?", [id]);
       for (const plan of this.payloads<MedicalRoadmapPlan>("medical_roadmap_plans", "id").filter((item) => item.requirementId === id)) this.run("DELETE FROM medical_roadmap_plans WHERE id = ?", [`${plan.roadmapId}::${id}`]);
@@ -387,7 +403,7 @@ export class LocalDatabase {
     const snapshot = this.getSnapshot();
     const domain = snapshot.domains.find((item) => item.id === id);
     if (!domain) return snapshot;
-    const references = domainReferenceMessages(domain, { ...snapshot, features: snapshot.tiering?.features ?? [] });
+    const references = domainReferenceMessages(domain, { ...snapshot, requirements: [...snapshot.requirements, ...(snapshot.draftRequirements ?? [])], features: snapshot.tiering?.features ?? [] });
     if (references.length) throw new Error(`无法删除“${domain.name}”：\n${references.join("\n")}`);
     this.run("DELETE FROM domains WHERE id = ?", [id]);
     await this.persist();
@@ -450,7 +466,8 @@ export class LocalDatabase {
   }
 
   private assertMemberNotAssigned(id: string, action: string): void {
-    const references = memberRequirementReferences(this.getSnapshot().requirements, id);
+    const snapshot = this.getSnapshot();
+    const references = memberRequirementReferences([...snapshot.requirements, ...(snapshot.draftRequirements ?? [])], id);
     if (references.length) throw new Error(`无法${action}：仍被 ${references.length} 条需求引用（${references.slice(0, 3).map((item) => item.title).join("、")}），请先在需求池调整责任人`);
   }
 
@@ -752,11 +769,12 @@ export class LocalDatabase {
     this.db.run("BEGIN");
     try {
       this.writeRoadmapState(data);
-      for (const table of ["requirements", "requirement_tombstones", "domains", "products", "group_overrides", "members", "tiering_features", "tiering_product_series", "tiering_support_records", "tiering_evidence_sources", "tiering_issues", "tiering_change_logs"]) this.db.run(`DELETE FROM ${table}`);
+      for (const table of ["requirements", "requirement_drafts", "requirement_tombstones", "domains", "products", "group_overrides", "members", "tiering_features", "tiering_product_series", "tiering_support_records", "tiering_evidence_sources", "tiering_issues", "tiering_change_logs"]) this.db.run(`DELETE FROM ${table}`);
       for (const item of requirements) {
         const normalized = { ...normalizeRequirement(item), source: undefined, medicalSubmissionMilestones: undefined, medicalRoadmapSortOrder: undefined };
         this.run("INSERT INTO requirements (id, updated_at, payload) VALUES (?, ?, ?)", [normalized.id, normalized.updatedAt, JSON.stringify(normalized)]);
       }
+      for (const draft of data.draftRequirements ?? []) this.run("INSERT INTO requirement_drafts (id, updated_at, payload) VALUES (?, ?, ?)", [draft.id, draft.updatedAt, JSON.stringify(draft)]);
       for (const item of data.requirementTombstones ?? []) this.run("INSERT INTO requirement_tombstones (id, deleted_at, payload) VALUES (?, ?, ?)", [item.id, item.deletedAt, JSON.stringify(item)]);
       this.run("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)", ["requirement_deletion_tracking_started_at", JSON.stringify(data.requirementDeletionTrackingStartedAt ?? decisionAt)]);
       for (const item of data.domains) {
@@ -1064,6 +1082,7 @@ export class LocalDatabase {
     this.db.run(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requirements (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS requirement_drafts (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requirement_tombstones (id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS domains (id TEXT PRIMARY KEY, level TEXT NOT NULL, sort_order INTEGER NOT NULL, name TEXT NOT NULL COLLATE NOCASE, payload TEXT NOT NULL, UNIQUE(level, name));
       CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, sort_order INTEGER NOT NULL, name TEXT NOT NULL COLLATE NOCASE UNIQUE, payload TEXT NOT NULL);

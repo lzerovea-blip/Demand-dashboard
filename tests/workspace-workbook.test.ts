@@ -22,7 +22,7 @@ const createV9WorkspaceWorkbook = (data: WorkspaceData, version: string) =>
 describe("协作 Excel v10 十五系列", () => {
   it("导出 15 个系列及两项新系列下拉，内部基线保持在非工作表结构", async () => {
     const data = workspace();
-    const bytes = await createWorkbookUnderTest(data, "0.8.31");
+    const bytes = await createWorkbookUnderTest(data, "0.8.31", undefined, undefined, "v11");
     if (process.env.ROADMAP_QA_V10_WORKBOOK_PATH) await writeFile(process.env.ROADMAP_QA_V10_WORKBOOK_PATH, bytes);
     const book = new ExcelJS.Workbook(); await book.xlsx.load(bytes as never);
     const sheet = book.getWorksheet("需求清单")!;
@@ -49,7 +49,7 @@ describe("协作 Excel v10 十五系列", () => {
 
   it("两项新系列分别产生差异，未勾选的系列和需求字段不写入", async () => {
     const data = workspace();
-    const edited = await editWorkbook(await createWorkbookUnderTest(data, "0.8.31"), (book) => {
+    const edited = await editWorkbook(await createWorkbookUnderTest(data, "0.8.31", undefined, undefined, "v11"), (book) => {
       const sheet = book.getWorksheet("需求清单")!;
       sheet.getCell("C2").value = "Excel 新标题";
       sheet.getCell("S2").value = "支持";
@@ -70,7 +70,7 @@ describe("协作 Excel v10 十五系列", () => {
   it("行重排后只改操作列为删除，仍按需求 ID 匹配", async () => {
     const base = workspace();
     const data = workspace({ requirements: [base.requirements[0], { ...base.requirements[0], id: "r2", title: "第二条需求" }] });
-    const edited = await editWorkbook(await createWorkbookUnderTest(data, "0.8.31"), (book) => {
+    const edited = await editWorkbook(await createWorkbookUnderTest(data, "0.8.31", undefined, undefined, "v11"), (book) => {
       const sheet = book.getWorksheet("需求清单")!;
       const first = Array.from({ length: 32 }, (_, index) => ({ value: sheet.getCell(2, index + 1).value, numFmt: sheet.getCell(2, index + 1).numFmt }));
       const second = Array.from({ length: 32 }, (_, index) => ({ value: sheet.getCell(3, index + 1).value, numFmt: sheet.getCell(3, index + 1).numFmt }));

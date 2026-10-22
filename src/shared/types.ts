@@ -124,6 +124,11 @@ export interface Requirement {
   historicalLaunch?: HistoricalLaunchMetadata;
 }
 
+/** Online collaboration rows that are not yet eligible for analysis or roadmap matching. */
+export interface RequirementDraft extends Requirement {
+  pendingSeries?: Record<string, TieringSupportStatus>;
+}
+
 export interface RequirementTombstone {
   id: string;
   title: string;
@@ -311,6 +316,7 @@ export interface TemplateMapping {
 
 export interface AppSnapshot {
   requirements: Requirement[];
+  draftRequirements?: RequirementDraft[];
   domains: DictionaryItem[];
   products: DictionaryItem[];
   groupOverrides: GroupOverride[];
@@ -529,6 +535,7 @@ export interface WorkspacePackageCounts {
   medicalRoadmapPlans?: number;
   roadmapAssignmentTombstones?: number;
   requirements: number;
+  draftRequirements?: number;
   requirementTombstones: number;
   images: number;
   domains: number;
@@ -553,7 +560,7 @@ export interface WorkspaceFieldDifference {
 }
 
 export interface WorkspaceImportDifference {
-  entity: "需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单" | "分层功能" | "产品系列" | "系列支持" | "证据来源" | "待核验项" | "变更记录" | "路标字典" | "泳道字典" | "路标匹配" | "医疗路标配置";
+  entity: "需求" | "待完善需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单" | "分层功能" | "产品系列" | "系列支持" | "证据来源" | "待核验项" | "变更记录" | "路标字典" | "泳道字典" | "路标匹配" | "医疗路标配置";
   key: string;
   title: string;
   change: WorkspaceDifferenceChange;
@@ -612,7 +619,7 @@ export interface WorkspaceWorkbookFieldChange {
   requirementId: string;
   row: number;
   title: string;
-  kind: "field" | "series" | "delete";
+  kind: "field" | "series" | "delete" | "add" | "promote" | "restore";
   field: string;
   baselineValue: string;
   currentValue: string;

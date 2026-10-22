@@ -12,6 +12,7 @@ import { ROADMAP_TRACKS } from "./types.js";
 import type { AppSnapshot, PptExportRequest, PptExportSectionId, Requirement, Track } from "./types.js";
 import { roadmapDefinitionsFor, roadmapLanesFor } from "./roadmapManagement.js";
 import type { RoadmapLaneDefinition } from "./types.js";
+import { filterRequirementsForRegion, type RoadmapRegion } from "./requirements.js";
 
 export const MAX_PPT_HALF_YEARS = 4;
 
@@ -21,6 +22,9 @@ export const PPT_EXPORT_SECTIONS: ReadonlyArray<{ id: PptExportSectionId; label:
 ];
 
 export const DEFAULT_PPT_EXPORT_SECTIONS = PPT_EXPORT_SECTIONS.map((item) => item.id);
+export function pptBaseSlideCount(sections: readonly string[]): number {
+  return 1 + sections.reduce((total, section) => total + (section === "summary" ? 1 : 2), 0);
+}
 export function pptExportSections(snapshot: Partial<AppSnapshot>): Array<{ id: string; label: string }> {
   return [{ id: "summary", label: "需求工作量汇总分析" }, ...roadmapDefinitionsFor(snapshot).map((item) => ({ id: item.id, label: item.name }))];
 }
@@ -30,6 +34,7 @@ export interface PptRoadmapPagePlan {
   kind?: "standard" | "medical";
   lanes?: RoadmapLaneDefinition[];
   track: Track;
+  region?: RoadmapRegion;
   halfYears: string[];
   groups: RoadmapGroup[];
   medicalMonths?: string[];
@@ -73,12 +78,21 @@ export function buildPptExportPlan(snapshot: AppSnapshot, startOrRequest: string
   const requirements = requirementsInRange(snapshot.requirements, request.start, request.end);
   const summaries = buildHalfYearSummaries(snapshot.requirements, request.start, request.end, snapshot);
   const groups = buildRoadmapGroups(snapshot, request.start, request.end);
-  const medicalGroups = buildRoadmapGroups(snapshot, request.start, request.end, { medicalDemandRows: true }).filter((group) => group.roadmapKind === "medical" || group.track === "医疗认证");
-  const roadmapPages = roadmapDefinitionsFor(snapshot).filter((definition) => request.sections.includes(definition.id)).map((definition) => ({
-    track: definition.id, name: definition.name, kind: definition.kind, ...(snapshot.roadmapAssignments !== undefined ? { lanes: roadmapLanesFor(snapshot, definition.id) } : {}),
-    halfYears,
-    groups: definition.kind === "medical" ? medicalGroups.filter((group) => group.track === definition.id) : groups.filter((group) => group.track === definition.id),
-    ...(definition.kind === "medical" ? { medicalMonths: medicalRoadmapTimelineMonths(medicalGroups.filter((group) => group.track === definition.id)) } : {}),
+  const regions = (["domestic", "overseas"] as const).map((region) => {
+    const regionalSnapshot = { ...snapshot, requirements: filterRequirementsForRegion(snapshot.requirements, region) };
+    return { region,
+      groups: buildRoadmapGroups(regionalSnapshot, request.start, request.end),
+      medicalGroups: buildRoadmapGroups(regionalSnapshot, request.start, request.end, { medicalDemandRows: true }),
+    };
+  });
+  const roadmapPages: PptRoadmapPagePlan[] = roadmapDefinitionsFor(snapshot).filter((definition) => request.sections.includes(definition.id)).flatMap((definition) => regions.map((regional) => {
+    const pageGroups = (definition.kind === "medical" ? regional.medicalGroups : regional.groups).filter((group) => group.track === definition.id);
+    return {
+      track: definition.id, name: definition.name, kind: definition.kind, region: regional.region,
+      ...(snapshot.roadmapAssignments !== undefined ? { lanes: roadmapLanesFor(snapshot, definition.id) } : {}),
+      halfYears, groups: pageGroups,
+      ...(definition.kind === "medical" ? { medicalMonths: medicalRoadmapTimelineMonths(pageGroups) } : {}),
+    };
   }));
   return {
     start: request.start,
@@ -90,7 +104,7 @@ export function buildPptExportPlan(snapshot: AppSnapshot, startOrRequest: string
     summaries,
     groups,
     roadmapPages,
-    slideCount: 1 + request.sections.length,
+    slideCount: pptBaseSlideCount(request.sections),
   };
 }
 

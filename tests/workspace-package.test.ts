@@ -50,6 +50,15 @@ const workspace: WorkspaceData = {
 };
 
 describe(".roadmap 数据包", () => {
+  it("v11 完整包保存待完善需求并在合并预览中列出", async () => {
+    const draft = { ...workspace.requirements[0], id: "NEW-00000000-0000-4000-8000-000000000002", title: "协作待完善",
+      category: "平台演进" as const, productIds: [], images: [], planningMemberId: "", productManagerMemberId: "", seMemberId: "",
+      pendingSeries: { PS01: "支持" as const } };
+    const bytes = await createWorkspacePackage({ ...workspace, draftRequirements: [draft] }, "0.9.2", "2026-10-10T00:00:00.000Z");
+    const inspected = await inspectWorkspacePackage(bytes, "协作待完善.roadmap", { ...workspace, draftRequirements: [] });
+    expect(inspected.data.draftRequirements?.map((item) => item.id)).toContain(draft.id);
+    expect(inspected.preview.differences.some((item) => item.entity === "待完善需求" && item.key === draft.id)).toBe(true);
+  });
   it("v6 往返空送检版本和任意倒序节点；日期清空列入合并差异", async () => {
     const medical: WorkspaceData = { ...workspace, requirements: workspace.requirements.map((item) => ({ ...item, source: "CE认证", targetMonth: "", medicalSubmissionMilestones: { registrationStartMonth: "2029-01", certificateMonth: "2025-01" }, updatedAt: "2026-09-09T00:00:00.000Z" })) };
     const archive = await createWorkspacePackage(medical, "0.8.16");
@@ -64,7 +73,7 @@ describe(".roadmap 数据包", () => {
   it("完整往返需求、描述、图片、字典和卡片编辑", async () => {
     const archive = await createWorkspacePackage(workspace, "0.1.0", "2026-08-20T08:00:00.000Z");
     const zip = await JSZip.loadAsync(archive);
-    expect(JSON.parse(await zip.file("manifest.json")!.async("string")).formatVersion).toBe(10);
+    expect(JSON.parse(await zip.file("manifest.json")!.async("string")).formatVersion).toBe(11);
     const inspected = await inspectWorkspacePackage(archive, "交接.roadmap");
     expect(inspected.data.requirements[0]).toMatchObject({ id: "r1", title: "社交时差", tieringFeatureId: "REQ-r1" });
     expect(inspected.data.requirements[0].images).toEqual([image]);

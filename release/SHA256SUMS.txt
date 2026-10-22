@@ -54,3 +54,4 @@ d2fbc14559156b27b437d717b67d32b0015937bc50f77f478cdca11159b1e2fe  Solution-Requi
 68f415354b50e597917f7db16e0d73e62fe985656d2aadd3b12a177f208fb517  解决方案需求管理-0.8.8-mac-arm64.zip
 45bbb46f0067df51d10d506c5e82fbd99c589c551f1ea2c3a71b40ad5f40a744  解决方案需求管理-0.8.8-mac-arm64.dmg
 3aee1cca66f1fb9eea4eb00bd22ca775a0e6b98c25e775d14bdd8eba508b4244  Solution-Requirements-Manager-Portable-0.8.9-x64.exe
+b5259b28e51fc4e6c05d42fdb7c3564b29d88570bb527ce7d33954ddff2f9285  Solution-Requirements-Manager-Portable-0.9.7-x64.exe

@@ -20,6 +20,7 @@ import { formatMedicalSubmissionMonth, medicalSubmissionTimeline } from "./medic
 export function diffWorkspaceData(before: WorkspaceData, after: WorkspaceData): WorkspaceImportDifference[] {
   const differences: WorkspaceImportDifference[] = [];
   compareCollection(differences, "需求", before.requirements, after.requirements, (item) => item.id, requirementTitle, (left, right) => requirementFields(left, right, before.members ?? [], after.members ?? []));
+  compareCollection(differences, "待完善需求", before.draftRequirements ?? [], after.draftRequirements ?? [], (item) => item.id, requirementTitle, (left, right) => requirementFields(left, right, before.members ?? [], after.members ?? []));
   const labels: Record<string,string> = { name: "名称", kind: "展示类型", sortOrder: "顺序", updatedAt: "更新时间", requirementId: "需求", roadmapId: "路标", registrationStartMonth: "注册启动时间", submissionMonth: "送检时间", clinicalStartMonth: "临床启动时间", clinicalCompleteMonth: "临床完成时间", certificateMonth: "获证时间", removedAt: "解除匹配时间" };
   const fields = (a: Record<string, unknown>, b: Record<string, unknown>) => changedFields([...new Set([...Object.keys(a), ...Object.keys(b)])].map((key) => [labels[key] ?? key, String(a[key] ?? "—"), String(b[key] ?? "—")]));
   compareCollection(differences, "路标字典", before.roadmaps ?? [], after.roadmaps ?? [], (item) => item.id, (item) => item.name, (a,b) => fields({...a},{...b}));

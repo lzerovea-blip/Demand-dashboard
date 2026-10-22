@@ -68,6 +68,16 @@ export function mergeWorkspaceDataWithReport(local: WorkspaceData, incoming: Wor
 
   const data: WorkspaceData = {
     requirements,
+    draftRequirements: mergeByUpdatedAt(local.draftRequirements ?? [], (incoming.draftRequirements ?? []).map((draft) => ({
+      ...draft,
+      domainId: domainMerge.idMap.get(draft.domainId) ?? draft.domainId,
+      domainL0Id: domainMerge.idMap.get(draft.domainL0Id) ?? draft.domainL0Id,
+      planningMemberId: draft.planningMemberId ? memberMerge.idMap.get(draft.planningMemberId) ?? draft.planningMemberId : "",
+      productManagerMemberId: draft.productManagerMemberId ? memberMerge.idMap.get(draft.productManagerMemberId) ?? draft.productManagerMemberId : "",
+      seMemberId: draft.seMemberId ? memberMerge.idMap.get(draft.seMemberId) ?? draft.seMemberId : "",
+      algorithmMemberId: draft.algorithmMemberId ? memberMerge.idMap.get(draft.algorithmMemberId) ?? draft.algorithmMemberId : "",
+    }))).filter((draft) => !requirements.some((item) => item.id === draft.id)
+      && !requirementMerge.tombstones.some((item) => item.id === draft.id && timestamp(item.deletedAt) >= timestamp(draft.updatedAt))),
     requirementTombstones: requirementMerge.tombstones,
     requirementDeletionTrackingStartedAt: laterTimestamp(local.requirementDeletionTrackingStartedAt, incoming.requirementDeletionTrackingStartedAt),
     domains: domainMerge.items,
@@ -290,6 +300,7 @@ export function workspaceCounts(data: WorkspaceData) {
     roadmapAssignments: data.roadmapAssignments?.length ?? 0, medicalRoadmapPlans: data.medicalRoadmapPlans?.length ?? 0,
     roadmapAssignmentTombstones: data.roadmapAssignmentTombstones?.length ?? 0,
     requirements: data.requirements.length,
+    draftRequirements: (data.draftRequirements ?? []).length,
     requirementTombstones: (data.requirementTombstones ?? []).length,
     images: data.requirements.reduce((sum, item) => sum + item.images.length, 0),
     domains: data.domains.length,

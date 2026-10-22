@@ -57,6 +57,21 @@ afterEach(async () => {
 });
 
 describe("领域与分层同步（真实 SQLite 事务）", () => {
+  it("在线协作待完善需求跨重启保留，编辑补齐责任人后转正并继承系列状态", async () => {
+    const draft = { ...requirement, id: "NEW-00000000-0000-4000-8000-000000000001", title: "在线新增待完善",
+      planningMemberId: "", productManagerMemberId: "", seMemberId: "", tieringFeatureId: undefined,
+      pendingSeries: { PS01: "支持" as const } };
+    await database.importWorkspace({ ...data(), draftRequirements: [draft] }, "replace");
+    expect(database.getSnapshot().requirements).toHaveLength(1);
+    expect(database.getSnapshot().draftRequirements?.map((item) => item.id)).toContain(draft.id);
+    const reopened = await open();
+    expect(reopened.getSnapshot().draftRequirements?.map((item) => item.id)).toContain(draft.id);
+    await reopened.saveRequirement({ ...draft, planningMemberId: "plan", productManagerMemberId: "pm", seMemberId: "se",
+      researchAppWorkloadPm: draft.researchAppWorkloadPm ?? 0, algorithmWorkloadPm: draft.algorithmWorkloadPm ?? 0 });
+    expect(reopened.getSnapshot().draftRequirements).toHaveLength(0);
+    expect(reopened.getSnapshot().requirements.find((item) => item.id === draft.id)?.title).toBe(draft.title);
+    expect(reopened.getSnapshot().tiering?.supportRecords.find((item) => item.id === `REQ-${draft.id}::PS01`)?.status).toBe("支持");
+  });
   it("v0.9.0 新需求、独立医疗计划及解除匹配持久化；可生成隔离工作台验收数据", async () => {
     const input = { ...requirement, id: undefined, source: undefined } as SaveRequirementInput;
     await database.saveRequirement({ ...input, title: "批量匹配演示需求" });
@@ -268,7 +283,7 @@ describe("领域与分层同步（真实 SQLite 事务）", () => {
     expect(upgraded.getSnapshot().requirements[0]).toMatchObject({ id: "r1", tieringFeatureId: "REQ-r1" });
     expect(upgraded.getSnapshot().requirements[0].source).toBeUndefined();
     expect(upgraded.getSnapshot().roadmapAssignments).toContainEqual(expect.objectContaining({ roadmapId: "全场景", requirementId: "r1" }));
-    expect(internals(upgraded).db.exec("SELECT value FROM meta WHERE key = 'schema_version'")[0].values[0][0]).toBe("12");
+    expect(internals(upgraded).db.exec("SELECT value FROM meta WHERE key = 'schema_version'")[0].values[0][0]).toBe("13");
   });
 
   it("旧包中的普通孤立规格会清理，F001–F156 独立历史规格继续保留", async () => {
