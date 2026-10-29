@@ -22,6 +22,13 @@ export async function validateGeneratedPptx(bytes: Buffer, expectedSlides: numbe
   for (const entry of xmlEntries) {
     const xml = await entry.async("string");
     if (XMLValidator.validate(xml) !== true) throw new Error(`原始 PPTX XML 无效：${entry.name}`);
+    if (hasNonFiniteDrawingValue(xml)) throw new Error(`原始 PPTX 包含 PowerPoint 无法识别的非有限几何值：${entry.name}`);
+  }
+  const contentTypes = new XMLParser({ ignoreAttributes: false }).parse(await archive.file("[Content_Types].xml")!.async("string"));
+  const overrides = contentTypes?.Types?.Override ?? [];
+  for (const override of Array.isArray(overrides) ? overrides : [overrides]) {
+    const part = String(override["@_PartName"] ?? "").replace(/^\//, "");
+    if (!part || !archive.file(part)) throw new Error(`原始 PPTX 内容类型声明指向不存在的文件：${part}`);
   }
   const presentationXml = await archive.file("ppt/presentation.xml")!.async("string");
   const presentation = new XMLParser({ ignoreAttributes: false }).parse(presentationXml);
@@ -32,4 +39,9 @@ export async function validateGeneratedPptx(bytes: Buffer, expectedSlides: numbe
     if (!archive.file(`ppt/slides/slide${index}.xml`)) throw new Error(`原始 PPTX 缺少第 ${index} 页内容`);
   }
   return { entries: Object.keys(archive.files).length, slides };
+}
+
+export function hasNonFiniteDrawingValue(xml: string): boolean {
+  return /\bfmla="[^"]*(?:NaN|[+-]?Infinity)[^"]*"/u.test(xml)
+    || /\b(?:x|y|cx|cy|w|h|pos|ang)="(?:NaN|[+-]?Infinity)"/u.test(xml);
 }

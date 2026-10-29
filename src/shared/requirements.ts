@@ -1,6 +1,9 @@
 import { REQUIREMENT_SCOPES } from "./types.js";
 import type { GroupOverride, Requirement, RequirementCategory, RequirementScope, RequirementSource } from "./types.js";
+import { halfYearOf, hmosVersionForHalfYear } from "./roadmap.js";
+import { historicalLaunchForFeatureId, normalizeHistoricalLaunchMetadata } from "./tieringLaunches.js";
 import { roundWorkload } from "./workload.js";
+import { isMedicalSubmissionSource, isValidRequirementMonth, normalizeMedicalSubmissionMilestones } from "./medicalSubmission.js";
 
 export const LEGACY_OVERSEAS_SOURCE = "海外研究" as const;
 export const LEGACY_AI_SOURCE = "ai" as const;
@@ -8,19 +11,31 @@ export const LEGACY_UPPERCASE_AI_SOURCE = "AI" as const;
 export const LEGACY_MEDICAL_SUBMISSION_SOURCE = "医疗送检" as const;
 
 type LegacyRequirement = Omit<Requirement, "source" | "scope" | "allowLatestVersionUpgrade" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm"> &
-  { source: RequirementSource | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE } &
+  { source?: RequirementSource | "NMPA送检" | "CE送检" | typeof LEGACY_OVERSEAS_SOURCE | typeof LEGACY_AI_SOURCE | typeof LEGACY_UPPERCASE_AI_SOURCE | typeof LEGACY_MEDICAL_SUBMISSION_SOURCE } &
   Partial<Pick<Requirement, "scope" | "allowLatestVersionUpgrade" | "description" | "images" | "overseasRegions" | "domainL0Id" | "deviceWorkloadPm" | "appWorkloadPm" | "cloudWorkloadPm" | "unallocatedWorkloadPm">>;
 
 export function normalizeRequirement(input: LegacyRequirement): Requirement {
-  const hasBreakdown = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "unallocatedWorkloadPm"]
+  const hasBreakdown = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "researchAppWorkloadPm", "algorithmWorkloadPm", "unallocatedWorkloadPm"]
     .some((key) => Object.prototype.hasOwnProperty.call(input, key));
   const deviceWorkloadPm = nonNegative(input.deviceWorkloadPm);
   const appWorkloadPm = nonNegative(input.appWorkloadPm);
   const cloudWorkloadPm = nonNegative(input.cloudWorkloadPm);
-  const categorized = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm);
+  const researchAppWorkloadPm = nonNegative(input.researchAppWorkloadPm);
+  const algorithmWorkloadPm = nonNegative(input.algorithmWorkloadPm);
+  const categorized = roundWorkload(deviceWorkloadPm + appWorkloadPm + cloudWorkloadPm + researchAppWorkloadPm + algorithmWorkloadPm);
   const legacyTotal = nonNegative(input.workloadPm);
-  const source = normalizeLegacySource(input.source) as RequirementSource;
+  const source = input.source ? normalizeLegacySource(input.source) as RequirementSource : undefined;
   const productIds = normalizeRequirementProductIds(input.category, input.productIds);
+  let historicalLaunch = normalizeHistoricalLaunchMetadata(input.historicalLaunch);
+  // An explicitly cleared submission month must never be restored from historical metadata.
+  if (isMedicalSubmissionSource(source) && input.targetMonth === "") historicalLaunch = undefined;
+  if (!historicalLaunch && input.tieringFeatureId && input.targetMonth === "2026-09") {
+    try {
+      historicalLaunch = historicalLaunchForFeatureId(input.tieringFeatureId);
+    } catch {
+      // 非标准扩展功能保持旧数据，不阻断普通工作区读取。
+    }
+  }
   const unallocatedWorkloadPm = hasBreakdown
     ? (Number.isFinite(input.unallocatedWorkloadPm) ? nonNegative(input.unallocatedWorkloadPm) : roundWorkload(Math.max(0, legacyTotal - categorized)))
     : legacyTotal;
@@ -37,8 +52,14 @@ export function normalizeRequirement(input: LegacyRequirement): Requirement {
     deviceWorkloadPm,
     appWorkloadPm,
     cloudWorkloadPm,
+    researchAppWorkloadPm,
+    algorithmWorkloadPm,
     unallocatedWorkloadPm,
     workloadPm: roundWorkload(categorized + unallocatedWorkloadPm),
+    targetMonth: historicalLaunch?.suggestedTargetMonth ?? input.targetMonth,
+    historicalLaunch,
+    medicalSubmissionMilestones: normalizeMedicalSubmissionMilestones(source, input.medicalSubmissionMilestones),
+    medicalRoadmapSortOrder: isMedicalSubmissionSource(source) ? input.medicalRoadmapSortOrder : undefined,
   };
 }
 
@@ -76,7 +97,8 @@ export function normalizeLegacyGroupOverride(item: GroupOverride): GroupOverride
 export function normalizeLegacySource(source: string): string {
   if (source === LEGACY_OVERSEAS_SOURCE) return "行业";
   if (source === LEGACY_AI_SOURCE || source === LEGACY_UPPERCASE_AI_SOURCE) return "AI综合";
-  if (source === LEGACY_MEDICAL_SUBMISSION_SOURCE) return "NMPA送检";
+  if (source === LEGACY_MEDICAL_SUBMISSION_SOURCE || source === "NMPA送检") return "NMPA认证";
+  if (source === "CE送检") return "CE认证";
   return source;
 }
 
@@ -86,13 +108,27 @@ function nonNegative(value: unknown): number {
 
 export interface RequirementFilters {
   query: string;
-  source: RequirementSource | "";
-  category: RequirementCategory | "";
-  targetMonth: string;
+  domainL0Id: string;
+  domainL1Id: string;
+  targetHalfYear: string;
 }
 
-export function listTargetMonths(requirements: Requirement[]): string[] {
-  return [...new Set(requirements.map((item) => item.targetMonth).filter((item) => /^\d{4}-(0[1-9]|1[0-2])$/.test(item)))].sort();
+export interface ReleaseVersionOption {
+  halfYear: string;
+  version: string;
+}
+
+export function listReleaseVersionOptions(requirements: readonly Pick<Requirement, "targetMonth">[]): ReleaseVersionOption[] {
+  const halfYears = new Set<string>();
+  for (const requirement of requirements) {
+    try {
+      halfYears.add(halfYearOf(requirement.targetMonth));
+    } catch {
+      // Invalid historical months remain excluded from filter options and validation handles them elsewhere.
+    }
+  }
+  return [...halfYears].sort((a, b) => Number(b.slice(0, 4)) - Number(a.slice(0, 4)) || Number(b.slice(-1)) - Number(a.slice(-1)))
+    .map((halfYear) => ({ halfYear, version: hmosVersionForHalfYear(halfYear) }));
 }
 
 export function filterRequirements(
@@ -104,10 +140,18 @@ export function filterRequirements(
   return requirements.filter((item) => {
     const searchText = `${item.title} ${domainNames.get(item.domainL0Id) ?? ""} ${domainNames.get(item.domainId) ?? ""} ${item.overseasRegions.join(" ")}`.toLocaleLowerCase("zh-CN");
     return (!normalizedQuery || searchText.includes(normalizedQuery))
-      && (!filters.source || item.source === filters.source)
-      && (!filters.category || item.category === filters.category)
-      && (!filters.targetMonth || item.targetMonth === filters.targetMonth);
+      && (!filters.domainL0Id || item.domainL0Id === filters.domainL0Id)
+      && (!filters.domainL1Id || item.domainId === filters.domainL1Id)
+      && (!filters.targetHalfYear || (isValidRequirementMonth(item.targetMonth) && halfYearOf(item.targetMonth) === filters.targetHalfYear));
   });
+}
+
+export function requirementPoolTitle(domainL1Name: string | undefined, title: string): string {
+  return `${domainL1Name?.trim() || "未命名领域"}：${title}`;
+}
+
+export function compactRequirementScope(scope: Requirement["scope"]): "国内" | "海外" | "全球" {
+  return scope === "仅国内" ? "国内" : scope === "仅海外" ? "海外" : "全球";
 }
 
 const COPY_TITLE_PATTERN = /^(.*?)\s*副本（([1-9]\d*)）$/u;
@@ -143,5 +187,10 @@ export function cloneRequirementAsCopy(
     overseasRegions: [...source.overseasRegions],
     createdAt: now,
     updatedAt: now,
+    tieringFeatureId: undefined,
+    medicalRoadmapSortOrder: undefined,
+    historicalLaunch: undefined,
+    source: undefined,
+    medicalSubmissionMilestones: undefined,
   };
 }

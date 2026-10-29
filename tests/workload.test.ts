@@ -32,7 +32,7 @@ describe("工作量输入", () => {
       appWorkloadPm: 1,
       cloudWorkloadPm: 0.25,
       unallocatedWorkloadPm: 0,
-    }])).toEqual({ device: 0.5, app: 1, cloud: 0.25, unallocated: 0, total: 1.75 });
+    }])).toEqual({ device: 0.5, app: 1, cloud: 0.25, researchApp: 0, algorithm: 0, unallocated: 0, total: 1.75 });
   });
 
   it("三端都为零时标记为工作量待评估", () => {

@@ -7,15 +7,20 @@ import type {
   WorkspaceData,
   WorkspaceImportPreview,
   WorkspacePackageCounts,
+  WorkspacePackageKind,
 } from "../shared/types.js";
 import { CATEGORIES, MAX_REQUIREMENT_IMAGES, MAX_REQUIREMENT_IMAGE_BYTES, MEMBER_ROLES, REQUIREMENT_IMAGE_MIME_TYPES, REQUIREMENT_SCOPES, SOURCES } from "../shared/types.js";
 import { normalizeLegacyGroupOverride, normalizeLegacySource, normalizeRequirement } from "../shared/requirements.js";
-import { mergeWorkspaceData, workspaceCounts } from "../shared/workspace.js";
+import { mergeWorkspaceDataWithReport, workspaceCounts } from "../shared/workspace.js";
 import { diffWorkspaceData, workspaceDifferenceDigest } from "../shared/workspaceDiff.js";
-import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizePptAccessPolicy } from "../shared/members.js";
+import { EMPTY_PPT_ACCESS_POLICY, isValidMicrosoftAccount, normalizeMember, normalizePptAccessPolicy, validateRequirementOwners } from "../shared/members.js";
+import { BUILT_IN_TIERING_PRODUCT_SERIES, EMPTY_TIERING_DATA, normalizeTieringData, normalizeWorkspaceTieringScope, validateTieringData } from "../shared/tiering.js";
+import { normalizeHistoricalLaunchMetadata } from "../shared/tieringLaunches.js";
+import { validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission.js";
+import { normalizeRoadmapManagement, validateRoadmapManagement } from "../shared/roadmapManagement.js";
 
 const PACKAGE_FORMAT = "health-roadmap-workspace";
-const PACKAGE_VERSION = 2;
+const PACKAGE_VERSION = 11;
 const TEMPLATE_VERSION = "v0.1";
 const DATA_PATH = "data.json";
 
@@ -33,6 +38,7 @@ interface WorkspacePackageManifest {
   dataPath: typeof DATA_PATH;
   counts: WorkspacePackageCounts;
   files: Record<string, PackageFileRecord>;
+  packageKind?: WorkspacePackageKind;
 }
 
 interface PackedRequirementImage extends Omit<RequirementImage, "dataUrl"> {
@@ -54,7 +60,8 @@ export interface PreparedWorkspaceImport {
   preview: Omit<WorkspaceImportPreview, "token" | "fileName">;
 }
 
-export async function createWorkspacePackage(data: WorkspaceData, appVersion: string, exportedAt = new Date().toISOString()): Promise<Buffer> {
+export async function createWorkspacePackage(data: WorkspaceData, appVersion: string, exportedAt = new Date().toISOString(), packageKind: WorkspacePackageKind = "workspace"): Promise<Buffer> {
+  data = normalizeRoadmapManagement(data);
   validateWorkspaceData(data);
   const zip = new JSZip();
   const files: Record<string, PackageFileRecord> = {};
@@ -78,16 +85,22 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
         path: imagePath,
       });
     }
-    packedRequirements.push({ ...requirement, images });
+    packedRequirements.push({ ...requirement, source: undefined, medicalSubmissionMilestones: undefined, medicalRoadmapSortOrder: undefined, images });
   }
 
   const packedData: PackedWorkspaceData = {
     requirements: packedRequirements,
+    draftRequirements: data.draftRequirements ?? [],
+    requirementTombstones: data.requirementTombstones ?? [],
+    requirementDeletionTrackingStartedAt: data.requirementDeletionTrackingStartedAt,
     domains: normalizeDomains(data.domains),
     products: data.products,
     groupOverrides: data.groupOverrides,
     members: data.members,
     pptAccessPolicy: data.pptAccessPolicy,
+    tiering: normalizeTieringData(data.tiering),
+    roadmaps: data.roadmaps, roadmapLanes: data.roadmapLanes, roadmapAssignments: data.roadmapAssignments,
+    roadmapAssignmentTombstones: data.roadmapAssignmentTombstones, medicalRoadmapPlans: data.medicalRoadmapPlans,
   };
   const dataBytes = Buffer.from(`${JSON.stringify(packedData, null, 2)}\n`, "utf8");
   zip.file(DATA_PATH, dataBytes);
@@ -102,6 +115,7 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
     dataPath: DATA_PATH,
     counts: workspaceCounts(data),
     files,
+    packageKind,
   };
   zip.file("manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
@@ -109,7 +123,7 @@ export async function createWorkspacePackage(data: WorkspaceData, appVersion: st
 
 export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, current?: WorkspaceData): Promise<PreparedWorkspaceImport> {
   if (fileName.toLowerCase().endsWith(".json") || firstNonWhitespace(bytes) === "{") {
-    return withMergeDifferences(inspectLegacyBackup(bytes), current);
+    return withMergeDifferences(inspectLegacyBackup(bytes, current), current);
   }
 
   const zip = await JSZip.loadAsync(bytes, { checkCRC32: true });
@@ -133,14 +147,23 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, c
   const dataBytes = verifiedFiles.get(manifest.dataPath);
   if (!dataBytes) throw new Error("数据包缺少结构化数据");
   const packedData = JSON.parse(dataBytes.toString("utf8")) as PackedWorkspaceData;
+  if (manifest.formatVersion >= 10 && [packedData.roadmaps, packedData.roadmapLanes, packedData.roadmapAssignments, packedData.roadmapAssignmentTombstones, packedData.medicalRoadmapPlans].some((items) => !Array.isArray(items))) throw new Error("数据包缺少完整的路标字典、匹配或医疗配置");
+  if (manifest.formatVersion >= 11 && !Array.isArray(packedData.draftRequirements)) throw new Error("数据包缺少待完善需求");
   const data: WorkspaceData = {
+    draftRequirements: packedData.draftRequirements ?? [],
+    roadmaps: packedData.roadmaps, roadmapLanes: packedData.roadmapLanes, roadmapAssignments: packedData.roadmapAssignments,
+    roadmapAssignmentTombstones: packedData.roadmapAssignmentTombstones, medicalRoadmapPlans: packedData.medicalRoadmapPlans,
+    legacyRoadmapInput: manifest.formatVersion < 10,
+    requirementTombstones: packedData.requirementTombstones ?? [],
+    requirementDeletionTrackingStartedAt: packedData.requirementDeletionTrackingStartedAt,
     domains: normalizeDomains(packedData.domains),
     products: packedData.products,
     groupOverrides: packedData.groupOverrides.map(normalizeLegacyGroupOverride),
     members: (packedData.members ?? []).map(normalizeMember),
     pptAccessPolicy: normalizePptAccessPolicy(packedData.pptAccessPolicy),
+    tiering: normalizeTieringData(packedData.tiering),
     requirements: packedData.requirements.map((requirement) => ({
-      ...normalizeRequirement({ ...requirement, images: [] }),
+      ...normalizeImportedRequirement({ ...requirement, images: [] }, manifest.formatVersion >= 7),
       images: requirement.images.map((image) => {
         const content = verifiedFiles.get(image.path);
         if (!content) throw new Error(`需求图片缺失：${image.name}`);
@@ -155,63 +178,122 @@ export async function inspectWorkspacePackage(bytes: Buffer, fileName: string, c
       }),
     })),
   };
+  if (manifest.formatVersion <= 5 && current) preserveLegacyMedicalMilestones(data, current);
   validateWorkspaceData(data);
   const actualCounts = workspaceCounts(data);
   if (!sameCounts(actualCounts, manifest.counts)) throw new Error("数据包数量清单与实际内容不一致");
+  const normalizedData = normalizeRoadmapManagement(normalizeWorkspaceTieringScope(data));
+  validateWorkspaceData(normalizedData);
 
   return withMergeDifferences({
-    data,
+    data: normalizedData,
     preview: {
       sourceFormat: "roadmap",
+      packageKind: manifest.packageKind ?? "workspace",
       exportedAt: manifest.exportedAt,
       templateVersion: manifest.templateVersion,
-      counts: actualCounts,
+      counts: workspaceCounts(normalizedData),
       differences: [],
+      ambiguousRequirementIds: [],
       differenceDigest: workspaceDifferenceDigest([]),
     },
   }, current);
 }
 
-function inspectLegacyBackup(bytes: Buffer): PreparedWorkspaceImport {
+function inspectLegacyBackup(bytes: Buffer, current?: WorkspaceData): PreparedWorkspaceImport {
   const backup = JSON.parse(bytes.toString("utf8")) as BackupEnvelope;
   if (backup.schemaVersion !== 1 || !backup.data) throw new Error("不支持的旧版备份格式");
   const data: WorkspaceData = {
-    requirements: backup.data.requirements.map((item) => normalizeRequirement(item)),
+    requirementTombstones: backup.data.requirementTombstones ?? [],
+    legacyRoadmapInput: backup.data.roadmapAssignments === undefined,
+    roadmaps: backup.data.roadmaps, roadmapLanes: backup.data.roadmapLanes, roadmapAssignments: backup.data.roadmapAssignments, roadmapAssignmentTombstones: backup.data.roadmapAssignmentTombstones, medicalRoadmapPlans: backup.data.medicalRoadmapPlans,
+    requirementDeletionTrackingStartedAt: backup.data.requirementDeletionTrackingStartedAt,
+    requirements: backup.data.requirements.map((item) => normalizeImportedRequirement(item)),
     domains: normalizeDomains(backup.data.domains),
     products: backup.data.products,
     groupOverrides: backup.data.groupOverrides.map(normalizeLegacyGroupOverride),
     members: (backup.data.members ?? []).map(normalizeMember),
     pptAccessPolicy: normalizePptAccessPolicy(backup.data.pptAccessPolicy),
+    tiering: normalizeTieringData(backup.data.tiering),
   };
+  if (current) preserveLegacyMedicalMilestones(data, current);
   validateWorkspaceData(data);
+  const normalizedData = normalizeRoadmapManagement(normalizeWorkspaceTieringScope(data));
+  validateWorkspaceData(normalizedData);
   return {
-    data,
+    data: normalizedData,
     preview: {
       sourceFormat: "legacy-json",
+      packageKind: "workspace",
       exportedAt: backup.exportedAt,
       templateVersion: "旧版备份",
-      counts: workspaceCounts(data),
+      counts: workspaceCounts(normalizedData),
       differences: [],
+      ambiguousRequirementIds: [],
       differenceDigest: workspaceDifferenceDigest([]),
     },
   };
 }
 
+function preserveLegacyMedicalMilestones(data: WorkspaceData, current: WorkspaceData): void {
+  const currentById = new Map(current.requirements.map((item) => [item.id, item]));
+  data.requirements = data.requirements.map((item) => {
+    const existing = currentById.get(item.id);
+    return !item.medicalSubmissionMilestones && existing?.medicalSubmissionMilestones
+      ? { ...item, medicalSubmissionMilestones: { ...existing.medicalSubmissionMilestones } }
+      : item;
+  });
+}
+
+function normalizeImportedRequirement(raw: Requirement, requireExtendedWorkload = false): Requirement {
+  if (requireExtendedWorkload && (raw.researchAppWorkloadPm === undefined || raw.algorithmWorkloadPm === undefined)) {
+    throw new Error(`需求“${raw.title}”缺少创新研究 App 或算法工作量字段`);
+  }
+  validateRawWorkload(raw);
+  const normalized = normalizeRequirement(raw);
+  // Preserve absence until merge/replace has been selected. Merge keeps local values;
+  // replace and newly added records are normalized to zero by the database.
+  if (raw.researchAppWorkloadPm === undefined) delete normalized.researchAppWorkloadPm;
+  if (raw.algorithmWorkloadPm === undefined) delete normalized.algorithmWorkloadPm;
+  return normalized;
+}
+
 function withMergeDifferences(prepared: PreparedWorkspaceImport, current?: WorkspaceData): PreparedWorkspaceImport {
   if (!current) return prepared;
-  const differences = diffWorkspaceData(current, mergeWorkspaceData(current, prepared.data));
+  const normalizedCurrent = normalizeRoadmapManagement(normalizeWorkspaceTieringScope(current));
+  const merge = mergeWorkspaceDataWithReport(normalizedCurrent, prepared.data, { deferAmbiguousRequirements: true });
+  const finalData = normalizeWorkspaceTieringScope(merge.data);
+  const differences = diffWorkspaceData(normalizedCurrent, finalData);
+  for (const resolution of merge.requirementResolutions) {
+    const existing = differences.find((item) => item.entity === "需求" && item.key === resolution.id);
+    if (resolution.outcome === "restored" && existing) {
+      existing.change = "恢复";
+      existing.fields.unshift({ field: "删除同步", currentValue: `已于 ${resolution.deletedAt ?? "未知时间"} 删除`, incomingValue: `对方于 ${resolution.requirementUpdatedAt} 后续修改` });
+      continue;
+    }
+    if (resolution.outcome === "ignored") {
+      differences.push({ entity: "需求", key: resolution.id, title: resolution.title, change: "忽略", fields: [{ field: "删除同步", currentValue: `已于 ${resolution.deletedAt ?? "未知时间"} 删除`, incomingValue: `旧需求更新时间 ${resolution.requirementUpdatedAt}，保持删除` }] });
+      continue;
+    }
+    if (resolution.outcome === "ambiguous") {
+      differences.push({ entity: "需求", key: resolution.id, title: resolution.title, change: "待确认", decisionRequired: true, fields: [{ field: "旧版新增判断", currentValue: "本机无需求及删除记录，无法判断是否曾被删除", incomingValue: `导入记录更新时间 ${resolution.requirementUpdatedAt}，早于本机删除追踪启用时间` }] });
+    }
+  }
+  const ambiguousRequirementIds = merge.requirementResolutions.filter((item) => item.outcome === "ambiguous").map((item) => item.id).sort();
   return {
     ...prepared,
     preview: {
       ...prepared.preview,
       differences,
+      ambiguousRequirementIds,
       differenceDigest: workspaceDifferenceDigest(differences),
     },
   };
 }
 
 function validateManifest(value: WorkspacePackageManifest): void {
-  if (value?.format !== PACKAGE_FORMAT || ![1, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
+  if (value?.format !== PACKAGE_FORMAT || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, PACKAGE_VERSION].includes(value.formatVersion)) throw new Error("不支持的数据包版本");
+  if (value.packageKind && !["workspace", "tiering-seed"].includes(value.packageKind)) throw new Error("数据包类型无效");
   if (value.dataPath !== DATA_PATH || !value.files || !value.files[DATA_PATH]) throw new Error("数据包清单不完整");
   if (!value.exportedAt || !value.templateVersion || !value.counts) throw new Error("数据包元信息不完整");
   for (const record of Object.values(value.files)) {
@@ -222,6 +304,7 @@ function validateManifest(value: WorkspacePackageManifest): void {
 }
 
 export function validateWorkspaceData(data: WorkspaceData): void {
+  validateRoadmapManagement(data);
   if (!data || !Array.isArray(data.requirements) || !Array.isArray(data.domains) || !Array.isArray(data.products) || !Array.isArray(data.groupOverrides)
     || !Array.isArray(data.members) || !data.pptAccessPolicy) {
     throw new Error("数据包结构无效");
@@ -230,6 +313,12 @@ export function validateWorkspaceData(data: WorkspaceData): void {
   const domainsById = new Map(data.domains.map((item) => [item.id, { ...item, level: item.level ?? "L1" }]));
   const productIds = validateDictionaries(data.products, "产品");
   const requirementIds = new Set<string>();
+  const tombstoneIds = new Set<string>();
+  for (const tombstone of data.requirementTombstones ?? []) {
+    if (!tombstone?.id || tombstoneIds.has(tombstone.id) || !validTimestamp(tombstone.deletedAt)) throw new Error("数据包包含无效或重复的需求删除记录");
+    tombstoneIds.add(tombstone.id);
+  }
+  if (data.requirementDeletionTrackingStartedAt && !validTimestamp(data.requirementDeletionTrackingStartedAt)) throw new Error("数据包的需求删除追踪时间无效");
 
   for (const domain of domainsById.values()) {
     if (domain.level === "L0" && domain.parentId) throw new Error(`领域 L0“${domain.name}”不能设置上游领域`);
@@ -240,6 +329,7 @@ export function validateWorkspaceData(data: WorkspaceData): void {
 
   for (const raw of data.requirements) {
     validateRawWorkload(raw);
+    if (raw.medicalRoadmapSortOrder !== undefined && (!Number.isSafeInteger(raw.medicalRoadmapSortOrder) || raw.medicalRoadmapSortOrder < 0)) throw new Error(`需求“${raw.title}”的医疗泳道顺序无效`);
     const rawScope = (raw as Requirement & { scope?: unknown }).scope;
     if (rawScope !== undefined && !REQUIREMENT_SCOPES.includes(rawScope as Requirement["scope"])) {
       throw new Error(`需求“${raw.title}”的适用范围无效`);
@@ -248,14 +338,26 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     if (rawAllowLatestVersionUpgrade !== undefined && typeof rawAllowLatestVersionUpgrade !== "boolean") {
       throw new Error(`需求“${raw.title}”的最近版本升级设置无效`);
     }
+    const rawHistoricalLaunch = (raw as Requirement & { historicalLaunch?: unknown }).historicalLaunch;
+    if (rawHistoricalLaunch !== undefined && !normalizeHistoricalLaunchMetadata(rawHistoricalLaunch)) {
+      throw new Error(`需求“${raw.title}”的历史上线时间证据无效`);
+    }
     const item = normalizeRequirement(raw);
     if (!item.id || requirementIds.has(item.id) || !item.title.trim()) throw new Error("数据包包含无效或重复需求");
     requirementIds.add(item.id);
     if (item.domainL0Id && domainsById.get(item.domainL0Id)?.level !== "L0") throw new Error(`需求“${item.title}”引用了不存在的领域 L0`);
     if (!domainIds.has(item.domainId) || domainsById.get(item.domainId)?.level !== "L1") throw new Error(`需求“${item.title}”引用了不存在的领域 L1`);
     if (item.domainL0Id && domainsById.get(item.domainId)?.parentId !== item.domainL0Id) throw new Error(`需求“${item.title}”的领域 L1 不属于所选领域 L0`);
-    if (!SOURCES.includes(item.source) || !CATEGORIES.includes(item.category)) throw new Error(`需求“${item.title}”的来源或分类无效`);
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(item.targetMonth)) throw new Error(`需求“${item.title}”的上线年月无效`);
+    if ((item.source !== undefined && !SOURCES.includes(item.source)) || !CATEGORIES.includes(item.category)) throw new Error(`需求“${item.title}”的来源或分类无效`);
+    try {
+      if (item.targetMonth !== "") validateRequirementTargetMonth(item.source, item.targetMonth);
+      validateMedicalSubmissionMilestones(item.source, item.targetMonth, item.medicalSubmissionMilestones);
+    } catch (error) {
+      throw new Error(`需求“${item.title}”的${error instanceof Error ? error.message : "医疗认证时间节点无效"}`);
+    }
+    if (item.historicalLaunch && item.historicalLaunch.suggestedTargetMonth !== item.targetMonth) {
+      throw new Error(`需求“${item.title}”的历史上线时间与需求月份不一致`);
+    }
     if (!Number.isFinite(item.workloadPm) || item.workloadPm < 0) throw new Error(`需求“${item.title}”的工作量无效`);
     if (item.description.length > 5000 || !validTimestamp(item.createdAt) || !validTimestamp(item.updatedAt)) throw new Error(`需求“${item.title}”的文本或时间信息无效`);
     if (item.productIds.some((id) => !productIds.has(id))) throw new Error(`需求“${item.title}”引用了不存在的产品`);
@@ -266,12 +368,32 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     for (const image of item.images) decodeDataUrl(image);
   }
 
+  for (const draft of data.draftRequirements ?? []) {
+    if (!draft?.id || requirementIds.has(draft.id) || !draft.title?.trim()) throw new Error("待完善需求编号无效或与正式需求重复");
+    if (!validTimestamp(draft.createdAt) || !validTimestamp(draft.updatedAt)) throw new Error(`待完善需求“${draft.title}”时间无效`);
+    if (domainsById.get(draft.domainL0Id)?.level !== "L0" || domainsById.get(draft.domainId)?.parentId !== draft.domainL0Id) throw new Error(`待完善需求“${draft.title}”领域无效`);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(draft.targetMonth) || !CATEGORIES.includes(draft.category) || !REQUIREMENT_SCOPES.includes(draft.scope)) throw new Error(`待完善需求“${draft.title}”月份、分类或范围无效`);
+    if (draft.description.length > 5000 || draft.images.length || draft.productIds.length) throw new Error(`待完善需求“${draft.title}”内容无效`);
+    validateRawWorkload(draft);
+    validateRequirementOwners(draft, data.members);
+    for (const [seriesId, status] of Object.entries(draft.pendingSeries ?? {})) {
+      if (![...(data.tiering?.productSeries ?? []), ...BUILT_IN_TIERING_PRODUCT_SERIES].some((series) => series.id === seriesId) || !["支持", "不支持", "未判断"].includes(status)) throw new Error(`待完善需求“${draft.title}”系列状态无效`);
+    }
+    requirementIds.add(draft.id);
+  }
+
   const overrideKeys = new Set<string>();
   for (const item of data.groupOverrides) {
     if (!item.groupKey || overrideKeys.has(item.groupKey) || !item.cardTitle?.trim() || !validTimestamp(item.updatedAt)) throw new Error("数据包包含无效或重复路标卡片编辑");
     if (item.sortOrder !== undefined && (!Number.isInteger(item.sortOrder) || item.sortOrder < 0)) throw new Error(`路标卡片“${item.cardTitle}”的排序无效`);
     overrideKeys.add(item.groupKey);
-    const [domainId, source, targetMonth] = item.groupKey.split("::");
+    const parts = item.groupKey.split("::");
+    if (parts.length === 4) {
+      const [roadmapId, laneId, domainId, month] = parts;
+      if (!data.roadmapLanes?.some((lane) => lane.id === laneId && lane.roadmapId === roadmapId) || !domainIds.has(domainId) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error(`路标卡片“${item.cardTitle}”的关联信息无效`);
+      continue;
+    }
+    const [domainId, source, targetMonth] = parts;
     if (!domainIds.has(domainId) || !SOURCES.includes(normalizeLegacySource(source) as (typeof SOURCES)[number]) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth ?? "")) {
       throw new Error(`路标卡片“${item.cardTitle}”的关联信息无效`);
     }
@@ -295,15 +417,21 @@ export function validateWorkspaceData(data: WorkspaceData): void {
     accounts.add(account);
   }
   const policy = normalizePptAccessPolicy(data.pptAccessPolicy);
+  for (const item of data.requirements) validateRequirementOwners(item, data.members);
   if (!validTimestamp(policy.updatedAt)) throw new Error("PPT 白名单更新时间无效");
   if (policy.entries.some((entry) => !memberIds.has(entry.memberId) || !["read", "change"].includes(entry.permission))) {
     throw new Error("PPT 白名单引用了不存在的成员或无效权限");
+  }
+  const tiering = validateTieringData(data.tiering ?? EMPTY_TIERING_DATA);
+  const linkedFeatureIds = new Set(tiering.features.map((item) => item.id));
+  for (const requirement of data.requirements) {
+    if (requirement.tieringFeatureId && !linkedFeatureIds.has(requirement.tieringFeatureId)) throw new Error(`历史需求“${requirement.title}”引用了不存在的分层功能`);
   }
 }
 
 function validateRawWorkload(raw: Requirement): void {
   const keys = ["deviceWorkloadPm", "appWorkloadPm", "cloudWorkloadPm", "unallocatedWorkloadPm"] as const;
-  const hasBreakdown = keys.some((key) => Object.prototype.hasOwnProperty.call(raw, key));
+  const hasBreakdown = [...keys, "researchAppWorkloadPm", "algorithmWorkloadPm"].some((key) => Object.prototype.hasOwnProperty.call(raw, key));
   if (!hasBreakdown) {
     if (!Number.isFinite(raw.workloadPm) || raw.workloadPm < 0) throw new Error(`需求“${raw.title}”的工作量无效`);
     return;
@@ -312,7 +440,11 @@ function validateRawWorkload(raw: Requirement): void {
     const value = raw[key];
     if (!Number.isFinite(value) || value < 0) throw new Error(`需求“${raw.title}”的${key === "deviceWorkloadPm" ? "设备" : key === "appWorkloadPm" ? "App" : key === "cloudWorkloadPm" ? "云侧" : "待拆分"}工作量无效`);
   }
-  const total = raw.deviceWorkloadPm + raw.appWorkloadPm + raw.cloudWorkloadPm + raw.unallocatedWorkloadPm;
+  for (const [key, label] of [["researchAppWorkloadPm", "创新研究 App"], ["algorithmWorkloadPm", "算法"]] as const) {
+    const value = raw[key];
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) throw new Error(`需求“${raw.title}”的${label}工作量无效`);
+  }
+  const total = raw.deviceWorkloadPm + raw.appWorkloadPm + raw.cloudWorkloadPm + raw.unallocatedWorkloadPm + (raw.researchAppWorkloadPm ?? 0) + (raw.algorithmWorkloadPm ?? 0);
   if (!Number.isFinite(raw.workloadPm) || Math.abs(total - raw.workloadPm) > 0.001) {
     throw new Error(`需求“${raw.title}”的工作量合计不一致`);
   }
@@ -386,10 +518,23 @@ function validTimestamp(value: string): boolean {
 
 function sameCounts(left: WorkspacePackageCounts, right: WorkspacePackageCounts): boolean {
   return left.requirements === right.requirements
+    && (right.draftRequirements === undefined || left.draftRequirements === right.draftRequirements)
+    && (right.roadmaps === undefined || left.roadmaps === right.roadmaps)
+    && (right.roadmapLanes === undefined || left.roadmapLanes === right.roadmapLanes)
+    && (right.roadmapAssignments === undefined || left.roadmapAssignments === right.roadmapAssignments)
+    && (right.medicalRoadmapPlans === undefined || left.medicalRoadmapPlans === right.medicalRoadmapPlans)
+    && (right.roadmapAssignmentTombstones === undefined || left.roadmapAssignmentTombstones === right.roadmapAssignmentTombstones)
+    && (right.requirementTombstones === undefined || left.requirementTombstones === right.requirementTombstones)
     && left.images === right.images
     && left.domains === right.domains
     && left.products === right.products
     && left.groupOverrides === right.groupOverrides
     && (right.members === undefined || left.members === right.members)
-    && (right.whitelistEntries === undefined || left.whitelistEntries === right.whitelistEntries);
+    && (right.whitelistEntries === undefined || left.whitelistEntries === right.whitelistEntries)
+    && (right.tieringFeatures === undefined || left.tieringFeatures === right.tieringFeatures)
+    && (right.tieringProductSeries === undefined || left.tieringProductSeries === right.tieringProductSeries)
+    && (right.tieringSupportRecords === undefined || left.tieringSupportRecords === right.tieringSupportRecords)
+    && (right.tieringEvidenceSources === undefined || left.tieringEvidenceSources === right.tieringEvidenceSources)
+    && (right.tieringVerificationIssues === undefined || left.tieringVerificationIssues === right.tieringVerificationIssues)
+    && (right.tieringChangeLogs === undefined || left.tieringChangeLogs === right.tieringChangeLogs);
 }

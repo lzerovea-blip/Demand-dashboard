@@ -44,3 +44,15 @@ d48462d7988b651e21b6d993c2d9399fa595d0d8274f1eee654b5ea2d315fc29  解决方案�
 eb4f7e357dddf8dcd2f313b7b59607d3183fd1bec4855230e811ff656e65064a  Solution-Requirements-Manager-Portable-0.7.31-x64.exe
 591782fc2b30b0c40550b9e97beb38e6381c73c59419a1ca4662bdf73d28a96e  Solution-Requirements-Manager-Portable-0.7.33-x64.exe
 c1be10cb42ad325d6ced325b82f8e9f755ac4f2598214b66af25e9781ddbe4c5  Solution-Requirements-Manager-Portable-0.7.34-x64.exe
+471a851c99ae6c0ef6b20ebe3e814fdc89f144d6cf2c77016b79be156913b48f  Solution-Requirements-Manager-Portable-0.8.0-x64.exe
+d2094097c3e746e3f7373cfe3de1521494740e6f02c5cf5c4b25462f3cf3cfe9  Solution-Requirements-Manager-Portable-0.8.1-x64.exe
+f059ba37208429c4e0ee22ff13a5a370615f3590ea2aa6351be64fe15ee47c86  Solution-Requirements-Manager-Portable-0.8.2-x64.exe
+c7e31223ae33e122bc109a7ef57d382e6a8671c602204820a3ebd8016b323c29  Solution-Requirements-Manager-Portable-0.8.3-x64.exe
+d2fbc14559156b27b437d717b67d32b0015937bc50f77f478cdca11159b1e2fe  Solution-Requirements-Manager-Portable-0.8.4-x64.exe
+4809c4f227c780aa48d2dcdb0b5e33c1db41895162631f78b859aed870825e2d  Solution-Requirements-Manager-Portable-0.8.5-x64.exe
+516512aeefa1a446ad76c865654b8d63d3691c88bbd9778d0964c12a72c1fade  Solution-Requirements-Manager-Portable-0.8.6-x64.exe
+22a4d52f244154e56e82bbd01787837475873326177b0b981451c7be1ef81ef6  Solution-Requirements-Manager-Portable-0.8.8-x64.exe
+68f415354b50e597917f7db16e0d73e62fe985656d2aadd3b12a177f208fb517  解决方案需求管理-0.8.8-mac-arm64.zip
+45bbb46f0067df51d10d506c5e82fbd99c589c551f1ea2c3a71b40ad5f40a744  解决方案需求管理-0.8.8-mac-arm64.dmg
+3aee1cca66f1fb9eea4eb00bd22ca775a0e6b98c25e775d14bdd8eba508b4244  Solution-Requirements-Manager-Portable-0.8.9-x64.exe
+b5259b28e51fc4e6c05d42fdb7c3564b29d88570bb527ce7d33954ddff2f9285  Solution-Requirements-Manager-Portable-0.9.7-x64.exe

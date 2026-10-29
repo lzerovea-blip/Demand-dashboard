@@ -5,6 +5,7 @@ import {
   checkPowerPointIrmEnvironment,
   encodeWindowsPowerShellScript,
   powerShellExecutableCandidates,
+  resolveIrmEnvironmentStatus,
   shouldRetryWithOfficeIdentity,
   verifyPowerPointIrmGrants,
 } from "../src/main/pptIrm";
@@ -65,6 +66,35 @@ describe("PPT 企业 IRM 有效期", () => {
     expect(POWERPOINT_IRM_SCRIPT).toContain("$payload.ownerAccount");
   });
 
+  it("IRM 可用时映射文档所有者，无法识别身份时返回可操作提示", () => {
+    const owner = pptMember("owner", "l00860412", "zw.lin@huawei.com");
+    expect(resolveIrmEnvironmentStatus({
+      supported: true,
+      platform: "win32",
+      powerPointInstalled: true,
+      irmReady: true,
+      officeIdentity: "l00860412@china.huawei.com",
+      message: "raw",
+    }, [owner])).toMatchObject({
+      irmReady: true,
+      officeIdentity: "l00860412@china.huawei.com",
+      preferredDocumentOwner: "zw.lin@huawei.com",
+    });
+    expect(resolveIrmEnvironmentStatus({
+      supported: true,
+      platform: "win32",
+      powerPointInstalled: true,
+      irmReady: true,
+      message: "raw",
+    }, [owner])).toMatchObject({ irmReady: false });
+    expect(resolveIrmEnvironmentStatus({
+      supported: true,
+      platform: "win32",
+      powerPointInstalled: true,
+      irmReady: true,
+      message: "raw",
+    }, [owner]).message).toContain("文件 → 账户");
+  });
   it("文档所有者保留完全控制且不重复写入白名单", () => {
     const owner = pptMember("owner", "l00860412", "zw.lin@huawei.com");
     const reader = pptMember("reader", "l10000000", "reader@huawei.com");
