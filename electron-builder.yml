@@ -21,6 +21,11 @@ mac:
     - dmg
     - zip
 win:
+  extraResources:
+    - from: dist-mcp/server.cjs
+      to: mcp/server.cjs
+    - from: build-resources/mcp-runtime/win32-x64
+      to: mcp
   icon: build-resources/app-icon.ico
   electronLanguages:
     - zh-CN

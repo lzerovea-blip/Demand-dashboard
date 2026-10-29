@@ -459,14 +459,14 @@ export default function App() {
             try { setMcpStatus(await window.roadmapApi.setMcpEnabled(enabled)); setNotice(enabled ? "本机 MCP 接入已启用" : "本机 MCP 接入已停用"); }
             catch (reason) { setError(messageOf(reason)); throw reason; }
           }} onDecide={(proposal, accept) => requestConfirmation({
-            title: accept ? "确认 MCP 整批修改" : "拒绝 MCP 提案",
-            message: accept ? `将一次写入 ${proposal.items.length} 项操作，其中删除 ${proposal.items.filter((item) => item.operation.type === "delete").length} 条需求。确认后无法撤销。` : "拒绝后模型需要重新提出该批修改。",
-            confirmLabel: accept ? "确认写入整批" : "拒绝整批",
+            title: accept ? (proposal.items.some(item => item.operation.type === "export") ? "确认 MCP 文件导出" : "确认 MCP 整批修改") : "拒绝 MCP 提案",
+            message: accept ? (proposal.items.some(item => item.operation.type === "export") ? "请确认上方导出范围与安全提示。接下来由你选择保存位置，文件不会自动发送或上传；完整包含人员账号、白名单等信息，请谨慎分享。" : `将一次写入 ${proposal.items.length} 项操作，其中删除 ${proposal.items.filter((item) => item.operation.type === "delete").length} 条需求。确认后无法撤销。`) : "拒绝后模型需要重新提出该批修改。",
+            confirmLabel: accept ? (proposal.items.some(item => item.operation.type === "export") ? "开始导出" : "确认写入整批") : "拒绝整批",
             action: async () => {
               try {
                 const result = await window.roadmapApi.decideMcpProposal(proposal.id, accept);
                 if (result.snapshot) setSnapshot(result.snapshot);
-                setNotice(accept ? "MCP 提案已整批写入" : "MCP 提案已拒绝");
+                setNotice(result.proposal.exportResult ? (result.proposal.exportResult.canceled ? "导出已取消" : `导出完成：${result.proposal.exportResult.path}`) : accept ? "MCP 提案已整批写入" : "MCP 提案已拒绝");
               } catch (reason) { setError(messageOf(reason)); throw reason; }
             },
           })} />}

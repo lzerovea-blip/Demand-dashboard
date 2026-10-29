@@ -24,6 +24,8 @@ await mkdir(appDir, { recursive: true });
 
 await cp("dist-electron", join(appDir, "dist-electron"), { recursive: true });
 await cp("dist-renderer", join(appDir, "dist-renderer"), { recursive: true });
+await cp("build-resources/mcp-runtime/darwin-arm64", join(resourcesDir, "mcp"), { recursive: true });
+await cp("dist-mcp/server.cjs", join(resourcesDir, "mcp", "server.cjs"));
 await cp("node_modules/sql.js/dist/sql-wasm.wasm", join(resourcesDir, "sql-wasm.wasm"));
 await cp("build-resources/app-icon.png", join(resourcesDir, "app-icon.png"));
 await cp("build-resources/app-icon.icns", join(resourcesDir, "app-icon.icns"));

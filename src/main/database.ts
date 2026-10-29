@@ -78,6 +78,7 @@ import { historicalLaunchForFeatureId, normalizeHistoricalLaunchMetadata } from 
 import { isMedicalSubmissionSource, normalizeMedicalSubmissionMilestones, validateMedicalSubmissionMilestones, validateRequirementTargetMonth } from "../shared/medicalSubmission.js";
 import { normalizeRoadmapManagement, validateRoadmapManagement, assignmentGroupKey, projectedMedicalRequirement, legacyRoadmapId } from "../shared/roadmapManagement.js";
 import { MCP_EDITABLE_FIELDS, mcpSaveInput, type McpRequirementOperation } from "../shared/mcp.js";
+import { validateMcpDictionaryAdditions, type McpDictionaryAddition } from "../shared/mcpDictionaries.js";
 
 const BACKUP_SCHEMA_VERSION = 1;
 const DATABASE_SCHEMA_VERSION = 13;
@@ -318,13 +319,30 @@ export class LocalDatabase {
 
   /** Execute the complete human-approved MCP batch against an isolated SQL database. */
   async applyMcpRequirementBatch(operations: McpRequirementOperation[]): Promise<AppSnapshot> {
+    return this.applyMcpBatch(operations);
+  }
+
+  async applyMcpDictionaryBatch(entries: McpDictionaryAddition[]): Promise<AppSnapshot> {
+    const validated = validateMcpDictionaryAdditions(this.getSnapshot(), entries);
+    return this.applyMcpBatch(validated.map(entry => ({ type: "create_dictionary" as const, entry })));
+  }
+
+  private async applyMcpBatch(operations: (McpRequirementOperation | { type: "create_dictionary"; entry: McpDictionaryAddition })[]): Promise<AppSnapshot> {
     if (this.deferMcpPersistence) throw new Error("已有 MCP 修改批次正在执行");
     const original = this.db;
     this.db = new this.sql.Database(original.export());
     this.deferMcpPersistence = true;
     try {
       for (const operation of operations) {
-        if (operation.type === "create") {
+        if (operation.type === "create_dictionary") {
+          const entry = operation.entry;
+          if (entry.kind === "domain_l0") await this.saveDomain({ name: entry.name, level: "L0" });
+          else if (entry.kind === "domain_l1") await this.saveDomain({ name: entry.name, level: "L1", parentId: entry.parentId });
+          else if (entry.kind === "product") await this.saveProduct({ name: entry.name });
+          else if (entry.kind === "member") await this.saveMember({ name: entry.name, employeeNumber: entry.employeeNumber, microsoftAccount: entry.microsoftAccount, role: entry.role, domainL1Ids: entry.domainL1Ids });
+          else if (entry.kind === "roadmap") await this.saveRoadmap({ name: entry.name, kind: entry.roadmapKind });
+          else if (entry.kind === "lane") await this.saveRoadmapLane({ name: entry.name, roadmapId: entry.roadmapId });
+        } else if (operation.type === "create") {
           await this.saveRequirement({ ...operation.fields, images: [], overseasRegions: operation.fields.overseasRegions ?? [], productIds: operation.fields.productIds ?? [] });
         } else if (operation.type === "update") {
           if (Object.keys(operation.fields).some((key) => !(MCP_EDITABLE_FIELDS as readonly string[]).includes(key))) throw new Error("MCP 修改包含未开放字段");

@@ -4,8 +4,10 @@ import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AppSnapshot } from "../shared/types.js";
+import { MEMBER_ROLES } from "../shared/types.js";
 import { mcpRequirementView, type McpRequirementOperation } from "../shared/mcp.js";
 import { McpProposalStore } from "./mcpProposals.js";
+import { diagnosticErrorCode, type McpDiagnosticLogger, type McpTrace } from "./mcpDiagnostics.js";
 
 interface SessionDescriptor { pipe: string; token: string }
 const SESSION_FILE = "mcp-session.json";
@@ -16,7 +18,8 @@ export class LocalMcpBridge {
   private server: Server | null = null;
   private descriptor: SessionDescriptor | null = null;
   constructor(private readonly userData: string, private readonly getSnapshot: () => AppSnapshot,
-    private readonly proposals: McpProposalStore, private readonly diagnostic: (event: string, detail: string) => void) {}
+    private readonly proposals: McpProposalStore, private readonly diagnostic: (event: string, detail: string) => void,
+    private readonly logger?: McpDiagnosticLogger) {}
 
   get isRunning(): boolean { return this.server !== null; }
 
@@ -26,21 +29,38 @@ export class LocalMcpBridge {
     const pipe = process.platform === "win32" ? `\\\\.\\pipe\\solution-requirements-${nonce}` : join(tmpdir(), `mcp-${nonce}.sock`);
     const descriptor = { pipe, token: randomBytes(32).toString("hex") };
     const server = createServer((socket) => {
+      socket.on("error", error => this.logger?.record("bridge-failed", "bridge", { level: "error", errorCode: diagnosticErrorCode(error) }));
       let buffer = "";
       socket.setEncoding("utf8");
       socket.on("data", (chunk: string) => {
         buffer += chunk;
-        if (Buffer.byteLength(buffer) > MAX_REQUEST_BYTES) { socket.destroy(); return; }
+        if (Buffer.byteLength(buffer) > MAX_REQUEST_BYTES) { this.logger?.record("bridge-failed", "bridge", { level: "error", errorCode: "REQUEST_TOO_LARGE" }); socket.destroy(); return; }
         const newline = buffer.indexOf("\n");
         if (newline < 0) return;
         const line = buffer.slice(0, newline);
         buffer = "";
         void (async () => {
+          let trace: McpTrace | undefined;
+          let stage = "bridge";
+          const started = Date.now();
           try {
-            const request = JSON.parse(line) as { token: string; action: string; args?: unknown };
+            const request = JSON.parse(line) as { token: string; action: string; args?: unknown; diagnostic?: McpTrace };
             if (request.token !== descriptor.token) throw new Error("MCP 会话认证失败");
-            socket.end(`${JSON.stringify({ ok: true, result: this.handle(request.action, request.args) })}\n`);
+            if (request.diagnostic && /^[a-f0-9-]{36}$/.test(request.diagnostic.connectionId) && /^[a-f0-9]{16}$/.test(request.diagnostic.traceId)) {
+              trace = { connectionId: request.diagnostic.connectionId, traceId: request.diagnostic.traceId, source: request.diagnostic.source === "self-test" ? "self-test" : "external" };
+            }
+            const tool = ["list_requirements", "get_requirement", "list_requirement_references", "propose_requirement_changes", "get_proposal_status", "propose_dictionary_additions", "propose_export"].includes(request.action) ? request.action : "unknown";
+            this.logger?.record("bridge-request", "bridge", { ...trace, tool });
+            stage = "workbench";
+            this.logger?.record("workbench-start", "workbench", { ...trace, tool });
+            const result = this.handle(request.action, request.args);
+            const count = result && typeof result === "object" && "items" in result && Array.isArray(result.items) ? result.items.length
+              : result && typeof result === "object" && "itemCount" in result && typeof result.itemCount === "number" ? result.itemCount
+              : request.action === "get_requirement" ? 1 : undefined;
+            this.logger?.record("workbench-complete", "workbench", { ...trace, tool, count, durationMs: Date.now()-started });
+            socket.end(`${JSON.stringify({ ok: true, result })}\n`);
           } catch (error) {
+            this.logger?.record("bridge-failed", stage, { ...trace, level: "error", errorCode: diagnosticErrorCode(error), durationMs: Date.now()-started });
             socket.end(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "MCP 请求失败" })}\n`);
           }
         })();
@@ -54,7 +74,8 @@ export class LocalMcpBridge {
       this.server = server;
       this.descriptor = descriptor;
       this.diagnostic("mcp-started", "stdio bridge enabled");
-    } catch (error) { server.close(); throw error; }
+      this.logger?.record("bridge-enabled", "bridge");
+    } catch (error) { this.logger?.record("bridge-failed", "bridge", { level: "error", errorCode: diagnosticErrorCode(error) }); server.close(); throw error; }
   }
 
   async stop(): Promise<void> {
@@ -66,6 +87,7 @@ export class LocalMcpBridge {
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
     if (descriptor && process.platform !== "win32") await rm(descriptor.pipe, { force: true });
     if (server) this.diagnostic("mcp-stopped", "stdio bridge disabled");
+    if (server) this.logger?.record("bridge-disabled", "bridge");
   }
 
   private handle(action: string, args: unknown): unknown {
@@ -87,7 +109,20 @@ export class LocalMcpBridge {
       domains: snapshot.domains.map(({ id, name, level, parentId }) => ({ id, name, level, parentId })),
       products: snapshot.products.map(({ id, name }) => ({ id, name })),
       members: snapshot.members.map(({ id, name, role, domainL1Ids }) => ({ id, name, role, domainL1Ids })),
+      memberRoles: MEMBER_ROLES,
+      roadmaps: (snapshot.roadmaps ?? []).map(({ id, name, kind, sortOrder }) => ({ id, name, kind, sortOrder })),
+      roadmapLanes: (snapshot.roadmapLanes ?? []).map(({ id, roadmapId, name, sortOrder }) => ({ id, roadmapId, name, sortOrder })),
     };
+    if (action === "propose_dictionary_additions") {
+      const proposal = this.proposals.proposeDictionaries(input.entries);
+      this.diagnostic("mcp-dictionary-proposal-created", `operations=${proposal.items.length}`);
+      return { id: proposal.id, state: proposal.state, expiresAt: proposal.expiresAt, itemCount: proposal.items.length };
+    }
+    if (action === "propose_export") {
+      const proposal = this.proposals.proposeExport(input.request);
+      this.diagnostic("mcp-export-proposed", "operations=1");
+      return { id: proposal.id, state: proposal.state, expiresAt: proposal.expiresAt, itemCount: 1 };
+    }
     if (action === "propose_requirement_changes") {
       const operations = input.operations as McpRequirementOperation[];
       const proposal = this.proposals.propose(operations);
@@ -96,29 +131,32 @@ export class LocalMcpBridge {
     }
     if (action === "get_proposal_status") {
       const proposal = this.proposals.get(String(input.id ?? ""));
-      return { id: proposal.id, state: proposal.state, expiresAt: proposal.expiresAt, itemCount: proposal.items.length, error: proposal.error };
+      return { id: proposal.id, state: proposal.state, expiresAt: proposal.expiresAt, itemCount: proposal.items.length, error: proposal.error, exportResult: proposal.exportResult };
     }
     throw new Error("不支持的 MCP 操作");
   }
 }
 
-export async function callLocalMcpBridge(userData: string, action: string, args: unknown): Promise<unknown> {
+export async function callLocalMcpBridge(userData: string, action: string, args: unknown, trace?: McpTrace, logger?: McpDiagnosticLogger): Promise<unknown> {
+  const started = Date.now();
+  logger?.record("bridge-connecting", "bridge", { ...trace, tool: action });
   let descriptor: SessionDescriptor;
   try { descriptor = JSON.parse(await readFile(join(userData, SESSION_FILE), "utf8")) as SessionDescriptor; }
-  catch { throw new Error("工作台未运行或未启用 MCP；请先打开工作台并在“模型接入”中启用"); }
+  catch { logger?.record("bridge-failed", "bridge", { ...trace, level: "error", errorCode: "WORKBENCH_DISABLED_OR_MISSING" }); throw new Error("工作台未运行或未启用 MCP；请先打开工作台并在“模型接入”中启用"); }
   return new Promise((resolve, reject) => {
     const socket = createConnection(descriptor.pipe);
     let response = "";
     socket.setEncoding("utf8");
     socket.setTimeout(5000, () => socket.destroy(new Error("本机工作台连接超时")));
-    socket.on("connect", () => socket.write(`${JSON.stringify({ token: descriptor.token, action, args })}\n`));
+    socket.on("connect", () => { logger?.record("bridge-connected", "bridge", trace); socket.write(`${JSON.stringify({ token: descriptor.token, action, args, diagnostic: trace })}\n`); });
     socket.on("data", (chunk: string) => { response += chunk; if (Buffer.byteLength(response) > MAX_RESPONSE_BYTES) socket.destroy(new Error("MCP 响应过大，请缩小分页大小")); });
-    socket.on("error", (error) => reject(new Error(`工作台连接已断开：${error.message}`)));
+    socket.on("error", (error) => { logger?.record("bridge-failed", "bridge", { ...trace, level: "error", errorCode: diagnosticErrorCode(error) }); reject(new Error(`工作台连接已断开：${error.message}`)); });
     socket.on("end", () => {
       try {
         const parsed = JSON.parse(response) as { ok: boolean; result?: unknown; error?: string };
-        if (!parsed.ok) reject(new Error(parsed.error ?? "MCP 请求失败")); else resolve(parsed.result);
-      } catch { reject(new Error("工作台连接已断开或响应无效")); }
+        if (!parsed.ok) { logger?.record("bridge-failed", "workbench", { ...trace, level: "error", errorCode: diagnosticErrorCode(new Error(parsed.error)) }); reject(new Error(parsed.error ?? "MCP 请求失败")); }
+        else { logger?.record("bridge-complete", "bridge", { ...trace, durationMs: Date.now()-started }); resolve(parsed.result); }
+      } catch { logger?.record("bridge-failed", "bridge", { ...trace, level: "error", errorCode: "BRIDGE_INVALID_RESPONSE" }); reject(new Error("工作台连接已断开或响应无效")); }
     });
   });
 }

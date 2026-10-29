@@ -14,6 +14,14 @@ const snapshot = (requirements: Requirement[]) => ({ requirements, domains: [], 
   pptAccessPolicy: { entries: [], updatedAt: "2026-01-01T00:00:00.000Z" }, templates: [] }) as AppSnapshot;
 
 describe("MCP proposal safety", () => {
+  it("validates date format before creating a pending proposal even through the bridge", () => {
+    const store = new McpProposalStore({ getSnapshot: () => snapshot([requirement]), applyMcpRequirementBatch: async () => snapshot([requirement]) });
+    for (const targetMonth of ["2027年3月", "2027-3", "2027-13", "2027/03", ""]) {
+      expect(() => store.propose([{ type: "update", id: "r1", fields: { targetMonth } }])).toThrow("YYYY-MM");
+    }
+    expect(store.listPending()).toHaveLength(0);
+    expect(store.propose([{ type: "update", id: "r1", fields: { targetMonth: "2027-03" } }]).state).toBe("pending");
+  });
   it("returns business fields but not image bytes, email, or rights", () => {
     expect(mcpRequirementView({ ...requirement, images: [{ id: "i", name: "x", mimeType: "image/png", sizeBytes: 1, dataUrl: "data:image/png;base64,AAAA" }] })).toMatchObject({ imageCount: 1 });
     expect(JSON.stringify(mcpRequirementView(requirement))).not.toMatch(/dataUrl|microsoftAccount|pptAccessPolicy/);

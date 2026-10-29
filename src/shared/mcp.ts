@@ -1,4 +1,6 @@
 import type { Requirement, SaveRequirementInput } from "./types.js";
+import type { McpDictionaryAddition } from "./mcpDictionaries.js";
+import type { McpExportRequest, McpExportResult } from "./mcpExports.js";
 
 /** MCP never accepts image bytes, roadmap assignments or tiering edits. */
 export type McpRequirementFields = Omit<SaveRequirementInput, "id" | "images" | "tieringFeatureId" | "source" | "medicalSubmissionMilestones">;
@@ -11,12 +13,12 @@ export type McpRequirementOperation =
 
 export interface McpFieldDifference { field: string; before: unknown; after: unknown }
 export interface McpProposalItem {
-  operation: McpRequirementOperation;
+  operation: McpRequirementOperation | { type: "create_dictionary"; entry: McpDictionaryAddition } | { type: "export"; request: McpExportRequest };
   title: string;
   differences: McpFieldDifference[];
   baselineUpdatedAt?: string;
 }
-export type McpProposalState = "pending" | "approved" | "cancelled" | "expired" | "conflict" | "failed";
+export type McpProposalState = "pending" | "approved" | "cancelled" | "expired" | "conflict" | "failed" | "exporting";
 export interface McpProposal {
   id: string;
   state: McpProposalState;
@@ -24,10 +26,17 @@ export interface McpProposal {
   expiresAt: string;
   items: McpProposalItem[];
   error?: string;
+  exportResult?: McpExportResult;
 }
 export interface McpConnectionStatus { enabled: boolean; pendingCount: number; }
 
 export const MCP_PROPOSAL_TTL_MS = 30 * 60 * 1000;
+export const MCP_TARGET_MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+export function validateMcpTargetMonth(fields: { targetMonth?: unknown }): void {
+  if (fields.targetMonth !== undefined && (typeof fields.targetMonth !== "string" || !MCP_TARGET_MONTH_PATTERN.test(fields.targetMonth))) {
+    throw new Error("上线年月格式错误：请填写 YYYY-MM，例如 2027-03；月份必须为 01–12，不接受中文日期、斜杠或时间戳");
+  }
+}
 export const MCP_EDITABLE_FIELDS = [
   "title", "description", "domainL0Id", "domainId", "scope", "allowLatestVersionUpgrade",
   "overseasRegions", "category", "targetMonth", "productIds", "planningMemberId",

@@ -21,7 +21,14 @@ import type {
 } from "../shared/types.js";
 
 const api: ElectronApi = {
+  getMcpDiagnostics: () => ipcRenderer.invoke("mcp:diagnostics"),
+  copyMcpDiagnosticSummary: () => ipcRenderer.invoke("mcp:diagnostics:copy"),
+  openMcpDiagnosticDirectory: () => ipcRenderer.invoke("mcp:diagnostics:open"),
+  exportMcpDiagnostics: () => ipcRenderer.invoke("mcp:diagnostics:export"),
+  runMcpSelfTest: () => ipcRenderer.invoke("mcp:self-test"),
   getMcpStatus: () => ipcRenderer.invoke("mcp:status"),
+  getMcpLaunchConfiguration: () => ipcRenderer.invoke("mcp:launch-configuration"),
+  copyMcpLaunchConfiguration: () => ipcRenderer.invoke("mcp:launch-configuration:copy"),
   setMcpEnabled: (enabled) => ipcRenderer.invoke("mcp:set-enabled", enabled),
   getMcpProposals: () => ipcRenderer.invoke("mcp:proposals:list"),
   decideMcpProposal: (id, accept) => ipcRenderer.invoke("mcp:proposals:decide", id, accept),

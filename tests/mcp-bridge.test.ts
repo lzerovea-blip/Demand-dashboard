@@ -34,6 +34,6 @@ describe("local MCP bridge", () => {
   it("does not expose forbidden mutation actions", async () => {
     await bridge.start();
     await expect(callLocalMcpBridge(directory, "save_tiering_support", {})).rejects.toThrow("不支持的 MCP 操作");
-    expect(await callLocalMcpBridge(directory, "list_requirement_references", {})).toEqual({ domains: [], products: [], members: [] });
+    expect(await callLocalMcpBridge(directory, "list_requirement_references", {})).toMatchObject({ domains: [], products: [], members: [], roadmaps: [], roadmapLanes: [], memberRoles: expect.arrayContaining(["算法"]) });
   });
 });

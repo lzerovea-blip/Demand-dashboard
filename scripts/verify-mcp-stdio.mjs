@@ -4,16 +4,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const appBinary = resolve(process.argv[2] ?? "release-v0.9.8-mac/解决方案需求管理.app/Contents/MacOS/Electron");
-const suppliedUserData = process.argv[3];
+const appBinary = resolve(process.argv[2] ?? "build-resources/mcp-runtime/darwin-arm64/node");
+const serverScript = resolve(process.argv[3] ?? "dist-mcp/server.cjs");
+const suppliedUserData = process.argv[4];
 const userData = suppliedUserData ?? await mkdtemp(join(tmpdir(), "solution-mcp-stdio-"));
-const transport = new StdioClientTransport({ command: appBinary, args: ["--mcp-stdio"],
+const transport = new StdioClientTransport({ command: appBinary, args: [serverScript],
   env: { ...process.env, SOLUTION_REQUIREMENTS_USER_DATA_DIR: userData }, stderr: "pipe" });
 const client = new Client({ name: "solution-mcp-acceptance", version: "1.0.0" });
 try {
   await client.connect(transport);
   const names = (await client.listTools()).tools.map((tool) => tool.name);
-  const expected = ["list_requirements", "get_requirement", "list_requirement_references", "propose_requirement_changes", "get_proposal_status"];
+  const expected = ["list_requirements", "get_requirement", "list_requirement_references", "propose_requirement_changes", "get_proposal_status", "propose_dictionary_additions", "propose_export"];
   if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error(`Unexpected tools: ${names.join(", ")}`);
   const result = await client.callTool({ name: "list_requirements", arguments: { limit: 10 } });
   if (!suppliedUserData) {

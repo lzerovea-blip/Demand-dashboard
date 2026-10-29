@@ -640,7 +640,14 @@ export interface AppInfo {
 }
 
 export interface ElectronApi {
+  getMcpDiagnostics(): Promise<import("./mcpDiagnostics.js").McpDiagnosticsSnapshot>;
+  copyMcpDiagnosticSummary(): Promise<void>;
+  openMcpDiagnosticDirectory(): Promise<void>;
+  exportMcpDiagnostics(): Promise<{ canceled: boolean; path?: string }>;
+  runMcpSelfTest(): Promise<import("./mcpDiagnostics.js").McpSelfTestResult>;
   getMcpStatus(): Promise<import("./mcp.js").McpConnectionStatus>;
+  getMcpLaunchConfiguration(): Promise<import("./mcpLaunch.js").McpLaunchConfiguration>;
+  copyMcpLaunchConfiguration(): Promise<void>;
   setMcpEnabled(enabled: boolean): Promise<import("./mcp.js").McpConnectionStatus>;
   getMcpProposals(): Promise<import("./mcp.js").McpProposal[]>;
   decideMcpProposal(id: string, accept: boolean): Promise<{ proposal: import("./mcp.js").McpProposal; snapshot?: AppSnapshot }>;

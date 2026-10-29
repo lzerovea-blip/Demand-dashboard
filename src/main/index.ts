@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from "electron";
 import { basename, join } from "node:path";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile, stat } from "node:fs/promises";
+import { mcpLaunchPaths } from "../shared/mcpLaunch.js";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { LocalDatabase } from "./database.js";
@@ -12,6 +13,8 @@ import type {
   SaveRequirementInput,
   HalfYearRange,
   PptExportRequest,
+  AppSnapshot,
+  WorkspaceData,
   SaveMemberInput,
   SavePptAccessPolicyInput,
   SaveTieringSupportInput,
@@ -40,9 +43,12 @@ import { beginDiagnosticStage, diagnosticInfo, initializeStartupDiagnostics, san
 import { McpProposalStore } from "./mcpProposals.js";
 import { LocalMcpBridge } from "./mcpBridge.js";
 import { serveMcpStdio } from "./mcpStdio.js";
+import { createMcpDiagnosticArchive, currentMcpDiagnostics, diagnosticErrorCode, readMcpDiagnostics } from "./mcpDiagnostics.js";
+import { runMcpSelfTest } from "./mcpSelfTest.js";
+import { mcpPptRequest, type McpExportRequest, type McpExportResult } from "../shared/mcpExports.js";
 
 const PRODUCT_NAME = "解决方案需求管理";
-const APP_RELEASED_AT = "2026-10-22";
+const APP_RELEASED_AT = "2026-10-27";
 const APP_AUTHOR = "林忠维";
 const LEGACY_USER_DATA_DIRECTORY = "需求路标工作台";
 
@@ -54,14 +60,33 @@ let startupPhase = "process-start";
 const BUILTIN_TEMPLATE_FILE = "需求路标模板-共创版-v0.1.pptx";
 const pendingImports = new Map<string, PreparedWorkspaceImport>();
 const pendingWorkbookImports = new Map<string, PreparedWorkspaceWorkbookImport>();
+interface ExportContext { snapshot: AppSnapshot; workspace: WorkspaceData }
+const exportActions = new Map<string, (input: unknown, context?: ExportContext) => Promise<McpExportResult>>();
+function handleExport<T>(channel: string, action: (input: T, context?: ExportContext) => Promise<McpExportResult>): void {
+  ipcMain.handle(channel, (_event, input: T) => action(input));
+  exportActions.set(channel, (input, context) => action(input as T, context));
+}
+async function executeMcpExport(request: McpExportRequest): Promise<McpExportResult> {
+  const context = { snapshot: database.getSnapshot(), workspace: database.getWorkspaceData() };
+  const channel = { workspace: "workspace:export", requirements_excel: "workbook:export", tiering_excel: "tiering-workbook:export", ppt: "presentation:export" }[request.format];
+  const action = exportActions.get(channel);
+  if (!action) throw new Error("导出功能尚未就绪");
+  mainWindow?.show(); mainWindow?.focus();
+  currentMcpDiagnostics()?.record("export-start", "export", { method: request.format });
+  try {
+    const result = await action(request.format === "ppt" ? mcpPptRequest(context.snapshot, request) : request, context);
+    currentMcpDiagnostics()?.record(result.canceled ? "export-cancelled" : "export-complete", "export", { method: request.format });
+    return { canceled: result.canceled, ...(result.path ? { path: result.path } : {}), ...(result.slideCount !== undefined ? { slideCount: result.slideCount } : {}) };
+  } catch (error) { currentMcpDiagnostics()?.record("export-failed", "export", { level: "error", method: request.format, errorCode: diagnosticErrorCode(error) }); throw new Error(sanitizeDiagnosticDetail(error)); }
+}
 
 function safeErrorMessage(error: unknown): string {
   return sanitizeDiagnosticDetail(error);
 }
 
-async function getResolvedIrmEnvironment() {
+async function getResolvedIrmEnvironment(members = database.getSnapshot().members) {
   const status = await checkPowerPointIrmEnvironment();
-  return resolveIrmEnvironmentStatus(status, database.getSnapshot().members);
+  return resolveIrmEnvironmentStatus(status, members);
 }
 
 async function createWindow(): Promise<void> {
@@ -117,6 +142,48 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
+  const logger = currentMcpDiagnostics();
+  let selfTestBusy = false;
+  const launchConfiguration = async () => {
+    // Custom macOS bundles retain the Electron executable name and can report
+    // isPackaged=false. Prefer files actually shipped in Resources, not this flag.
+    let result = mcpLaunchPaths(process.platform, process.arch, process.resourcesPath);
+    const exists = async (value: typeof result) => (await Promise.all([value.command, ...value.args].map(path => stat(path).then(item => item.isFile()).catch(() => false)))).every(Boolean);
+    if (!await exists(result) && !app.isPackaged) result = mcpLaunchPaths(process.platform, process.arch, process.resourcesPath, app.getAppPath());
+    result.available = await exists(result);
+    if (!result.available) result.error = "独立 MCP 文件缺失，请重新解压完整软件包。";
+    return result;
+  };
+  ipcMain.handle("mcp:launch-configuration", launchConfiguration);
+  ipcMain.handle("mcp:launch-configuration:copy", async () => {
+    const launch = await launchConfiguration();
+    if (!launch.available) throw new Error(launch.error);
+    clipboard.writeText(JSON.stringify({ mcpServers: { "solution-requirements": { command: launch.command, args: launch.args } } }, null, 2));
+  });
+  ipcMain.handle("mcp:diagnostics", () => readMcpDiagnostics(app.getPath("userData")));
+  ipcMain.handle("mcp:diagnostics:copy", async () => {
+    const info = await readMcpDiagnostics(app.getPath("userData"));
+    clipboard.writeText(JSON.stringify({ version: app.getVersion(), enabled: mcpBridge.isRunning, available: info.available,
+      sessions: info.sessions, recentEvents: info.events.slice(0,30) }, null, 2));
+  });
+  ipcMain.handle("mcp:diagnostics:open", async () => {
+    const info = await readMcpDiagnostics(app.getPath("userData"));
+    await mkdir(info.directory, { recursive: true });
+    const error = await shell.openPath(info.directory);
+    if (error) throw new Error("无法打开 MCP 日志目录");
+  });
+  ipcMain.handle("mcp:diagnostics:export", async () => {
+    const result = await dialog.showSaveDialog({ title: "导出 MCP 诊断日志", defaultPath: `MCP诊断-${new Date().toISOString().slice(0,10)}.zip`, filters: [{ name: "诊断日志", extensions: ["zip"] }] });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    await writeFile(result.filePath, await createMcpDiagnosticArchive(app.getPath("userData"), app.getVersion()));
+    return { canceled: false, path: result.filePath };
+  });
+  ipcMain.handle("mcp:self-test", async () => {
+    if (selfTestBusy) throw new Error("本机自检正在运行");
+    selfTestBusy = true;
+    try { return await runMcpSelfTest(await launchConfiguration(), app.getPath("userData"), app.getVersion(), logger); }
+    finally { selfTestBusy = false; }
+  });
   ipcMain.handle("mcp:status", () => ({ enabled: mcpBridge.isRunning, pendingCount: mcpProposals.listPending().length }));
   ipcMain.handle("mcp:set-enabled", async (_event, enabled: boolean) => {
     if (typeof enabled !== "boolean") throw new Error("无效的 MCP 启用状态");
@@ -135,11 +202,13 @@ function registerIpc(): void {
     if (typeof accept !== "boolean") throw new Error("请明确选择确认或取消");
     try {
       const result = await mcpProposals.decide(id, accept);
+      logger?.record("proposal-decision", "proposal", { count: result.proposal.items.length, method: result.proposal.state });
       writeStartupDiagnostic("mcp-proposal-decision", `result=${result.proposal.state} operations=${result.proposal.items.length}`);
       if (result.snapshot) mainWindow?.webContents.send("snapshot:changed", result.snapshot);
       return result;
     } catch (error) {
       writeStartupDiagnostic("mcp-proposal-failed", "stage=approval result=rejected");
+      logger?.record("request-failed", "proposal", { level: "error", errorCode: diagnosticErrorCode(error) });
       throw error;
     }
   });
@@ -199,7 +268,8 @@ function registerIpc(): void {
     return { directory, currentLogPath: join(directory, "startup.log") };
   });
 
-  ipcMain.handle("workspace:export", async () => {
+  handleExport("workspace:export", async (_input: unknown, context) => {
+    const workspace = context?.workspace ?? database.getWorkspaceData();
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: "导出完整工作区数据包",
       defaultPath: `需求路标工作区-${new Date().toISOString().slice(0, 10)}.roadmap`,
@@ -207,7 +277,7 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     const outputPath = result.filePath.toLowerCase().endsWith(".roadmap") ? result.filePath : `${result.filePath}.roadmap`;
-    await writeFile(outputPath, await createWorkspacePackage(database.getWorkspaceData(), app.getVersion()));
+    await writeFile(outputPath, await createWorkspacePackage(workspace, app.getVersion()));
     return { canceled: false, path: outputPath };
   });
 
@@ -245,7 +315,8 @@ function registerIpc(): void {
     return { snapshot: await database.importWorkspace(prepared.data, input.mode, input.legacyRequirementDecisions) };
   });
 
-  ipcMain.handle("workbook:export", async (_event, input: HalfYearRange) => {
+  handleExport("workbook:export", async (input: HalfYearRange, context) => {
+    const workspace = context?.workspace ?? database.getWorkspaceData();
     if (!input) throw new Error("请选择有效的 Excel 导出区间");
     halfYearSequence(input.start, input.end);
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -255,11 +326,12 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     const outputPath = result.filePath.toLowerCase().endsWith(".xlsx") ? result.filePath : `${result.filePath}.xlsx`;
-    await writeFile(outputPath, await createWorkspaceWorkbook(database.getWorkspaceData(), app.getVersion(), new Date().toISOString(), input));
+    await writeFile(outputPath, await createWorkspaceWorkbook(workspace, app.getVersion(), new Date().toISOString(), input));
     return { canceled: false, path: outputPath };
   });
 
-  ipcMain.handle("tiering-workbook:export", async (_event, input: HalfYearRange) => {
+  handleExport("tiering-workbook:export", async (input: HalfYearRange, context) => {
+    const workspace = context?.workspace ?? database.getWorkspaceData();
     if (!input) throw new Error("请选择有效的分层分级 Excel 导出区间");
     halfYearSequence(input.start, input.end);
     const generatedAt = new Date().toISOString();
@@ -270,7 +342,7 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     const outputPath = result.filePath.toLowerCase().endsWith(".xlsx") ? result.filePath : `${result.filePath}.xlsx`;
-    await writeFile(outputPath, await createTieringWorkbook(database.getWorkspaceData(), app.getVersion(), generatedAt, input));
+    await writeFile(outputPath, await createTieringWorkbook(workspace, app.getVersion(), generatedAt, input));
     return { canceled: false, path: outputPath };
   });
 
@@ -339,10 +411,10 @@ function registerIpc(): void {
     return { canceled: false, path: result.filePath };
   });
 
-  ipcMain.handle("presentation:export", async (_event, input: PptExportRequest) => {
-    const snapshot = database.getSnapshot();
+  handleExport("presentation:export", async (input: PptExportRequest, context) => {
+    const snapshot = context?.snapshot ?? database.getSnapshot();
     if (!snapshot.pptAccessPolicy.entries.length) throw new Error("请先配置并保存 PPT 成员白名单");
-    const environment = await getResolvedIrmEnvironment();
+    const environment = await getResolvedIrmEnvironment(snapshot.members);
     if (!environment.supported || !environment.powerPointInstalled || !environment.irmReady) throw new Error(environment.message);
     const plan = buildPptExportPlan(snapshot, input);
     const slideCount = presentationSlideCount(plan);
@@ -392,8 +464,7 @@ app.whenReady().then(async () => {
   startupPhase = "electron-ready";
   app.setPath("userData", process.env.SOLUTION_REQUIREMENTS_USER_DATA_DIR || join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY));
   if (process.argv.includes("--mcp-stdio")) {
-    process.stdin.once("end", () => app.quit());
-    await serveMcpStdio(app.getPath("userData"));
+    await serveMcpStdio(app.getPath("userData"), () => app.quit());
     return;
   }
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
@@ -411,9 +482,9 @@ app.whenReady().then(async () => {
   const finishDatabase = beginDiagnosticStage("database-read-migration-and-built-in-series");
   const initialization = await database.initialize();
   finishDatabase();
-  mcpProposals = new McpProposalStore(database, () => mainWindow?.webContents.send("mcp:changed"));
+  mcpProposals = new McpProposalStore(database, () => mainWindow?.webContents.send("mcp:changed"), Date.now, executeMcpExport);
   mcpBridge = new LocalMcpBridge(app.getPath("userData"), () => database.getSnapshot(), mcpProposals,
-    (event, detail) => { writeStartupDiagnostic(event, detail); });
+    (event, detail) => { writeStartupDiagnostic(event, detail); }, currentMcpDiagnostics());
   await rm(join(app.getPath("userData"), "mcp-session.json"), { force: true });
   if (database.isMcpEnabled()) {
     try { await mcpBridge.start(); }
@@ -440,7 +511,7 @@ app.whenReady().then(async () => {
   app.on("before-quit", () => { void mcpBridge?.stop(); });
 }).catch(async (error: unknown) => {
   const message = safeErrorMessage(error);
-  if (process.argv.includes("--mcp-stdio")) { console.error(`MCP stdio startup failed: ${message}`); app.exit(1); return; }
+  if (process.argv.includes("--mcp-stdio")) { currentMcpDiagnostics()?.record("process-error", "process", { level: "error", errorCode: diagnosticErrorCode(error) }); console.error("MCP stdio startup failed; inspect diagnostics"); app.exit(1); return; }
   const diagnosticPath = writeStartupDiagnostic("startup-failed", `stage=${startupPhase} ${message}`);
   dialog.showErrorBox(
     `${PRODUCT_NAME}无法启动`,
@@ -456,7 +527,7 @@ app.whenReady().then(async () => {
 
 process.on("uncaughtException", (error) => {
   const message = safeErrorMessage(error);
-  if (process.argv.includes("--mcp-stdio")) { console.error(`MCP stdio fatal error: ${message}`); app.exit(1); return; }
+  if (process.argv.includes("--mcp-stdio")) { currentMcpDiagnostics()?.record("process-error", "process", { level: "error", errorCode: diagnosticErrorCode(error) }); console.error("MCP stdio fatal error; inspect diagnostics"); app.exit(1); return; }
   const diagnosticPath = writeStartupDiagnostic("main-uncaught-exception", message);
   if (app.isReady()) {
     dialog.showErrorBox(
