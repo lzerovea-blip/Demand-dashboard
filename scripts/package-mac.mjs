@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 const require = createRequire(import.meta.url);
-const electronExecutable = require("electron");
+const electronExecutable = require("electron").trim();
 const electronApp = resolve(dirname(electronExecutable), "../..");
 const releaseDir = resolve(process.env.ROADMAP_RELEASE_DIR ?? "release");
 const productName = "解决方案需求管理";
@@ -24,7 +24,11 @@ await mkdir(appDir, { recursive: true });
 
 await cp("dist-electron", join(appDir, "dist-electron"), { recursive: true });
 await cp("dist-renderer", join(appDir, "dist-renderer"), { recursive: true });
+await cp("build-resources/mcp-runtime/darwin-arm64", join(resourcesDir, "mcp"), { recursive: true });
+await cp("dist-mcp/server.cjs", join(resourcesDir, "mcp", "server.cjs"));
 await cp("node_modules/sql.js/dist/sql-wasm.wasm", join(resourcesDir, "sql-wasm.wasm"));
+await cp("build-resources/app-icon.png", join(resourcesDir, "app-icon.png"));
+await cp("build-resources/app-icon.icns", join(resourcesDir, "app-icon.icns"));
 await mkdir(templatesDir, { recursive: true });
 await cp("需求路标模板-共创版-v0.1.pptx", join(templatesDir, "需求路标模板-共创版-v0.1.pptx"));
 
@@ -45,6 +49,7 @@ for (const [key, value] of [
   ["CFBundleIdentifier", "com.local.healthroadmap"],
   ["CFBundleShortVersionString", sourcePackage.version],
   ["CFBundleVersion", sourcePackage.version],
+  ["CFBundleIconFile", "app-icon.icns"],
 ]) {
   await run("/usr/libexec/PlistBuddy", ["-c", `Set :${key} ${value}`, plist]);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeWorkspaceData, workspaceCounts } from "../src/shared/workspace";
+import { mergeWorkspaceData, mergeWorkspaceDataWithReport, workspaceCounts } from "../src/shared/workspace";
 import type { Requirement, WorkspaceData } from "../src/shared/types";
 
 describe("工作区合并", () => {
@@ -26,13 +26,43 @@ describe("工作区合并", () => {
     expect(merged.products).toHaveLength(1);
     expect(merged.domains.find((item) => item.id === "local-sleep")?.parentId).toBe("local-health");
     expect(merged.requirements[0]).toMatchObject({ domainL0Id: "local-health", domainId: "local-sleep", productIds: ["local-watch"] });
-    expect(merged.groupOverrides[0].groupKey).toBe("local-sleep::健康基础::2027-03");
+    expect(merged.groupOverrides[0].groupKey).toBe("健康::健康基础::local-sleep::2027-03");
   });
 
   it("同ID需求保留更新时间较新版本", () => {
     const local = data({ requirements: [requirement("r1", "d1", [], "2026-08-21", "本机新版")] });
     const incoming = data({ requirements: [requirement("r1", "d1", [], "2026-08-20", "导入旧版")] });
     expect(mergeWorkspaceData(local, incoming).requirements[0].title).toBe("本机新版");
+  });
+
+  it("删除记录阻止旧需求复活，但允许删除后的较新修改恢复", () => {
+    const local = data({
+      requirementDeletionTrackingStartedAt: "2026-09-01T00:00:00.000Z",
+      requirementTombstones: [{ id: "r1", title: "已删除需求", deletedAt: "2026-09-10T00:00:00.000Z" }],
+    });
+    const oldIncoming = data({ requirements: [requirement("r1", "d1", [], "2026-09-05T00:00:00.000Z", "旧版本")] });
+    const ignored = mergeWorkspaceDataWithReport(local, oldIncoming);
+    expect(ignored.data.requirements).toEqual([]);
+    expect(ignored.data.requirementTombstones).toHaveLength(1);
+    expect(ignored.requirementResolutions[0].outcome).toBe("ignored");
+
+    const newIncoming = data({ requirements: [requirement("r1", "d1", [], "2026-09-12T00:00:00.000Z", "后续修改")] });
+    const restored = mergeWorkspaceDataWithReport(local, newIncoming);
+    expect(restored.data.requirements[0].title).toBe("后续修改");
+    expect(restored.data.requirementTombstones).toEqual([]);
+    expect(restored.requirementResolutions[0].outcome).toBe("restored");
+  });
+
+  it("升级前的未知新增逐条选择合入或保持删除", () => {
+    const local = data({ requirementDeletionTrackingStartedAt: "2026-09-10T00:00:00.000Z" });
+    const incoming = data({ requirements: [requirement("legacy", "d1", [], "2026-09-05T00:00:00.000Z", "旧包需求")] });
+    const preview = mergeWorkspaceDataWithReport(local, incoming, { deferAmbiguousRequirements: true });
+    expect(preview.data.requirements).toEqual([]);
+    expect(preview.requirementResolutions[0].outcome).toBe("ambiguous");
+    expect(mergeWorkspaceData(local, incoming, { legacyRequirementDecisions: { legacy: "merge" } }).requirements).toHaveLength(1);
+    const keptDeleted = mergeWorkspaceData(local, incoming, { legacyRequirementDecisions: { legacy: "keep-deleted" }, decisionAt: "2026-09-21T00:00:00.000Z" });
+    expect(keptDeleted.requirements).toEqual([]);
+    expect(keptDeleted.requirementTombstones).toEqual([{ id: "legacy", title: "旧包需求", deletedAt: "2026-09-21T00:00:00.000Z" }]);
   });
 
   it("统计完整工作区内容", () => {

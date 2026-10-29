@@ -1,5 +1,8 @@
 node_modules/
+artifacts/
 dist-electron/
+dist-mcp/
+build-resources/mcp-runtime/
 dist-renderer/
 release/*
 !release/SHA256SUMS.txt

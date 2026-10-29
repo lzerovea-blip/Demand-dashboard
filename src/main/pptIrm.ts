@@ -35,6 +35,8 @@ interface PowerShellResult {
 export interface PowerPointIrmErrorDetails {
   stage?: string;
   diagnostics: string[];
+  powerPointInstalled?: boolean;
+  irmReady?: boolean;
   officeIdentity?: string;
   preferredDocumentOwner?: string;
   effectiveDocumentOwner?: string;
@@ -144,6 +146,27 @@ export function verifyPowerPointIrmGrants(actual: PowerShellGrant[], expected: P
   }
 }
 
+export function resolveIrmEnvironmentStatus(
+  status: IrmEnvironmentStatus,
+  members: readonly Member[],
+): IrmEnvironmentStatus {
+  if (!status.supported || !status.powerPointInstalled || !status.irmReady) return status;
+  const preferredDocumentOwner = resolvePptDocumentOwnerAccount(status.officeIdentity, members);
+  if (!status.officeIdentity || !preferredDocumentOwner) {
+    return {
+      ...status,
+      irmReady: false,
+      preferredDocumentOwner,
+      message: "PowerPoint 企业 IRM 服务可用，但无法识别当前 Office 登录身份。请在 PowerPoint 的“文件 → 账户”中确认企业账号已登录后重试。",
+    };
+  }
+  return {
+    ...status,
+    preferredDocumentOwner,
+    message: `PowerPoint 企业 IRM 可用；Office 登录身份：${status.officeIdentity}；文档所有者：${preferredDocumentOwner}。`,
+  };
+}
+
 export async function checkPowerPointIrmEnvironment(platform = process.platform): Promise<IrmEnvironmentStatus> {
   if (platform !== "win32") {
     return {
@@ -167,11 +190,13 @@ export async function checkPowerPointIrmEnvironment(platform = process.platform)
         : (result.error || "PowerPoint 未登录可使用 IRM 的企业账号。"),
     };
   } catch (error) {
+    const details = error as Partial<PowerPointIrmErrorDetails>;
     return {
       supported: true,
       platform,
-      powerPointInstalled: false,
-      irmReady: false,
+      powerPointInstalled: Boolean(details.powerPointInstalled),
+      irmReady: Boolean(details.irmReady),
+      officeIdentity: details.officeIdentity || undefined,
       message: error instanceof Error ? error.message : String(error),
     };
   }
@@ -327,9 +352,12 @@ async function runPowerPointIrmScript(payload: object, timeout = 45_000): Promis
     }
     const result = JSON.parse(rawResult.replace(/^\uFEFF/u, "")) as PowerShellResult;
     if (!result.ok) {
-      const error = new Error(result.error || "PowerPoint 企业 IRM 操作失败") as Error & PowerPointIrmErrorDetails;
+      const detail = result.error || "PowerPoint 企业 IRM 操作失败";
+      const error = new Error(result.stage ? `${result.stage}失败：${detail}` : detail) as Error & PowerPointIrmErrorDetails;
       error.stage = result.stage;
       error.diagnostics = result.diagnostics ?? [];
+      error.powerPointInstalled = result.powerPointInstalled;
+      error.irmReady = result.irmReady;
       error.officeIdentity = result.officeIdentity;
       error.effectiveDocumentOwner = result.effectiveDocumentOwner;
       error.normalized = result.normalized;

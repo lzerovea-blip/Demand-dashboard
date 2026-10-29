@@ -11,16 +11,18 @@ export const SOURCES = [
   "AI运动",
   "AI健康",
   "AI综合",
-  "NMPA送检",
-  "CE送检",
+  "NMPA认证",
+  "CE认证",
 ] as const;
 
 export const CATEGORIES = ["体验优化", "平台演进", "产品专属"] as const;
 export const REQUIREMENT_SCOPES = ["仅国内", "仅海外", "全球"] as const;
 /** 仅用于兼容旧版“海外研究”数据包，当前界面不再提供该字段。 */
 export const OVERSEAS_REGIONS = ["欧州", "亚非拉", "欧亚"] as const;
-export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗送检"] as const;
-export const MEMBER_ROLES = ["规划", "产品经理", "SE", "PM", "开发", "UX"] as const;
+export const ROADMAP_TRACKS = ["运动", "健康", "行业", "全场景", "health平台", "AI", "医疗认证"] as const;
+export const MEMBER_ROLES = ["规划", "产品经理", "SE", "PM", "开发", "算法", "UX"] as const;
+export const TIERING_SUPPORT_STATUSES = ["支持", "不支持", "未判断"] as const;
+export const TIERING_AUDIT_STATUSES = ["待内审", "已公开核验", "已审核", "需复核"] as const;
 
 export type RequirementSource = (typeof SOURCES)[number];
 export type RequirementCategory = (typeof CATEGORIES)[number];
@@ -36,9 +38,26 @@ export const CATEGORY_META: Record<RequirementCategory, {
 };
 export type RequirementScope = (typeof REQUIREMENT_SCOPES)[number];
 export type OverseasRegion = (typeof OVERSEAS_REGIONS)[number];
-export type Track = (typeof ROADMAP_TRACKS)[number];
+export type Track = string;
 export type MemberRole = (typeof MEMBER_ROLES)[number];
+export type TieringSupportStatus = (typeof TIERING_SUPPORT_STATUSES)[number];
+export type TieringAuditStatus = (typeof TIERING_AUDIT_STATUSES)[number];
 export type PptPermissionLevel = "read" | "change";
+export const HISTORICAL_LAUNCH_PRECISIONS = ["month", "half-year", "year"] as const;
+export const HISTORICAL_LAUNCH_VERIFICATION_STATUSES = ["confirmed", "pending"] as const;
+export const HISTORICAL_LAUNCH_CONFIDENCE_LEVELS = ["A", "B", "C"] as const;
+export type HistoricalLaunchPrecision = (typeof HISTORICAL_LAUNCH_PRECISIONS)[number];
+export type HistoricalLaunchVerificationStatus = (typeof HISTORICAL_LAUNCH_VERIFICATION_STATUSES)[number];
+export type HistoricalLaunchConfidence = (typeof HISTORICAL_LAUNCH_CONFIDENCE_LEVELS)[number];
+
+export interface HistoricalLaunchMetadata {
+  suggestedTargetMonth: string;
+  precision: HistoricalLaunchPrecision;
+  verificationStatus: HistoricalLaunchVerificationStatus;
+  confidence: HistoricalLaunchConfidence;
+  evidenceUrls: string[];
+  note: string;
+}
 export type PptExportSectionId = "summary" | Track;
 export interface PptExportRequest extends HalfYearRange {
   materialName: string;
@@ -59,27 +78,164 @@ export interface RequirementImage {
   dataUrl: string;
 }
 
+export interface MedicalSubmissionMilestones {
+  registrationStartMonth?: string;
+  clinicalStartMonth?: string;
+  clinicalCompleteMonth?: string;
+  certificateMonth?: string;
+}
+
 export interface Requirement {
+  algorithmMemberId?: string;
+  planningMemberId?: string;
+  productManagerMemberId?: string;
+  seMemberId?: string;
   id: string;
   title: string;
   description: string;
   images: RequirementImage[];
   domainL0Id: string;
   domainId: string;
-  source: RequirementSource;
+  /** Legacy input only. v0.9 roadmaps use independent assignments. */
+  source?: RequirementSource;
   scope: RequirementScope;
   allowLatestVersionUpgrade: boolean;
   overseasRegions: OverseasRegion[];
   category: RequirementCategory;
+  /** YYYY-MM; empty only for NMPA/CE requirements with no submission version yet. */
   targetMonth: string;
+  medicalSubmissionMilestones?: MedicalSubmissionMilestones;
+  /** Application-only medical lane order, independent of dates and L1. */
+  medicalRoadmapSortOrder?: number;
   productIds: string[];
   deviceWorkloadPm: number;
   appWorkloadPm: number;
   cloudWorkloadPm: number;
+  /** Absent only in legacy input; normalized workspace records use 0. */
+  researchAppWorkloadPm?: number;
+  algorithmWorkloadPm?: number;
   unallocatedWorkloadPm: number;
   workloadPm: number;
   createdAt: string;
   updatedAt: string;
+  /** 指向分层分级中的稳定需求行；普通需求与历史需求均使用。 */
+  tieringFeatureId?: string;
+  /** 历史需求的中国大陆首次公开可用时间证据；普通需求不设置。 */
+  historicalLaunch?: HistoricalLaunchMetadata;
+}
+
+/** Online collaboration rows that are not yet eligible for analysis or roadmap matching. */
+export interface RequirementDraft extends Requirement {
+  pendingSeries?: Record<string, TieringSupportStatus>;
+}
+
+export interface RequirementTombstone {
+  id: string;
+  title: string;
+  deletedAt: string;
+}
+
+export interface TieringFeature {
+  id: string;
+  l0: string;
+  l1: string;
+  requirementTitle: string;
+  requirementId?: string;
+  historicalLaunch?: HistoricalLaunchMetadata;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TieringProductSeries {
+  id: string;
+  name: string;
+  boundary: string;
+  representativeProducts: string;
+  managementEntry: string;
+  sourceIds: string[];
+  lifecycle: string;
+  note: string;
+  sortOrder: number;
+  updatedAt: string;
+}
+
+export interface TieringSupportRecord {
+  id: string;
+  featureId: string;
+  seriesId: string;
+  status: TieringSupportStatus;
+  supportedModels: string;
+  excludedModels: string;
+  phoneOsMarket: string;
+  minHealthAppVersion: string;
+  minDeviceVersion: string;
+  prerequisites: string;
+  sourceIds: string[];
+  sourceUrl: string;
+  verifiedAt: string;
+  evidenceLevel: string;
+  auditStatus: TieringAuditStatus;
+  note: string;
+  updatedAt: string;
+}
+
+export interface TieringEvidenceSource {
+  id: string;
+  sourceType: string;
+  title: string;
+  url: string;
+  scope: string;
+  market: string;
+  versionCondition: string;
+  collectedAt: string;
+  verifiedAt: string;
+  evidenceLevel: string;
+  maintenanceStatus: string;
+  owner: string;
+  note: string;
+  updatedAt: string;
+}
+
+export interface TieringVerificationIssue {
+  id: string;
+  featureId: string;
+  seriesIds: string[];
+  issueType: string;
+  description: string;
+  priority: string;
+  status: string;
+  sourceIds: string[];
+  owner: string;
+  createdAt: string;
+  targetDate: string;
+  updatedAt: string;
+  resolution: string;
+}
+
+export interface TieringChangeLog {
+  id: string;
+  changedAt: string;
+  triggerType: string;
+  featureId: string;
+  seriesId: string;
+  before: string;
+  after: string;
+  reason: string;
+  sourceIds: string[];
+  reviewer: string;
+  recordStatus: string;
+  note: string;
+  updatedAt: string;
+}
+
+export interface TieringData {
+  features: TieringFeature[];
+  productSeries: TieringProductSeries[];
+  supportRecords: TieringSupportRecord[];
+  evidenceSources: TieringEvidenceSource[];
+  verificationIssues: TieringVerificationIssue[];
+  changeLogs: TieringChangeLog[];
 }
 
 export interface DictionaryItem {
@@ -160,31 +316,134 @@ export interface TemplateMapping {
 
 export interface AppSnapshot {
   requirements: Requirement[];
+  draftRequirements?: RequirementDraft[];
   domains: DictionaryItem[];
   products: DictionaryItem[];
   groupOverrides: GroupOverride[];
   members: Member[];
   pptAccessPolicy: PptAccessPolicy;
+  tiering?: TieringData;
   templates: TemplateProfile[];
+  roadmaps?: RoadmapDefinition[];
+  roadmapLanes?: RoadmapLaneDefinition[];
+  roadmapAssignments?: RequirementRoadmapAssignment[];
+  roadmapAssignmentTombstones?: RoadmapAssignmentTombstone[];
+  medicalRoadmapPlans?: MedicalRoadmapPlan[];
+}
+
+export type RoadmapKind = "standard" | "medical";
+export interface RoadmapDefinition {
+  id: string;
+  name: string;
+  kind: RoadmapKind;
+  sortOrder: number;
+  updatedAt: string;
+  usedAt?: string;
+}
+export interface RoadmapLaneDefinition {
+  id: string;
+  roadmapId: string;
+  name: string;
+  sortOrder: number;
+  updatedAt: string;
+}
+export interface RequirementRoadmapAssignment {
+  requirementId: string;
+  roadmapId: string;
+  laneId: string;
+  updatedAt: string;
+}
+export interface RoadmapAssignmentTombstone {
+  requirementId: string;
+  removedAt: string;
+}
+export interface MedicalRoadmapPlan extends MedicalSubmissionMilestones {
+  requirementId: string;
+  roadmapId: string;
+  submissionMonth?: string;
+  sortOrder?: number;
+  updatedAt: string;
+}
+export interface SaveRoadmapInput {
+  id?: string;
+  name: string;
+  kind: RoadmapKind;
+  sortOrder?: number;
+}
+export interface SaveRoadmapLaneInput {
+  id?: string;
+  roadmapId: string;
+  name: string;
+  sortOrder?: number;
+}
+export interface SaveRoadmapAssignmentsInput {
+  requirementIds: string[];
+  roadmapId?: string;
+  laneId?: string;
 }
 
 export interface SaveRequirementInput {
+  algorithmMemberId?: string;
+  planningMemberId: string;
+  productManagerMemberId: string;
+  seMemberId: string;
   id?: string;
   title: string;
   description: string;
   images: RequirementImage[];
   domainL0Id: string;
   domainId: string;
-  source: RequirementSource;
+  source?: RequirementSource;
   scope: RequirementScope;
   allowLatestVersionUpgrade: boolean;
   overseasRegions: OverseasRegion[];
   category: RequirementCategory;
+  /** YYYY-MM; empty only for NMPA/CE requirements with no submission version yet. */
   targetMonth: string;
+  medicalSubmissionMilestones?: MedicalSubmissionMilestones;
   productIds: string[];
   deviceWorkloadPm: number;
   appWorkloadPm: number;
   cloudWorkloadPm: number;
+  researchAppWorkloadPm: number;
+  algorithmWorkloadPm: number;
+  tieringFeatureId?: string;
+}
+
+export interface SaveTieringSupportInput {
+  recordId: string;
+  status: TieringSupportStatus;
+  reason?: string;
+}
+
+export interface SaveTieringEvidenceSourceInput {
+  source: TieringEvidenceSource;
+}
+
+export interface UpdateTieringIssueInput {
+  issueId: string;
+  status: string;
+  owner: string;
+  targetDate: string;
+  resolution: string;
+}
+
+export interface UpdateTieringChangeLogInput {
+  logId: string;
+  reason: string;
+  reviewer: string;
+  recordStatus: string;
+  note: string;
+}
+
+export interface RendererDiagnosticInput {
+  event: "renderer-ready" | "renderer-error" | "renderer-unhandled-rejection" | "react-error";
+  detail?: string;
+}
+
+export interface DiagnosticInfo {
+  directory: string;
+  currentLogPath: string;
 }
 
 export interface SaveDictionaryInput {
@@ -226,7 +485,6 @@ export interface PptDiagnosticLog {
   content: string;
   directoryPath?: string;
 }
-
 export interface PptExportResult {
   canceled: boolean;
   path?: string;
@@ -242,7 +500,9 @@ export interface SaveGroupOverrideInput {
 }
 
 export interface SaveGroupOrderInput {
-  source: RequirementSource;
+  source: string;
+  roadmapId?: string;
+  laneId?: string;
   targetMonth: string;
   groupKeys: string[];
 }
@@ -263,20 +523,41 @@ export interface BackupEnvelope {
   data: WorkspaceData;
 }
 
-export type WorkspaceData = Omit<AppSnapshot, "templates">;
+export type WorkspaceData = Omit<AppSnapshot, "templates" | "tiering"> & {
+  tiering?: TieringData;
+  requirementTombstones?: RequirementTombstone[];
+  requirementDeletionTrackingStartedAt?: string;
+  /** Reader-only marker; never written to new packages. */
+  legacyRoadmapInput?: boolean;
+};
 export type WorkspaceImportMode = "merge" | "replace";
+export type WorkspacePackageKind = "workspace" | "tiering-seed";
+export type LegacyRequirementDecision = "merge" | "keep-deleted";
 
 export interface WorkspacePackageCounts {
+  roadmaps?: number;
+  roadmapLanes?: number;
+  roadmapAssignments?: number;
+  medicalRoadmapPlans?: number;
+  roadmapAssignmentTombstones?: number;
   requirements: number;
+  draftRequirements?: number;
+  requirementTombstones: number;
   images: number;
   domains: number;
   products: number;
   groupOverrides: number;
   members: number;
   whitelistEntries: number;
+  tieringFeatures: number;
+  tieringProductSeries: number;
+  tieringSupportRecords: number;
+  tieringEvidenceSources: number;
+  tieringVerificationIssues: number;
+  tieringChangeLogs: number;
 }
 
-export type WorkspaceDifferenceChange = "新增" | "修改" | "删除";
+export type WorkspaceDifferenceChange = "新增" | "修改" | "删除" | "恢复" | "忽略" | "待确认";
 
 export interface WorkspaceFieldDifference {
   field: string;
@@ -285,21 +566,24 @@ export interface WorkspaceFieldDifference {
 }
 
 export interface WorkspaceImportDifference {
-  entity: "需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单";
+  entity: "需求" | "待完善需求" | "领域" | "产品" | "路标卡片" | "成员" | "PPT白名单" | "分层功能" | "产品系列" | "系列支持" | "证据来源" | "待核验项" | "变更记录" | "路标字典" | "泳道字典" | "路标匹配" | "医疗路标配置";
   key: string;
   title: string;
   change: WorkspaceDifferenceChange;
   fields: WorkspaceFieldDifference[];
+  decisionRequired?: boolean;
 }
 
 export interface WorkspaceImportPreview {
   token: string;
   fileName: string;
   sourceFormat: "roadmap" | "legacy-json";
+  packageKind: WorkspacePackageKind;
   exportedAt: string;
   templateVersion: string;
   counts: WorkspacePackageCounts;
   differences: WorkspaceImportDifference[];
+  ambiguousRequirementIds: string[];
   differenceDigest: string;
 }
 
@@ -323,6 +607,7 @@ export interface WorkspaceWorkbookImportCounts {
 }
 
 export interface WorkspaceWorkbookImportPreview {
+  warnings?: string[];
   token: string;
   fileName: string;
   formatVersion: string;
@@ -332,6 +617,25 @@ export interface WorkspaceWorkbookImportPreview {
   conflicts: WorkspaceWorkbookIssue[];
   differences: WorkspaceImportDifference[];
   differenceDigest: string;
+  fieldChanges?: WorkspaceWorkbookFieldChange[];
+}
+
+export interface WorkspaceWorkbookFieldChange {
+  id: string;
+  requirementId: string;
+  row: number;
+  title: string;
+  kind: "field" | "series" | "delete" | "add" | "promote" | "restore";
+  field: string;
+  baselineValue: string;
+  currentValue: string;
+  excelValue: string;
+  conflict: boolean;
+}
+
+export interface WorkspaceWorkbookFieldSelection {
+  selectedChangeIds: string[];
+  conflictDecisions: Record<string, "local" | "excel">;
 }
 
 export interface AppInfo {
@@ -342,6 +646,27 @@ export interface AppInfo {
 }
 
 export interface ElectronApi {
+  getMcpDiagnostics(): Promise<import("./mcpDiagnostics.js").McpDiagnosticsSnapshot>;
+  copyMcpDiagnosticSummary(): Promise<void>;
+  openMcpDiagnosticDirectory(): Promise<void>;
+  exportMcpDiagnostics(): Promise<{ canceled: boolean; path?: string }>;
+  runMcpSelfTest(): Promise<import("./mcpDiagnostics.js").McpSelfTestResult>;
+  getMcpStatus(): Promise<import("./mcp.js").McpConnectionStatus>;
+  getMcpLaunchConfiguration(): Promise<import("./mcpLaunch.js").McpLaunchConfiguration>;
+  copyMcpLaunchConfiguration(): Promise<void>;
+  setMcpEnabled(enabled: boolean): Promise<import("./mcp.js").McpConnectionStatus>;
+  getMcpProposals(): Promise<import("./mcp.js").McpProposal[]>;
+  decideMcpProposal(id: string, accept: boolean): Promise<{ proposal: import("./mcp.js").McpProposal; snapshot?: AppSnapshot }>;
+  onMcpChange(listener: () => void): () => void;
+  onSnapshotChange(listener: (snapshot: AppSnapshot) => void): () => void;
+  deleteMedicalRoadmapPlan(input: { requirementId: string; roadmapId: string }): Promise<AppSnapshot>;
+  saveRoadmap(input: SaveRoadmapInput): Promise<AppSnapshot>;
+  deleteRoadmap(id: string): Promise<AppSnapshot>;
+  saveRoadmapLane(input: SaveRoadmapLaneInput): Promise<AppSnapshot>;
+  deleteRoadmapLane(id: string): Promise<AppSnapshot>;
+  saveRoadmapAssignments(input: SaveRoadmapAssignmentsInput): Promise<AppSnapshot>;
+  saveMedicalRoadmapPlan(input: MedicalRoadmapPlan): Promise<AppSnapshot>;
+  saveMedicalRoadmapPlanOrder(input: { roadmapId: string; requirementIds: string[] }): Promise<AppSnapshot>;
   getAppInfo(): Promise<AppInfo>;
   getSnapshot(): Promise<AppSnapshot>;
   openLocalStorageDirectory(): Promise<{ path: string }>;
@@ -363,12 +688,23 @@ export interface ElectronApi {
   openPptDiagnosticDirectory(): Promise<{ path: string }>;
   saveGroupOverride(input: SaveGroupOverrideInput): Promise<AppSnapshot>;
   saveGroupOrder(input: SaveGroupOrderInput): Promise<AppSnapshot>;
+  saveMedicalRoadmapOrder(input: { requirementIds: string[] }): Promise<AppSnapshot>;
+  saveTieringSupport(input: SaveTieringSupportInput): Promise<AppSnapshot>;
+  saveTieringEvidenceSource(input: SaveTieringEvidenceSourceInput): Promise<AppSnapshot>;
+  updateTieringIssue(input: UpdateTieringIssueInput): Promise<AppSnapshot>;
+  updateTieringChangeLog(input: UpdateTieringChangeLogInput): Promise<AppSnapshot>;
+  deleteTieringChangeLog(logId: string): Promise<AppSnapshot>;
+  regenerateTieringRequirement(featureId: string): Promise<AppSnapshot>;
+  reportRendererDiagnostic(input: RendererDiagnosticInput): Promise<void>;
+  getDiagnosticInfo(): Promise<DiagnosticInfo>;
+  openDiagnosticDirectory(): Promise<DiagnosticInfo>;
   exportWorkspacePackage(): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspacePackage(): Promise<{ canceled: boolean; preview?: WorkspaceImportPreview }>;
-  applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string }): Promise<{ snapshot: AppSnapshot }>;
+  applyWorkspacePackage(input: { token: string; mode: WorkspaceImportMode; differenceDigest?: string; legacyRequirementDecisions?: Record<string, LegacyRequirementDecision> }): Promise<{ snapshot: AppSnapshot }>;
   exportWorkspaceWorkbook(input: HalfYearRange): Promise<{ canceled: boolean; path?: string }>;
+  exportTieringWorkbook(input: HalfYearRange): Promise<{ canceled: boolean; path?: string }>;
   inspectWorkspaceWorkbook(): Promise<{ canceled: boolean; preview?: WorkspaceWorkbookImportPreview }>;
-  applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string }): Promise<{ snapshot: AppSnapshot }>;
+  applyWorkspaceWorkbook(input: { token: string; conflictMode: WorkspaceWorkbookConflictMode; differenceDigest: string; fieldSelection?: WorkspaceWorkbookFieldSelection }): Promise<{ snapshot: AppSnapshot }>;
   exportTemplateDraft(): Promise<{ canceled: boolean; path?: string }>;
   exportRoadmapPresentation(input: PptExportRequest): Promise<PptExportResult>;
 }
